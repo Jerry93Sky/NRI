@@ -53,8 +53,10 @@ export const sceneObjects = pgTable('scene_objects', {
 export const tokens = pgTable('tokens', {
   id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 48 }).notNull(), x: doublePrecision('x').notNull(), y: doublePrecision('y').notNull(), color: varchar('color', { length: 7 }).notNull(),
+  width: doublePrecision('width').notNull().default(1), height: doublePrecision('height').notNull().default(1), rotation: doublePrecision('rotation').notNull().default(0), opacity: doublePrecision('opacity').notNull().default(1),
+  borderColor: varchar('border_color', { length: 7 }).notNull().default('#e8d7c3'), zIndex: integer('z_index').notNull().default(0), locked: boolean('locked').notNull().default(false), showName: boolean('show_name').notNull().default(true),
   hidden: boolean('hidden').notNull().default(false), ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'set null' }), version: integer('version').notNull().default(1),
-}, (t) => [index('tokens_scene_idx').on(t.sceneId), index('tokens_owner_idx').on(t.ownerUserId)]);
+}, (t) => [index('tokens_scene_idx').on(t.sceneId), index('tokens_owner_idx').on(t.ownerUserId), check('tokens_dimensions_check', sql`${t.width} BETWEEN 0.25 AND 100 AND ${t.height} BETWEEN 0.25 AND 100 AND ${t.opacity} BETWEEN 0 AND 1 AND ${t.rotation} BETWEEN -360000 AND 360000`)]);
 export const messages = pgTable('chat_messages', {
   id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
   senderId: uuid('sender_id').notNull().references(() => users.id), recipientId: uuid('recipient_id').references(() => users.id), body: varchar('body', { length: 2000 }).notNull(),

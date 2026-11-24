@@ -11,10 +11,16 @@ import { resolve } from 'node:path';
 import argon2 from 'argon2';
 import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateSceneLayerSchema, updateSceneObjectSchema } from '@nri/contracts';
+import { canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenSchema } from '@nri/contracts';
 import { db, pool } from './db/index.js';
 import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
 import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
+
+function publicToken(token: typeof tokens.$inferSelect, includeHidden = false) {
+  const { hidden: _hidden, id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId } = token;
+  const result = { id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId };
+  return includeHidden ? { ...result, hidden: token.hidden } : result;
+}
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] }, bodyLimit: 64 * 1024 });
 await app.register(cookie);
@@ -729,9 +735,8 @@ app.get('/api/scenes/:sceneId/tokens', async (request, reply) => {
   if (!scene || scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(scene.campaignId, user.id);
   if (!role || !canReadSceneTokens(role, scene.isActive, scene.archivedAt !== null)) return reply.code(404).send({ error: 'NOT_FOUND' });
-  const query = db.select({ id: tokens.id, sceneId: tokens.sceneId, name: tokens.name, x: tokens.x, y: tokens.y, color: tokens.color, version: tokens.version, ownerUserId: tokens.ownerUserId, hidden: tokens.hidden }).from(tokens).where(eq(tokens.sceneId, sceneId));
-  const rows = await query;
-  return rows.filter((token) => !token.hidden || role === 'OWNER' || role === 'GM').map(({ hidden: _hidden, ...token }) => token);
+  const rows = await db.select().from(tokens).where(eq(tokens.sceneId, sceneId));
+  return rows.filter((token) => !token.hidden || role === 'OWNER' || role === 'GM').map((token) => publicToken(token, role === 'OWNER' || role === 'GM'));
 });
 app.post('/api/tokens', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
@@ -743,10 +748,28 @@ app.post('/api/tokens', async (request, reply) => {
   if (scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   const [token] = await db.insert(tokens).values(input).returning();
   if (!token) throw new Error('Token creation failed');
-  const projection = { id: token.id, sceneId: token.sceneId, name: token.name, x: token.x, y: token.y, color: token.color, version: token.version, ownerUserId: token.ownerUserId };
+  const projection = publicToken(token, true); const playerProjection = publicToken(token);
   const room = `campaign:${scene.campaignId}`;
-  ((token.hidden || !scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', projection);
+  ((token.hidden || !scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', token.hidden || !scene.isActive ? projection : playerProjection);
   return reply.code(201).send({ token: projection });
+});
+app.patch('/api/tokens/:tokenId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { tokenId } = request.params as { tokenId: string };
+  const input = parseBody(updateTokenSchema, request.body);
+  const { expectedVersion, ...patch } = input;
+  const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
+  if (!row || row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(row.scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  const [updated] = await db.update(tokens).set({ ...patch, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, expectedVersion))).returning();
+  if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
+  await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.updated', targetId: tokenId });
+  const room = `campaign:${row.scene.campaignId}`; const wasVisible = !row.token.hidden && row.scene.isActive; const isVisible = !updated.hidden && row.scene.isActive; const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
+  if (wasVisible && !isVisible) io.to(room).emit('token:hidden', { id: updated.id, sceneId: updated.sceneId });
+  else if (isVisible) io.to(room).emit(wasVisible ? 'token:updated' : 'token:created', playerProjection);
+  io.to(`${room}:gm`).emit('token:updated', projection);
+  return { token: projection };
 });
 app.post('/api/tokens/:tokenId/owner', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
@@ -761,8 +784,8 @@ app.post('/api/tokens/:tokenId/owner', async (request, reply) => {
   const [updated] = await db.update(tokens).set({ ownerUserId: input.ownerUserId, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, row.token.version))).returning();
   if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
   await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.owner_changed', targetId: tokenId });
-  const projection = { id: updated.id, sceneId: updated.sceneId, name: updated.name, x: updated.x, y: updated.y, color: updated.color, version: updated.version, ownerUserId: updated.ownerUserId };
-  ((updated.hidden || !row.scene.isActive) ? io.to(`campaign:${row.scene.campaignId}:gm`) : io.to(`campaign:${row.scene.campaignId}`)).emit('token:updated', projection);
+  const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
+  ((updated.hidden || !row.scene.isActive) ? io.to(`campaign:${row.scene.campaignId}:gm`) : io.to(`campaign:${row.scene.campaignId}`)).emit('token:updated', updated.hidden || !row.scene.isActive ? projection : playerProjection);
   return { token: projection };
 });
 
@@ -804,12 +827,12 @@ io.on('connection', (socket) => {
       if (!socket.rooms.has(room)) return callback?.({ error: 'FORBIDDEN' });
       const role = await roleFor(token.scene.campaignId, user.id);
       if (!role || token.scene.archivedAt || (!['OWNER', 'GM'].includes(role) && !token.scene.isActive)) return callback?.({ error: 'FORBIDDEN' });
-      if (!canMoveToken(role, user.id, token.token.ownerUserId, token.token.hidden)) return callback?.({ error: 'FORBIDDEN' });
+      if (!canMoveToken(role, user.id, token.token.ownerUserId, token.token.hidden) || token.token.locked) return callback?.({ error: 'FORBIDDEN' });
       const [updated] = await db.update(tokens).set({ x: input.x, y: input.y, version: token.token.version + 1 }).where(and(eq(tokens.id, input.tokenId), eq(tokens.version, input.expectedVersion))).returning();
       if (!updated) return callback?.({ error: 'CONFLICT' });
-      const projection = { id: updated.id, sceneId: updated.sceneId, name: updated.name, x: updated.x, y: updated.y, color: updated.color, version: updated.version, ownerUserId: updated.ownerUserId };
-      callback?.({ ok: true, token: projection });
-      ((updated.hidden || !token.scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:moved', projection);
+      const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
+      callback?.({ ok: true, token: role === 'OWNER' || role === 'GM' ? projection : playerProjection });
+      ((updated.hidden || !token.scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:moved', updated.hidden || !token.scene.isActive ? projection : playerProjection);
     } catch { callback?.({ error: 'INVALID' }); }
   });
   socket.on('chat:send', async (raw: unknown, callback?: (result: unknown) => void) => {

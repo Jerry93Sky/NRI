@@ -16,6 +16,7 @@ All notable project changes will be recorded here.
 - Added a localized line-object action. Lines are stored as editable scene objects with point geometry and are covered by the multiplayer API smoke.
 - Added a GM freehand mode with live stroke preview and persisted point geometry on the selected unlocked layer.
 - Added localized drawing color and stroke-width controls plus per-object color editing.
+- Added versioned GM token properties for name, fill/frame, cell dimensions, rotation, opacity, display order, lock and name visibility; hidden token transitions emit only a safe removal or player-visible creation.
 - Restricted layer creation to custom layers and changed object-to-layer deletion behavior so a non-empty layer cannot cascade-delete its objects.
 - V0.1.1 is still in progress. Direct layer/object selection and transforms, image objects, layer ordering, clipboard workflows, mapped browser acceptance for calibration, richer tokens, asset library, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
 

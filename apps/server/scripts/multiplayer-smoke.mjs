@@ -80,10 +80,18 @@ assert.equal(mapRead.status, 200, 'campaign members can read the scene map');
 assert.equal(mapRead.headers.get('content-type'), 'image/png');
 assert.deepEqual(Buffer.from(await mapRead.arrayBuffer()), mapBytes, 'the authorized map download matches the uploaded bytes');
 const { result: { token: playerToken } } = await request('/api/tokens', { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, name: 'Player token', x: 2, y: 3, color: '#c8794a' } });
+const playerTokenPatch = await fetch(`${base}/api/tokens/${playerToken.id}`, { method: 'PATCH', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: playerToken.version, name: 'Forged name' }) });
+assert.equal(playerTokenPatch.status, 403, 'players cannot edit token properties through the REST API');
+const { result: { token: customizedToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: playerToken.version, width: 1.5, height: 2, rotation: 45, opacity: 0.75, borderColor: '#aabbcc', zIndex: 2, showName: false } });
+assert.equal(customizedToken.width, 1.5); assert.equal(customizedToken.rotation, 45); assert.equal(customizedToken.showName, false);
+const staleTokenPatch = await fetch(`${base}/api/tokens/${playerToken.id}`, { method: 'PATCH', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: playerToken.version, name: 'Stale edit' }) });
+assert.equal(staleTokenPatch.status, 409, 'stale token property writes are rejected');
 const { result: assignment } = await request(`/api/tokens/${playerToken.id}/owner`, { method: 'POST', cookie: owner.cookie, body: { ownerUserId: player.user.id } });
 const { result: { token: hiddenToken } } = await request('/api/tokens', { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, name: 'Hidden GM note', x: 6, y: 2, color: '#886644', hidden: true } });
 const { result: playerTokens } = await request(`/api/scenes/${scene.id}/tokens`, { cookie: player.cookie });
 const { result: ownerTokens } = await request(`/api/scenes/${scene.id}/tokens`, { cookie: owner.cookie });
+assert.equal(Object.hasOwn(playerTokens.find((item) => item.id === playerToken.id), 'hidden'), false, 'player-visible token projections omit the hidden-state flag');
+assert.equal(ownerTokens.find((item) => item.id === hiddenToken.id).hidden, true, 'GM token projections include hidden-state management data');
 assert.equal(playerTokens.some((item) => item.id === hiddenToken.id), false, 'hidden token must not appear in player snapshot');
 assert.equal(ownerTokens.some((item) => item.id === hiddenToken.id), true, 'GM snapshot must include hidden token');
 const { result: initiative } = await request(`/api/campaigns/${campaign.id}/initiative/start`, { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, entries: [{ tokenId: playerToken.id, label: 'Player token', score: 15 }, { tokenId: hiddenToken.id, label: 'Hidden GM note', score: 10 }] } });
@@ -103,6 +111,20 @@ const ownerClient = connect(owner.cookie); const playerClient = connect(player.c
 try {
 await Promise.all([ownerClient.connected, playerClient.connected, observerClient.connected]);
 for (const client of [ownerClient.socket, playerClient.socket, observerClient.socket]) assert.equal((await join(client, campaign.id)).ok, true);
+const tokenHiddenForPlayer = expectEvent(playerClient.socket, 'token:hidden');
+const { result: { token: hiddenPlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: assignment.token.version, hidden: true } });
+assert.equal(hiddenPlayerToken.hidden, true);
+assert.equal((await tokenHiddenForPlayer).id, playerToken.id, 'players receive a safe removal when a token becomes hidden');
+assert.equal((await request(`/api/scenes/${scene.id}/tokens`, { cookie: player.cookie })).result.some((token) => token.id === playerToken.id), false, 'hidden token is removed from player snapshots');
+const tokenShownForPlayer = expectEvent(playerClient.socket, 'token:created');
+const { result: { token: visiblePlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: hiddenPlayerToken.version, hidden: false } });
+const shownTokenEvent = await tokenShownForPlayer;
+assert.equal(shownTokenEvent.id, playerToken.id, 'players receive the token when it becomes visible again');
+assert.equal(Object.hasOwn(shownTokenEvent, 'hidden'), false, 'visibility events do not expose hidden-state metadata');
+const { result: { token: lockedPlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: visiblePlayerToken.version, locked: true } });
+const lockedPlayerMove = await ack(playerClient.socket, 'token:move', { tokenId: playerToken.id, x: 4, y: 4, expectedVersion: lockedPlayerToken.version });
+assert.equal(lockedPlayerMove.error, 'FORBIDDEN', 'locked tokens reject player movement');
+const { result: { token: unlockedPlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: lockedPlayerToken.version, locked: false } });
 const { result: gmLayers } = await request(`/api/scenes/${scene.id}/layers`, { cookie: owner.cookie });
 const { result: playerLayers } = await request(`/api/scenes/${scene.id}/layers`, { cookie: player.cookie });
 assert.deepEqual(gmLayers.map((layer) => layer.kind), ['BACKGROUND', 'OBJECTS', 'TOKENS', 'GM'], 'new scenes receive the four canonical layers');
@@ -164,7 +186,7 @@ await request(`/api/objects/${editableObject.id}`, { method: 'DELETE', cookie: o
 await request(`/api/layers/${customLayer.id}`, { method: 'DELETE', cookie: owner.cookie, body: { expectedVersion: privateCustomLayer.version } });
 const ownerMove = expectEvent(ownerClient.socket, 'token:moved');
 const observerMove = expectEvent(observerClient.socket, 'token:moved');
-const moved = await ack(playerClient.socket, 'token:move', { tokenId: playerToken.id, x: 5, y: 4, expectedVersion: assignment.token.version });
+const moved = await ack(playerClient.socket, 'token:move', { tokenId: playerToken.id, x: 5, y: 4, expectedVersion: unlockedPlayerToken.version });
 assert.equal(moved.ok, true, 'token owner can move their token');
 assert.equal((await ownerMove).x, 5, 'GM receives committed movement');
 assert.equal((await observerMove).y, 4, 'other player receives committed movement');
@@ -264,4 +286,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, token ownership, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, versioned token properties and visibility, token ownership, locked-move denial, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

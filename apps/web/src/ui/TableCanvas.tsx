@@ -121,15 +121,15 @@ export function TableCanvas(props: Props) {
     };
     const redrawTokens = () => {
       pieces.removeChildren().forEach((child) => child.destroy({ children: true }));
-      latest.current.tokens.forEach((token) => {
+      latest.current.tokens.toSorted((a, b) => a.zIndex - b.zIndex || a.y - b.y || a.x - b.x).forEach((token) => {
         const size = latest.current.gridSize;
-        const node = new Container(); node.position.set(token.x * size, token.y * size);
-        const disc = new Graphics().circle(0, 0, size * 0.42).fill(token.color).stroke({ color: 0xe8d7c3, alpha: 0.9, width: 2 });
-        const label = new Text({ text: token.name, style: { fontFamily: 'Arial', fontSize: Math.max(10, size * 0.25), fill: 0xf5eadc, align: 'center' } });
-        label.anchor.set(0.5, -2); label.y = size * 0.45;
-        node.addChild(disc, label); node.eventMode = 'static'; node.cursor = latest.current.canEdit(token) ? 'grab' : 'default';
+        const node = new Container(); node.position.set(token.x * size, token.y * size); node.rotation = token.rotation * Math.PI / 180; node.alpha = token.opacity;
+        const width = size * token.width; const height = size * token.height;
+        const disc = new Graphics().ellipse(0, 0, width * 0.42, height * 0.42).fill(token.color).stroke({ color: Number.parseInt(token.borderColor.slice(1), 16), alpha: 0.9, width: Math.max(1, size * 0.04) });
+        if (token.showName) { const label = new Text({ text: token.name, style: { fontFamily: 'Arial', fontSize: Math.max(10, size * 0.25), fill: 0xf5eadc, align: 'center' } }); label.anchor.set(0.5, -2); label.y = height * 0.45; node.addChild(disc, label); } else node.addChild(disc);
+        node.eventMode = 'static'; node.cursor = latest.current.canEdit(token) && !token.locked ? 'grab' : 'default';
         node.on('pointerdown', (event) => {
-          if (!latest.current.canEdit(token)) return;
+          if (!latest.current.canEdit(token) || token.locked) return;
           event.stopPropagation(); node.cursor = 'grabbing';
           const start = event.global.clone(); const origin = node.position.clone();
           const move = (moveEvent: typeof event) => { const point = moveEvent.global; node.position.set(origin.x + point.x - start.x, origin.y + point.y - start.y); };

@@ -9,14 +9,14 @@ NRI Platform is a system-neutral virtual tabletop for role-playing games. Its co
 - **Automated checks:** AUTOMATED_TESTS_PASSED for the local checks that exist
 - **Owner acceptance:** IN_PROGRESS — V0.1.1 technical gates remain open
 
-The API and web interface run locally, and `Amber Crossing` is available for manual review. A basic layer panel and rectangle/ellipse objects are available, while full object editing, image-backed calibration acceptance, expanded token properties, asset library, tabletop tools, Playwright, backup/restore, and load checks remain incomplete. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md).
+The API and web interface run locally, and `Amber Crossing` is available for manual review. Basic layer tools and token appearance/visibility editing are available, while image-backed calibration acceptance, token images/resources/notes, full object editing, asset library, tabletop tools, Playwright, backup/restore, and load checks remain incomplete. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md).
 
 ## Implemented
 
 - Registration, login, logout, sessions, and rate limits.
 - Campaigns, Owner/GM/Player roles, capped and revocable invitations, archive and restore.
 - Scenes with a player-active version and GM drafts, rename, duplicate, archive/restore, ordering, and configurable grid/camera; players receive only the active scene.
-- Tokens, ownership assignment, server-authorized movement, and Socket.IO synchronization. The tabletop has layer selection/order/visibility/lock controls, line and rectangle/ellipse creation, GM freehand drawing with color and stroke-width controls, and active-layer canvas dragging/resizing for shapes. Object visibility, lock, color, rotation, opacity, z-order, same-scene layer move, duplicate, delete, and rendering are also available. The server enforces versions and GM-content filtering. Image rendering, text authoring, and clipboard workflows remain incomplete. The drag/resize and freehand gestures have not been manually exercised in the browser.
+- Tokens, ownership assignment, server-authorized movement, and Socket.IO synchronization. GMs can edit token name, fill/border, cell dimensions, rotation, opacity, display order, lock, name visibility, and player visibility with optimistic versions; locked tokens reject movement, and hide/show events preserve player filtering. The tabletop has layer selection/order/visibility/lock controls, line and rectangle/ellipse creation, GM freehand drawing with color and stroke-width controls, and active-layer canvas dragging/resizing for shapes. Object visibility, lock, color, rotation, opacity, z-order, same-scene layer move, duplicate, delete, and rendering are also available. Token images/resources/notes, image-object rendering, text authoring, and clipboard workflows remain incomplete. The drag/resize and freehand gestures have not been manually exercised in the browser.
 - Public and private chat, server-side dice rolls, and initiative with hidden-turn filtering.
 - Russian and English UI, local development, Docker Compose, PostgreSQL migrations, and a CI workflow.
 

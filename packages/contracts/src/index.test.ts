@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canMoveToken, createSceneLayerSchema, createSceneObjectSchema, parseDiceExpression, updateSceneObjectSchema } from './index.js';
+import { canMoveToken, createSceneLayerSchema, createSceneObjectSchema, parseDiceExpression, updateSceneObjectSchema, updateTokenSchema } from './index.js';
 
 describe('campaign-scoped token permissions', () => {
   it('allows the owner of a visible player token', () => expect(canMoveToken('PLAYER', 'u1', 'u1', false)).toBe(true));
@@ -36,5 +36,14 @@ describe('scene layer and object contracts', () => {
     expect(updateSceneObjectSchema.safeParse({ x: 20, expectedVersion: 2 }).success).toBe(true);
     expect(updateSceneObjectSchema.safeParse({ x: 20 }).success).toBe(false);
     expect(updateSceneObjectSchema.parse({ expectedVersion: 2, locked: false })).toEqual({ expectedVersion: 2, locked: false });
+  });
+});
+
+describe('token property contracts', () => {
+  it('validates bounded token properties and requires optimistic versions', () => {
+    expect(updateTokenSchema.parse({ expectedVersion: 3, width: 1.5, rotation: 45, hidden: true })).toMatchObject({ expectedVersion: 3, width: 1.5, rotation: 45, hidden: true });
+    expect(updateTokenSchema.safeParse({ expectedVersion: 3, opacity: 1.1 }).success).toBe(false);
+    expect(updateTokenSchema.safeParse({ expectedVersion: 3, width: 0.1 }).success).toBe(false);
+    expect(updateTokenSchema.safeParse({ name: 'Goblin' }).success).toBe(false);
   });
 });
