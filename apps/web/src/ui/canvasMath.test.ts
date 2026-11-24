@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateCellSize, measureSceneDistance, zoomToPointer } from './canvasMath';
+import { calculateCellSize, measureSceneDistance, selectTokenIdsInRect, zoomToPointer } from './canvasMath';
 
 describe('canvas camera math', () => {
   it('measures straight and multi-segment paths in scene units', () => {
@@ -7,6 +7,13 @@ describe('canvas camera math', () => {
     expect(measureSceneDistance([{ x: 0, y: 0 }, { x: 48, y: 0 }, { x: 48, y: 48 }], 48, 5)).toBe(10);
     expect(measureSceneDistance([{ x: 0, y: 0 }, { x: 48, y: 48 }], 48, 5)).toBeCloseTo(Math.SQRT2 * 5);
     expect(measureSceneDistance([{ x: 0, y: 0 }], 48, 5)).toBe(0);
+  });
+
+  it('selects token bounds intersecting a drag rectangle in either direction', () => {
+    const tokens = [{ id: 'a', x: 1, y: 1, width: 1, height: 1 }, { id: 'b', x: 3, y: 2, width: 2, height: 1 }];
+    expect(selectTokenIdsInRect(tokens, 48, { x: 48, y: 48, width: 48, height: 48 })).toEqual(['a']);
+    expect(selectTokenIdsInRect(tokens, 48, { x: 240, y: 144, width: -192, height: -96 })).toEqual(['a', 'b']);
+    expect(selectTokenIdsInRect(tokens, 0, { x: 0, y: 0, width: 100, height: 100 })).toEqual([]);
   });
 
   it('keeps the same world coordinate under the cursor while zooming', () => {

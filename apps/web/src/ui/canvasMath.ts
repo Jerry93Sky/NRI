@@ -11,6 +11,21 @@ export function measureSceneDistance(points: Array<{ x: number; y: number }>, gr
   return pixels / gridSize * unitsPerCell;
 }
 
+export function selectTokenIdsInRect(tokens: Array<{ id: string; x: number; y: number; width: number; height: number }>, gridSize: number, rect: { x: number; y: number; width: number; height: number }): string[] {
+  if (!Number.isFinite(gridSize) || gridSize <= 0) return [];
+  const left = Math.min(rect.x, rect.x + rect.width);
+  const right = Math.max(rect.x, rect.x + rect.width);
+  const top = Math.min(rect.y, rect.y + rect.height);
+  const bottom = Math.max(rect.y, rect.y + rect.height);
+  return tokens.filter((token) => {
+    const x = token.x * gridSize;
+    const y = token.y * gridSize;
+    const width = token.width * gridSize;
+    const height = token.height * gridSize;
+    return x <= right && x + width >= left && y <= bottom && y + height >= top;
+  }).map((token) => token.id);
+}
+
 export function zoomToPointer(current: CameraTransform, pointer: { x: number; y: number }, factor: number, min = 0.25, max = 2.2): CameraTransform {
   const worldX = (pointer.x - current.x) / current.scale;
   const worldY = (pointer.y - current.y) / current.scale;
