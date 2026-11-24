@@ -1,4 +1,5 @@
 import { boolean, doublePrecision, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(), email: varchar('email', { length: 254 }).notNull().unique(),
@@ -33,8 +34,10 @@ export const assets = pgTable('assets', {
 export const scenes = pgTable('scenes', {
   id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
   title: varchar('title', { length: 80 }).notNull(), backgroundAssetId: uuid('background_asset_id').references(() => assets.id, { onDelete: 'set null' }), gridSize: integer('grid_size').notNull().default(48), width: integer('width').notNull().default(2048), height: integer('height').notNull().default(2048),
+  gridColor: varchar('grid_color', { length: 7 }).notNull().default('#44453e'), gridOpacity: doublePrecision('grid_opacity').notNull().default(0.38), gridOffsetX: doublePrecision('grid_offset_x').notNull().default(0), gridOffsetY: doublePrecision('grid_offset_y').notNull().default(0), gridEnabled: boolean('grid_enabled').notNull().default(true), snapToGrid: boolean('snap_to_grid').notNull().default(true), unitsPerCell: doublePrecision('units_per_cell').notNull().default(5), unitLabel: varchar('unit_label', { length: 24 }).notNull().default('ft'),
+  sortOrder: integer('sort_order').notNull().default(0), isActive: boolean('is_active').notNull().default(false), published: boolean('published').notNull().default(false), cameraX: doublePrecision('camera_x').notNull().default(0), cameraY: doublePrecision('camera_y').notNull().default(0), cameraZoom: doublePrecision('camera_zoom').notNull().default(1),
   archivedAt: timestamp('archived_at', { withTimezone: true }), version: integer('version').notNull().default(1),
-}, (t) => [index('scenes_campaign_idx').on(t.campaignId)]);
+}, (t) => [index('scenes_campaign_idx').on(t.campaignId), uniqueIndex('scenes_one_active_per_campaign_idx').on(t.campaignId).where(sql`${t.isActive} = true`)]);
 export const tokens = pgTable('tokens', {
   id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 48 }).notNull(), x: doublePrecision('x').notNull(), y: doublePrecision('y').notNull(), color: varchar('color', { length: 7 }).notNull(),

@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { canMoveToken, createCampaignSchema, createSceneSchema, createTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema } from '@nri/contracts';
 import { db, pool } from './db/index.js';
 import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, scenes, sessions, tokens, users } from './db/schema.js';
+import { canListScene, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] }, bodyLimit: 64 * 1024 });
 await app.register(cookie);
@@ -30,6 +31,7 @@ const webOrigins = (process.env.WEB_ORIGIN ?? 'http://localhost:5173,http://127.
 const cookieOptions = { path: '/', httpOnly: true, sameSite: 'lax' as const, secure: isProduction, maxAge: 60 * 60 * 24 * 14 };
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const publicUser = (user: { id: string; email: string; displayName: string }) => ({ id: user.id, email: user.email, displayName: user.displayName });
+const publicScene = (scene: typeof scenes.$inferSelect) => ({ id: scene.id, campaignId: scene.campaignId, title: scene.title, gridSize: scene.gridSize, width: scene.width, height: scene.height, gridColor: scene.gridColor, gridOpacity: scene.gridOpacity, gridOffsetX: scene.gridOffsetX, gridOffsetY: scene.gridOffsetY, gridEnabled: scene.gridEnabled, snapToGrid: scene.snapToGrid, unitsPerCell: scene.unitsPerCell, unitLabel: scene.unitLabel, backgroundAssetId: scene.backgroundAssetId, cameraX: scene.cameraX, cameraY: scene.cameraY, cameraZoom: scene.cameraZoom, version: scene.version });
 
 async function userForCookie(cookieValue?: string) {
   if (!cookieValue) return null;
@@ -42,9 +44,10 @@ async function requireUser(request: { cookies: Record<string, string | undefined
   if (!user) { reply.code(401).send({ error: 'UNAUTHENTICATED' }); return null; }
   return user;
 }
-async function roleFor(campaignId: string, userId: string) {
+async function roleFor(campaignId: string, userId: string): Promise<CampaignSceneRole | null> {
   const [membership] = await db.select({ role: memberships.role }).from(memberships).innerJoin(campaigns, eq(memberships.campaignId, campaigns.id)).where(and(eq(memberships.campaignId, campaignId), eq(memberships.userId, userId), isNull(campaigns.archivedAt))).limit(1);
-  return membership?.role ?? null;
+  const role = membership?.role;
+  return role === 'OWNER' || role === 'GM' || role === 'PLAYER' ? role : null;
 }
 function parseBody<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -209,6 +212,7 @@ app.delete('/api/campaigns/:campaignId/members/:memberId', async (request, reply
   if (campaign.ownerId !== user.id || memberId === campaign.ownerId) return reply.code(403).send({ error: 'FORBIDDEN' });
   const [removed] = await db.delete(memberships).where(and(eq(memberships.campaignId, campaignId), eq(memberships.userId, memberId))).returning();
   if (!removed) return reply.code(404).send({ error: 'NOT_FOUND' });
+  io.in(`user:${memberId}`).emit('membership:removed', { userId: memberId, campaignId });
   io.in(`user:${memberId}`).socketsLeave(`campaign:${campaignId}`);
   io.in(`user:${memberId}`).socketsLeave(`campaign:${campaignId}:gm`);
   await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'membership.removed', targetId: memberId });
@@ -257,6 +261,8 @@ app.post('/api/campaigns/:campaignId/initiative/start', async (request, reply) =
   const input = parseBody(z.object({ sceneId: z.uuid(), entries: z.array(z.object({ tokenId: z.uuid().nullable(), label: z.string().trim().min(1).max(64), score: z.number().int().min(-9999).max(9999), hidden: z.boolean().default(false) })).min(1).max(100) }), request.body);
   const [scene] = await db.select({ campaignId: scenes.campaignId }).from(scenes).where(and(eq(scenes.id, input.sceneId), eq(scenes.campaignId, campaignId), isNull(scenes.archivedAt))).limit(1);
   if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const [sceneState] = await db.select({ isActive: scenes.isActive }).from(scenes).where(eq(scenes.id, input.sceneId)).limit(1);
+  if (!sceneState?.isActive) return reply.code(409).send({ error: 'SCENE_NOT_ACTIVE' });
   const validatedEntries: Array<{ tokenId: string | null; label: string; score: number; hidden: boolean; tieOrder: number }> = [];
   for (const [tieOrder, entry] of input.entries.entries()) {
     let hidden = entry.hidden;
@@ -324,20 +330,30 @@ app.post('/api/campaigns/:campaignId/initiative/stop', async (request, reply) =>
 app.get('/api/campaigns/:campaignId/scenes', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
   const { campaignId } = request.params as { campaignId: string };
-  if (!await roleFor(campaignId, user.id)) return reply.code(404).send({ error: 'NOT_FOUND' });
-  return db.select().from(scenes).where(and(eq(scenes.campaignId, campaignId), isNull(scenes.archivedAt)));
+  const role = await roleFor(campaignId, user.id);
+  if (!role) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const archived = (request.query as { archived?: string }).archived === 'true';
+  if (archived && !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  const rows = await db.select().from(scenes).where(eq(scenes.campaignId, campaignId)).orderBy(asc(scenes.sortOrder), asc(scenes.id));
+  return rows.filter((scene) => canListScene(role, scene.isActive, scene.archivedAt !== null, archived));
 });
 app.patch('/api/scenes/:sceneId', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
   const { sceneId } = request.params as { sceneId: string };
-  const input = parseBody(z.object({ title: z.string().trim().min(1).max(80).optional(), gridSize: z.number().int().min(16).max(128).optional(), expectedVersion: z.number().int().positive() }).refine(({ title, gridSize }) => title !== undefined || gridSize !== undefined), request.body);
+  const input = parseBody(z.object({
+    title: z.string().trim().min(1).max(80).optional(), gridSize: z.number().int().min(8).max(256).optional(), width: z.number().int().min(256).max(16384).optional(), height: z.number().int().min(256).max(16384).optional(),
+    gridColor: z.string().regex(/^#[\da-fA-F]{6}$/).optional(), gridOpacity: z.number().min(0).max(1).optional(), gridOffsetX: z.number().min(-16384).max(16384).optional(), gridOffsetY: z.number().min(-16384).max(16384).optional(), gridEnabled: z.boolean().optional(), snapToGrid: z.boolean().optional(), unitsPerCell: z.number().min(0.01).max(100000).optional(), unitLabel: z.string().trim().min(1).max(24).optional(), cameraX: z.number().min(-32768).max(32768).optional(), cameraY: z.number().min(-32768).max(32768).optional(), cameraZoom: z.number().min(0.25).max(4).optional(), expectedVersion: z.number().int().positive(),
+  }).refine(({ expectedVersion: _expectedVersion, ...fields }) => Object.values(fields).some((value) => value !== undefined)), request.body);
   const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
   if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(scene.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-  const [updated] = await db.update(scenes).set({ ...(input.title !== undefined ? { title: input.title } : {}), ...(input.gridSize !== undefined ? { gridSize: input.gridSize } : {}), version: scene.version + 1 }).where(and(eq(scenes.id, sceneId), eq(scenes.version, input.expectedVersion))).returning();
+  if (scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const { expectedVersion, ...patch } = input;
+  const [updated] = await db.update(scenes).set({ ...patch, version: scene.version + 1 }).where(and(eq(scenes.id, sceneId), eq(scenes.version, expectedVersion), isNull(scenes.archivedAt))).returning();
   if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
   await db.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.updated', targetId: sceneId });
+  if (updated.isActive) io.to(`campaign:${scene.campaignId}`).emit('scene:updated', { scene: publicScene(updated) });
   return { scene: updated };
 });
 app.post('/api/scenes/:sceneId/duplicate', async (request, reply) => {
@@ -345,10 +361,13 @@ app.post('/api/scenes/:sceneId/duplicate', async (request, reply) => {
   const { sceneId } = request.params as { sceneId: string };
   const [source] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
   if (!source) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (source.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(source.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
   const duplicate = await db.transaction(async (tx) => {
-    const [scene] = await tx.insert(scenes).values({ campaignId: source.campaignId, title: `${source.title} (copy)`.slice(0, 80), backgroundAssetId: source.backgroundAssetId, gridSize: source.gridSize, width: source.width, height: source.height }).returning();
+    const [last] = await tx.select({ sortOrder: scenes.sortOrder }).from(scenes).where(eq(scenes.campaignId, source.campaignId)).orderBy(desc(scenes.sortOrder)).limit(1);
+    const { id: _id, archivedAt: _archivedAt, version: _version, isActive: _isActive, published: _published, sortOrder: _sortOrder, ...copy } = source;
+    const [scene] = await tx.insert(scenes).values({ ...copy, title: `${source.title} (copy)`.slice(0, 80), sortOrder: (last?.sortOrder ?? -1) + 1, isActive: false, published: false, archivedAt: null, version: 1 }).returning();
     if (!scene) throw new Error('Scene duplication failed');
     const sourceTokens = await tx.select().from(tokens).where(eq(tokens.sceneId, source.id));
     if (sourceTokens.length) await tx.insert(tokens).values(sourceTokens.map(({ id: _id, sceneId: _sceneId, ...token }) => ({ ...token, sceneId: scene.id })));
@@ -365,18 +384,106 @@ app.put('/api/scenes/:sceneId/archive', async (request, reply) => {
   if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(scene.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-  const [updated] = await db.update(scenes).set({ archivedAt: new Date(), version: scene.version + 1 }).where(and(eq(scenes.id, sceneId), eq(scenes.version, input.expectedVersion))).returning();
-  if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
-  await db.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.archived', targetId: sceneId });
-  return { scene: updated };
+  if (scene.archivedAt) return reply.code(409).send({ error: 'CONFLICT' });
+  let result: { scene: typeof scene; activated: typeof scene | null };
+  try {
+    result = await db.transaction(async (tx) => {
+      const [updated] = await tx.update(scenes).set({ archivedAt: new Date(), isActive: false, version: scene.version + 1 }).where(and(eq(scenes.id, sceneId), eq(scenes.version, input.expectedVersion), isNull(scenes.archivedAt))).returning();
+      if (!updated) throw new Error('SCENE_CONFLICT');
+      let activated: typeof scene | null = null;
+      if (scene.isActive) {
+        const [fallback] = await tx.select().from(scenes).where(and(eq(scenes.campaignId, scene.campaignId), isNull(scenes.archivedAt), eq(scenes.published, true), sql`${scenes.id} <> ${sceneId}`)).orderBy(desc(scenes.sortOrder)).limit(1);
+        if (fallback) { const [next] = await tx.update(scenes).set({ isActive: true, version: fallback.version + 1 }).where(and(eq(scenes.id, fallback.id), eq(scenes.version, fallback.version))).returning(); if (!next) throw new Error('SCENE_CONFLICT'); activated = next; }
+      }
+      await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.archived', targetId: sceneId });
+      return { scene: updated, activated };
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
+    throw error;
+  }
+  if (scene.isActive) io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { sceneId: result.activated?.id ?? null });
+  return { scene: result.scene };
 });
 app.post('/api/scenes', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
   const input = parseBody(createSceneSchema, request.body);
   const role = await roleFor(input.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-  const [scene] = await db.insert(scenes).values({ campaignId: input.campaignId, title: input.title, gridSize: input.gridSize }).returning();
+  const scene = await db.transaction(async (tx) => {
+    const [last] = await tx.select({ sortOrder: scenes.sortOrder }).from(scenes).where(eq(scenes.campaignId, input.campaignId)).orderBy(desc(scenes.sortOrder)).limit(1);
+    const [active] = await tx.select({ id: scenes.id }).from(scenes).where(and(eq(scenes.campaignId, input.campaignId), eq(scenes.isActive, true), isNull(scenes.archivedAt))).limit(1);
+    const [created] = await tx.insert(scenes).values({ campaignId: input.campaignId, title: input.title, gridSize: input.gridSize, sortOrder: (last?.sortOrder ?? -1) + 1, isActive: !active, published: !active }).returning();
+    if (created) await tx.insert(auditEvents).values({ campaignId: input.campaignId, actorId: user.id, action: 'scene.created', targetId: created.id });
+    return created;
+  });
+  if (!scene) throw new Error('Scene creation failed');
+  if (scene.isActive) io.to(`campaign:${input.campaignId}`).emit('scene:activated', { sceneId: scene.id });
   return reply.code(201).send({ scene });
+});
+app.put('/api/scenes/:sceneId/activate', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
+  const [scene] = await db.select().from(scenes).where(and(eq(scenes.id, sceneId), isNull(scenes.archivedAt))).limit(1);
+  if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (scene.version !== input.expectedVersion) return reply.code(409).send({ error: 'CONFLICT' });
+  if (scene.isActive) return { scene };
+  let activated: typeof scene;
+  try {
+    activated = await db.transaction(async (tx) => {
+      await tx.update(scenes).set({ isActive: false, version: sql`${scenes.version} + 1` }).where(and(eq(scenes.campaignId, scene.campaignId), eq(scenes.isActive, true)));
+      const [updated] = await tx.update(scenes).set({ isActive: true, published: true, version: scene.version + 1 }).where(and(eq(scenes.id, scene.id), eq(scenes.version, input.expectedVersion), isNull(scenes.archivedAt))).returning();
+      if (!updated) throw new Error('SCENE_CONFLICT');
+      await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.activated', targetId: sceneId });
+      return updated;
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
+    throw error;
+  }
+  io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { sceneId: activated.id });
+  return { scene: activated };
+});
+app.put('/api/scenes/:sceneId/restore', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
+  const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+  if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (!scene.archivedAt || scene.version !== input.expectedVersion) return reply.code(409).send({ error: 'CONFLICT' });
+  const [last] = await db.select({ sortOrder: scenes.sortOrder }).from(scenes).where(eq(scenes.campaignId, scene.campaignId)).orderBy(desc(scenes.sortOrder)).limit(1);
+  const [restored] = await db.update(scenes).set({ archivedAt: null, sortOrder: (last?.sortOrder ?? -1) + 1, version: scene.version + 1 }).where(and(eq(scenes.id, sceneId), eq(scenes.version, input.expectedVersion))).returning();
+  if (!restored) return reply.code(409).send({ error: 'CONFLICT' });
+  await db.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.restored', targetId: sceneId });
+  return { scene: restored };
+});
+app.put('/api/campaigns/:campaignId/scenes/reorder', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { campaignId } = request.params as { campaignId: string };
+  const role = await roleFor(campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  const input = parseBody(z.object({ scenes: z.array(z.object({ id: z.uuid(), expectedVersion: z.number().int().positive() })).min(1).max(100) }), request.body);
+  if (new Set(input.scenes.map(({ id }) => id)).size !== input.scenes.length) return reply.code(400).send({ error: 'INVALID' });
+  try {
+    await db.transaction(async (tx) => {
+      const current = await tx.select().from(scenes).where(and(eq(scenes.campaignId, campaignId), isNull(scenes.archivedAt)));
+      if (current.length !== input.scenes.length || input.scenes.some((item) => !current.some((scene) => scene.id === item.id && scene.version === item.expectedVersion))) throw new Error('SCENE_CONFLICT');
+      for (const [sortOrder, item] of input.scenes.entries()) {
+        const [updated] = await tx.update(scenes).set({ sortOrder, version: item.expectedVersion + 1 }).where(and(eq(scenes.id, item.id), eq(scenes.version, item.expectedVersion))).returning({ id: scenes.id });
+        if (!updated) throw new Error('SCENE_CONFLICT');
+      }
+      await tx.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'scenes.reordered' });
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
+    throw error;
+  }
+  return db.select().from(scenes).where(and(eq(scenes.campaignId, campaignId), isNull(scenes.archivedAt))).orderBy(asc(scenes.sortOrder), asc(scenes.id));
 });
 app.post('/api/campaigns/:campaignId/assets', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
@@ -416,6 +523,7 @@ app.put('/api/scenes/:sceneId/background', async (request, reply) => {
   if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(scene.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   if (input.assetId) {
     const [asset] = await db.select({ id: assets.id }).from(assets).where(and(eq(assets.id, input.assetId), eq(assets.campaignId, scene.campaignId))).limit(1);
     if (!asset) return reply.code(400).send({ error: 'INVALID_ASSET' });
@@ -423,21 +531,29 @@ app.put('/api/scenes/:sceneId/background', async (request, reply) => {
   const [updated] = await db.update(scenes).set({ backgroundAssetId: input.assetId, version: scene.version + 1 }).where(and(eq(scenes.id, sceneId), eq(scenes.version, input.expectedVersion))).returning();
   if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
   await db.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.background_changed', targetId: sceneId });
+  if (updated.isActive) io.to(`campaign:${scene.campaignId}`).emit('scene:updated', { scene: publicScene(updated) });
   return { scene: updated };
 });
 app.get('/api/assets/:assetId', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
   const { assetId } = request.params as { assetId: string };
   const [asset] = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
-  if (!asset || !await roleFor(asset.campaignId, user.id)) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (!asset) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(asset.campaignId, user.id);
+  if (!role) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (!['OWNER', 'GM'].includes(role)) {
+    const [visibleReference] = await db.select({ id: scenes.id }).from(scenes).where(and(eq(scenes.campaignId, asset.campaignId), eq(scenes.backgroundAssetId, asset.id), eq(scenes.isActive, true), isNull(scenes.archivedAt))).limit(1);
+    if (!visibleReference) return reply.code(404).send({ error: 'NOT_FOUND' });
+  }
   return reply.type(asset.mediaType).header('x-content-type-options', 'nosniff').header('cache-control', 'private, max-age=3600').send(createReadStream(resolve(uploadDirectory, asset.storageKey)));
 });
 app.get('/api/scenes/:sceneId/tokens', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
   const { sceneId } = request.params as { sceneId: string };
   const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
-  if (!scene || !await roleFor(scene.campaignId, user.id)) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (!scene || scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(scene.campaignId, user.id);
+  if (!role || !canReadSceneTokens(role, scene.isActive, scene.archivedAt !== null)) return reply.code(404).send({ error: 'NOT_FOUND' });
   const query = db.select({ id: tokens.id, sceneId: tokens.sceneId, name: tokens.name, x: tokens.x, y: tokens.y, color: tokens.color, version: tokens.version, ownerUserId: tokens.ownerUserId, hidden: tokens.hidden }).from(tokens).where(eq(tokens.sceneId, sceneId));
   const rows = await query;
   return rows.filter((token) => !token.hidden || role === 'OWNER' || role === 'GM').map(({ hidden: _hidden, ...token }) => token);
@@ -449,11 +565,12 @@ app.post('/api/tokens', async (request, reply) => {
   if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(scene.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   const [token] = await db.insert(tokens).values(input).returning();
   if (!token) throw new Error('Token creation failed');
   const projection = { id: token.id, sceneId: token.sceneId, name: token.name, x: token.x, y: token.y, color: token.color, version: token.version, ownerUserId: token.ownerUserId };
   const room = `campaign:${scene.campaignId}`;
-  (token.hidden ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', projection);
+  ((token.hidden || !scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', projection);
   return reply.code(201).send({ token: projection });
 });
 app.post('/api/tokens/:tokenId/owner', async (request, reply) => {
@@ -464,12 +581,13 @@ app.post('/api/tokens/:tokenId/owner', async (request, reply) => {
   if (!row) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(row.scene.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   if (input.ownerUserId && !await roleFor(row.scene.campaignId, input.ownerUserId)) return reply.code(400).send({ error: 'INVALID_OWNER' });
   const [updated] = await db.update(tokens).set({ ownerUserId: input.ownerUserId, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, row.token.version))).returning();
   if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
   await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.owner_changed', targetId: tokenId });
   const projection = { id: updated.id, sceneId: updated.sceneId, name: updated.name, x: updated.x, y: updated.y, color: updated.color, version: updated.version, ownerUserId: updated.ownerUserId };
-  (updated.hidden ? io.to(`campaign:${row.scene.campaignId}:gm`) : io.to(`campaign:${row.scene.campaignId}`)).emit('token:updated', projection);
+  ((updated.hidden || !row.scene.isActive) ? io.to(`campaign:${row.scene.campaignId}:gm`) : io.to(`campaign:${row.scene.campaignId}`)).emit('token:updated', projection);
   return { token: projection };
 });
 
@@ -510,12 +628,13 @@ io.on('connection', (socket) => {
       const room = `campaign:${token.scene.campaignId}`;
       if (!socket.rooms.has(room)) return callback?.({ error: 'FORBIDDEN' });
       const role = await roleFor(token.scene.campaignId, user.id);
+      if (!role || token.scene.archivedAt || (!['OWNER', 'GM'].includes(role) && !token.scene.isActive)) return callback?.({ error: 'FORBIDDEN' });
       if (!canMoveToken(role, user.id, token.token.ownerUserId, token.token.hidden)) return callback?.({ error: 'FORBIDDEN' });
       const [updated] = await db.update(tokens).set({ x: input.x, y: input.y, version: token.token.version + 1 }).where(and(eq(tokens.id, input.tokenId), eq(tokens.version, input.expectedVersion))).returning();
       if (!updated) return callback?.({ error: 'CONFLICT' });
       const projection = { id: updated.id, sceneId: updated.sceneId, name: updated.name, x: updated.x, y: updated.y, color: updated.color, version: updated.version, ownerUserId: updated.ownerUserId };
       callback?.({ ok: true, token: projection });
-      (updated.hidden ? io.to(`${room}:gm`) : io.to(room)).emit('token:moved', projection);
+      ((updated.hidden || !token.scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:moved', projection);
     } catch { callback?.({ error: 'INVALID' }); }
   });
   socket.on('chat:send', async (raw: unknown, callback?: (result: unknown) => void) => {

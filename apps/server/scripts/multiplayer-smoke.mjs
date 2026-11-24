@@ -67,6 +67,7 @@ const roleUpdate = await request(`/api/campaigns/${campaign.id}/members/${observ
 assert.equal(roleUpdate.result.membership.role, 'GM', 'owner can grant a campaign-scoped GM role');
 await request(`/api/campaigns/${campaign.id}/members/${observer.user.id}/role`, { method: 'POST', cookie: owner.cookie, body: { role: 'PLAYER' } });
 const { result: { scene } } = await request('/api/scenes', { method: 'POST', cookie: owner.cookie, body: { campaignId: campaign.id, title: 'Test scene' } });
+assert.equal(scene.isActive, true, 'first scene becomes active for players');
 const mapBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lT8AAAAASUVORK5CYII=', 'base64');
 const mapForm = new FormData(); mapForm.set('file', new Blob([mapBytes], { type: 'image/png' }), 'original-map.png');
 const mapUpload = await fetch(`${base}/api/campaigns/${campaign.id}/assets`, { method: 'POST', headers: { cookie: owner.cookie }, body: mapForm });
@@ -110,6 +111,14 @@ assert.equal((await ownerMove).x, 5, 'GM receives committed movement');
 assert.equal((await observerMove).y, 4, 'other player receives committed movement');
 const forgedMove = await ack(observerClient.socket, 'token:move', { tokenId: playerToken.id, x: 9, y: 9, expectedVersion: moved.token.version });
 assert.equal(forgedMove.error, 'FORBIDDEN', 'other player cannot move a token they do not own');
+const { result: { token: conflictToken } } = await request('/api/tokens', { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, name: 'Concurrent token', x: 1, y: 1, color: '#669977' } });
+const { result: conflictAssignment } = await request(`/api/tokens/${conflictToken.id}/owner`, { method: 'POST', cookie: owner.cookie, body: { ownerUserId: player.user.id } });
+const concurrentMoves = await Promise.all([
+  ack(playerClient.socket, 'token:move', { tokenId: conflictToken.id, x: 2, y: 2, expectedVersion: conflictAssignment.token.version }),
+  ack(ownerClient.socket, 'token:move', { tokenId: conflictToken.id, x: 8, y: 8, expectedVersion: conflictAssignment.token.version }),
+]);
+assert.equal(concurrentMoves.filter((result) => result.ok).length, 1, 'exactly one concurrent move commits');
+assert.equal(concurrentMoves.filter((result) => result.error === 'CONFLICT').length, 1, 'the stale concurrent move receives a conflict');
 
 const privateToPlayer = expectEvent(playerClient.socket, 'chat:private');
 const privateNotToObserver = noEvent(observerClient.socket, 'chat:private');
@@ -132,12 +141,55 @@ assert.equal((await join(playerClient.socket, campaign.id)).ok, true, 'reconnect
 const { result: reconnectTokens } = await request(`/api/scenes/${scene.id}/tokens`, { cookie: player.cookie });
 assert.equal(reconnectTokens.find((item) => item.id === playerToken.id).x, 5, 'committed state is present after reconnect');
 
+const { result: { scene: draft } } = await request(`/api/scenes/${scene.id}/duplicate`, { method: 'POST', cookie: owner.cookie });
+assert.equal(draft.isActive, false, 'a duplicate scene is created as an inactive draft');
+assert.equal(draft.published, false, 'a duplicate scene starts unpublished');
+const { result: playerSceneList } = await request(`/api/campaigns/${campaign.id}/scenes`, { cookie: player.cookie });
+assert.deepEqual(playerSceneList.map((item) => item.id), [scene.id], 'players only receive the active scene');
+const { result: gmSceneList } = await request(`/api/campaigns/${campaign.id}/scenes`, { cookie: owner.cookie });
+assert.equal(gmSceneList.some((item) => item.id === draft.id), true, 'GM can prepare draft scenes');
+const hiddenDraftTokens = await fetch(`${base}/api/scenes/${draft.id}/tokens`, { headers: { cookie: player.cookie } });
+assert.equal(hiddenDraftTokens.status, 404, 'players cannot read tokens from a draft scene');
+const { result: { scene: configuredDraft } } = await request(`/api/scenes/${draft.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: draft.version, gridColor: '#aabbcc', gridOpacity: 0.6, gridOffsetX: 2, gridOffsetY: -3, snapToGrid: false, unitsPerCell: 10, unitLabel: 'ft', cameraX: 40, cameraY: 50, cameraZoom: 1.25 } });
+assert.equal(configuredDraft.gridColor, '#aabbcc', 'grid settings persist');
+assert.equal(configuredDraft.cameraZoom, 1.25, 'camera settings persist');
+const staleSettings = await fetch(`${base}/api/scenes/${draft.id}`, { method: 'PATCH', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: draft.version, gridSize: 64 }) });
+assert.equal(staleSettings.status, 409, 'stale scene edits are rejected');
+const ordered = await request(`/api/campaigns/${campaign.id}/scenes/reorder`, { method: 'PUT', cookie: owner.cookie, body: { scenes: [{ id: draft.id, expectedVersion: configuredDraft.version }, { id: scene.id, expectedVersion: sceneWithMap.version }] } });
+assert.deepEqual(ordered.result.map((item) => item.id), [draft.id, scene.id], 'scene ordering is persisted in the submitted order');
+
+const activatedEvent = expectEvent(playerClient.socket, 'scene:activated');
+const { result: { scene: activatedDraft } } = await request(`/api/scenes/${draft.id}/activate`, { method: 'PUT', cookie: owner.cookie, body: { expectedVersion: ordered.result[0].version } });
+assert.equal((await activatedEvent).sceneId, draft.id, 'players receive the new active scene notification');
+const { result: activePlayerScenes } = await request(`/api/campaigns/${campaign.id}/scenes`, { cookie: player.cookie });
+assert.deepEqual(activePlayerScenes.map((item) => item.id), [draft.id], 'players only see the newly active scene');
+const oldSceneTokens = await fetch(`${base}/api/scenes/${scene.id}/tokens`, { headers: { cookie: player.cookie } });
+assert.equal(oldSceneTokens.status, 404, 'players cannot read tokens from the previous active scene');
+const oldSceneMove = await ack(playerClient.socket, 'token:move', { tokenId: playerToken.id, x: 7, y: 7, expectedVersion: moved.token.version });
+assert.equal(oldSceneMove.error, 'FORBIDDEN', 'players cannot move tokens on inactive scenes');
+const archivedDraft = await request(`/api/scenes/${draft.id}/archive`, { method: 'PUT', cookie: owner.cookie, body: { expectedVersion: activatedDraft.version } });
+assert.equal(archivedDraft.result.scene.isActive, false, 'archiving an active scene deactivates it');
+const archivedTokenCreate = await fetch(`${base}/api/tokens`, { method: 'POST', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ sceneId: draft.id, name: 'No archived edits', x: 0, y: 0, color: '#aabbcc' }) });
+assert.equal(archivedTokenCreate.status, 404, 'managers cannot add tokens to archived scenes');
+const fallbackScenes = await request(`/api/campaigns/${campaign.id}/scenes`, { cookie: player.cookie });
+assert.deepEqual(fallbackScenes.result.map((item) => item.id), [scene.id], 'archiving active scene returns players to the previous published scene');
+const archivedList = await request(`/api/campaigns/${campaign.id}/scenes?archived=true`, { cookie: owner.cookie });
+assert.equal(archivedList.result.some((item) => item.id === draft.id), true, 'GM can recover archived scenes');
+const restoredDraft = await request(`/api/scenes/${draft.id}/restore`, { method: 'PUT', cookie: owner.cookie, body: { expectedVersion: archivedDraft.result.scene.version } });
+assert.equal(restoredDraft.result.scene.isActive, false, 'restored scenes remain drafts until explicitly activated');
+
 await request(`/api/campaigns/${campaign.id}/archive`, { method: 'PUT', cookie: owner.cookie });
 const activeCampaigns = await request('/api/campaigns', { cookie: owner.cookie });
 const archivedCampaigns = await request('/api/campaigns?archived=true', { cookie: owner.cookie });
 assert.equal(activeCampaigns.result.some((item) => item.campaign.id === campaign.id), false, 'archived campaign leaves the active list');
 assert.equal(archivedCampaigns.result.some((item) => item.campaign.id === campaign.id), true, 'owner can list archived campaigns for recovery');
 await request(`/api/campaigns/${campaign.id}/restore`, { method: 'PUT', cookie: owner.cookie });
+const removedEvent = expectEvent(observerClient.socket, 'membership:removed');
+await request(`/api/campaigns/${campaign.id}/members/${observer.user.id}`, { method: 'DELETE', cookie: owner.cookie });
+assert.equal((await removedEvent).campaignId, campaign.id, 'removed member receives a revocation notice on their personal room');
+const noRevokedDice = noEvent(observerClient.socket, 'dice:result', 350);
+assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.id, expression: '1d20' })).ok, true);
+assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, multi-use/revoked invitations, scoped roles, archive recovery, map storage ACL, hidden snapshots, token sync/ownership, private messages, server dice, and reconnect recovery.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, token ownership, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, reordering, activation, fallback, restore, and socket revocation.');
