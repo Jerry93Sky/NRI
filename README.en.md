@@ -7,7 +7,7 @@ NRI Platform is a system-neutral virtual tabletop for role-playing games. Its co
 - **Version:** V0.1.1 — Tabletop Foundation Completion & Playability
 - **Implementation:** IN_PROGRESS
 - **Automated checks:** AUTOMATED_TESTS_PASSED for the local checks that exist
-- **Owner acceptance:** MANUAL_ACCEPTANCE_PENDING
+- **Owner acceptance:** IN_PROGRESS — V0.1.1 technical gates remain open
 
 The API and web interface run locally, and `Amber Crossing` is available for manual review. V0.1.1 remains in progress: object layers, grid calibration, expanded token properties, asset library, tabletop tools, Playwright, backup/restore, and load checks are incomplete. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md).
 

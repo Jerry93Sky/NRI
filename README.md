@@ -7,7 +7,7 @@ NRI Platform — универсальная виртуальная игрова�
 - **Версия:** V0.1.1 — Tabletop Foundation Completion & Playability
 - **Реализация:** IN_PROGRESS
 - **Автоматические проверки:** AUTOMATED_TESTS_PASSED для имеющихся локальных проверок
-- **Приёмка владельцем:** MANUAL_ACCEPTANCE_PENDING
+- **Приёмка владельцем:** IN_PROGRESS — технические ворота V0.1.1 ещё открыты
 
 Рабочая версия API и интерфейса запущена локально; `Amber Crossing` доступна для ручной проверки. V0.1.1 остаётся в разработке: слои объектов, калибровка, расширенные токены, библиотека ресурсов, инструменты стола, Playwright, backup/restore и нагрузочные проверки не завершены. См. [объём работ](docs/releases/V0.1.1_SCOPE.md) и [отчёт V0.1.1](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md).
 
