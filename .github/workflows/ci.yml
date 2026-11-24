@@ -1,0 +1,64 @@
+name: CI
+on:
+  push:
+    branches: [main, codex/v0-1-foundation-vtt]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+      SESSION_SECRET: ci-secret-is-not-for-deployment
+    services:
+      postgres:
+        image: postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_USER: nri
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: nri_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U nri -d nri_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
+      - run: corepack enable && corepack prepare pnpm@12.23.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm db:migrate
+      - run: pnpm test
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
+      - name: Start API for realtime smoke test
+        run: |
+          pnpm --filter @nri/server dev > /tmp/nri-server.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/ready; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/nri-server.log
+          exit 1
+        env:
+          NODE_ENV: test
+          PORT: 3000
+          HOST: 127.0.0.1
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
+      - run: pnpm --filter @nri/server smoke
+        env:
+          NRI_API_URL: http://127.0.0.1:3000
+          NODE_ENV: test
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment

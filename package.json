@@ -1,0 +1,17 @@
+{
+  "name": "nri-platform",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@12.23.0",
+  "engines": { "node": ">=24.13.0 <27", "pnpm": ">=12.23.0 <13" },
+  "scripts": {
+    "dev": "corepack pnpm@12.23.0 -r --parallel --filter @nri/server --filter @nri/web dev",
+    "build": "corepack pnpm@12.23.0 -r build",
+    "typecheck": "corepack pnpm@12.23.0 -r typecheck",
+    "test": "corepack pnpm@12.23.0 -r test",
+    "db:migrate": "corepack pnpm@12.23.0 --filter @nri/server db:migrate",
+    "db:seed": "corepack pnpm@12.23.0 --filter @nri/server db:seed",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down"
+  }
+}

@@ -1,26 +1,62 @@
 # NRI Platform
 
-NRI Platform is an early-stage, system-neutral virtual tabletop project. The repository is being initialized for V0.1: Project Foundation & Multiplayer Virtual Tabletop.
+NRI Platform — универсальная виртуальная игровая площадка для настольных ролевых игр. Ядро не зависит от правил конкретной НРИ; ведущий управляет кампанией, сценами, токенами и доступом игроков.
 
-## Status
+## Статус
 
-**Current version:** V0.1 (in progress)  
-**Acceptance:** PLANNED
+- **Версия:** V0.1 — Foundation & Multiplayer Virtual Tabletop
+- **Реализация:** IN_PROGRESS
+- **Автоматические проверки:** AUTOMATED_TESTS_PASSED для имеющихся локальных проверок
+- **Приёмка владельцем:** MANUAL_ACCEPTANCE_PENDING
 
-The repository is undergoing its initial foundation work. Features are not considered accepted until verified and reviewed by the project owner.
+Рабочая версия API и интерфейса запущена локально; демонстрационная кампания `Amber Crossing` доступна в открытом браузере приложения. V0.1 ещё не принята: резервное восстановление, измерения производительности, полный набор браузерных проверок и пользовательская приёмка не завершены. Подробности и точные подсчёты находятся в [отчёте приёмки](docs/releases/V0.1_ACCEPTANCE_REPORT.md).
 
-## Documentation
+## Реализовано
 
-- [Product vision](docs/product/PRODUCT_VISION.md)
-- [Roadmap](docs/product/ROADMAP.md)
-- [V0.1 scope](docs/product/V0_1_SCOPE.md)
-- [Architecture](docs/architecture/ARCHITECTURE.md)
-- [Data model](docs/architecture/DATA_MODEL.md)
-- [Realtime protocol](docs/architecture/REALTIME_PROTOCOL.md)
-- [Threat model](docs/security/THREAT_MODEL.md)
-- [Local setup](docs/development/LOCAL_SETUP.md)
-- [Commercial strategy](docs/product/COMMERCIAL_STRATEGY.md)
+- Регистрация, вход, выход, сессии и ограничение частоты попыток.
+- Кампании, роли Owner/GM/Player, приглашения с ограничением использований и отзывом, архивирование и восстановление.
+- Сцены с фоновым изображением, сетка на холсте, токены, назначения владельцев, серверная авторизация перемещения и синхронизация Socket.IO.
+- Публичный и приватный чат, серверные броски кубиков, трекер инициативы с фильтрацией скрытых ходов.
+- Русский и английский интерфейс, локальная разработка, Docker Compose, миграции PostgreSQL и CI workflow.
 
-## License
+## Ограничения V0.1
 
-No project-wide source license has been selected. All rights remain with their respective owners. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency and asset notices as they are added.
+- UI пока поддерживает создание и выбор сцен; переименование, дублирование и архивирование сцен не завершены. Размер и параметры сетки нельзя настраивать через UI.
+- Карты загружаются как PNG/JPEG/WebP до 12 MB; локальное хранилище не проверяет декодирование и пределы размеров изображения.
+- Нет автоматизированного Playwright набора, отдельного восстановительного теста из резервной копии или измерений производительности.
+- Нет полноценной редакции слоёв/объектов, экспорта кампании и продакшен-деплоя. CI workflow подготовлен, но удалённый GitHub запуск ещё не подтверждён.
+- Полный аудит безопасности и ручная приёмка владельцем ожидаются.
+
+## Стек
+
+React, TypeScript, Vite, PixiJS, Zustand, i18next; Node.js 24.13, Fastify, Socket.IO, PostgreSQL 16, Drizzle, Zod, pnpm workspaces, Docker Compose, Vitest, GitHub Actions.
+
+## Запуск и проверки
+
+См. [инструкцию локального запуска](docs/development/LOCAL_SETUP.md). Основные команды:
+
+```powershell
+corepack pnpm@12.23.0 install --frozen-lockfile
+docker compose up -d db
+corepack pnpm@12.23.0 db:migrate
+corepack pnpm@12.23.0 dev
+```
+
+В другом окне:
+
+```powershell
+corepack pnpm@12.23.0 build
+corepack pnpm@12.23.0 typecheck
+corepack pnpm@12.23.0 test
+```
+
+Интеграционный тест нескольких клиентов запускается по инструкции в [отчёте приёмки](docs/releases/V0.1_ACCEPTANCE_REPORT.md). Не публикуйте `.env`, пользовательские данные или загруженные карты.
+
+## Документация и дорожная карта
+
+- [Видение продукта](docs/product/PRODUCT_VISION.md) · [Дорожная карта](docs/product/ROADMAP.md) · [Объём V0.1](docs/product/V0_1_SCOPE.md)
+- [Архитектура](docs/architecture/ARCHITECTURE.md) · [Модель данных](docs/architecture/DATA_MODEL.md) · [Протокол реального времени](docs/architecture/REALTIME_PROTOCOL.md)
+- [Модель угроз](docs/security/THREAT_MODEL.md) · [Коммерческая стратегия](docs/product/COMMERCIAL_STRATEGY.md)
+- [История изменений](CHANGELOG.md) · [Сторонние лицензии](THIRD_PARTY_NOTICES.md)
+
+Следующий релиз — V0.2 Tactical Tabletop; его критерии и зависимости указаны в дорожной карте. Кодовая лицензия проекта не выбрана; все права сохраняются за соответствующими владельцами.

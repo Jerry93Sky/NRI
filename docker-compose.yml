@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nri_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nri_dev_local_only}
+      POSTGRES_DB: ${POSTGRES_DB:-nri_dev}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - nri-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  server:
+    build: .
+    restart: unless-stopped
+    command: ["sh", "-c", "pnpm --filter @nri/server db:migrate && pnpm --filter @nri/server dev"]
+    environment:
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-nri_dev}:${POSTGRES_PASSWORD:-nri_dev_local_only}@db:5432/${POSTGRES_DB:-nri_dev}
+      SESSION_SECRET: ${SESSION_SECRET:-local-development-secret-change-me}
+      WEB_ORIGIN: http://localhost:5173,http://127.0.0.1:5173
+      UPLOAD_DIR: .data/uploads
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - nri-uploads:/app/.data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build: .
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@nri/web", "dev", "--", "--host", "0.0.0.0"]
+    environment:
+      API_PROXY_TARGET: http://server:3000
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - server
+
+volumes:
+  nri-postgres:
+  nri-uploads:
