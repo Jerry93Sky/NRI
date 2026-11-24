@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adjustTokenResourceSchema, canMoveToken, createSceneLayerSchema, createSceneObjectSchema, parseDiceExpression, updateSceneObjectSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
+import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
 
 describe('campaign-scoped token permissions', () => {
   it('allows the owner of a visible player token', () => expect(canMoveToken('PLAYER', 'u1', 'u1', false)).toBe(true));
@@ -47,6 +47,8 @@ describe('token property contracts', () => {
     expect(updateTokenSchema.parse({ expectedVersion: 3, gmNote: 'private prep', ownerNote: 'Share with token owner' })).toMatchObject({ gmNote: 'private prep', ownerNote: 'Share with token owner' });
     expect(updateTokenSchema.safeParse({ expectedVersion: 3, gmNote: 'x'.repeat(4001) }).success).toBe(false);
     expect(updateTokenSchema.safeParse({ name: 'Goblin' }).success).toBe(false);
+    expect(updateTokenSchema.parse({ expectedVersion: 3, imageAssetId: null })).toMatchObject({ expectedVersion: 3, imageAssetId: null });
+    expect(createTokenSchema.safeParse({ sceneId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', name: 'Hero', x: 0, y: 0, imageAssetId: 'not-a-uuid' }).success).toBe(false);
   });
   it('requires exactly two system-neutral resources with bounded current values', () => {
     expect(tokenResourcesSchema.safeParse([{ label: 'Health', current: 4, maximum: 8, visible: true }, { label: 'Focus', current: 1, maximum: 3, visible: false }]).success).toBe(true);
@@ -54,5 +56,24 @@ describe('token property contracts', () => {
     expect(tokenResourcesSchema.safeParse([{ label: 'Health', current: 1, maximum: 8, visible: true }]).success).toBe(false);
     expect(adjustTokenResourceSchema.safeParse({ resourceIndex: 1, delta: -1, expectedVersion: 2 }).success).toBe(true);
     expect(adjustTokenResourceSchema.safeParse({ resourceIndex: 2, delta: 0, expectedVersion: 2 }).success).toBe(false);
+  });
+});
+
+describe('asset library contracts', () => {
+  it('limits asset metadata to known categories and valid names', () => {
+    expect(assetCategorySchema.parse('TOKEN')).toBe('TOKEN');
+    expect(assetCategorySchema.safeParse('EXECUTABLE').success).toBe(false);
+    expect(updateAssetSchema.parse({ name: 'Goblin portrait', category: 'PORTRAIT' })).toEqual({ name: 'Goblin portrait', category: 'PORTRAIT' });
+    expect(updateAssetSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe('token group update contract', () => {
+  it('requires two unique, versioned tokens and a bounded patch', () => {
+    const first = '99c025bf-4a53-4608-8caa-0bdb98ac1e90'; const second = 'b32a3b47-6e63-4f43-93b0-a74ade324930';
+    expect(updateTokenGroupSchema.safeParse({ updates: [{ tokenId: first, expectedVersion: 1, patch: { locked: true } }, { tokenId: second, expectedVersion: 2, patch: { hidden: true } }] }).success).toBe(true);
+    expect(updateTokenGroupSchema.safeParse({ updates: [{ tokenId: first, expectedVersion: 1, patch: { locked: true } }] }).success).toBe(false);
+    expect(updateTokenGroupSchema.safeParse({ updates: [{ tokenId: first, expectedVersion: 1, patch: { locked: true } }, { tokenId: first, expectedVersion: 2, patch: { hidden: true } }] }).success).toBe(false);
+    expect(updateTokenGroupSchema.safeParse({ updates: [{ tokenId: first, expectedVersion: 1, patch: { locked: true } }, { tokenId: second, expectedVersion: 2, patch: { gmNote: 'not allowed' } }] }).success).toBe(false);
   });
 });

@@ -9,16 +9,17 @@ import { createReadStream } from 'node:fs';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import argon2 from 'argon2';
-import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { adjustTokenResourceSchema, canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenSchema } from '@nri/contracts';
+import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateAssetSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema } from '@nri/contracts';
 import { db, pool } from './db/index.js';
 import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
 import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
+import { inspectImage } from './domain/imageMetadata.js';
 
 function publicToken(token: typeof tokens.$inferSelect, includeHidden = false, viewerUserId?: string) {
-  const { hidden: _hidden, resources: _resources, gmNote: _gmNote, ownerNote: _ownerNote, id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId } = token;
-  const result = { id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId };
+  const { hidden: _hidden, resources: _resources, gmNote: _gmNote, ownerNote: _ownerNote, id, sceneId, name, x, y, color, imageAssetId, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId } = token;
+  const result = { id, sceneId, name, x, y, color, imageAssetId, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId };
   const resources = includeHidden ? token.resources : token.resources.map((resource) => resource.visible ? { label: resource.label, current: resource.current, maximum: resource.maximum } : null);
   if (includeHidden) return { ...result, resources, hidden: token.hidden, gmNote: token.gmNote, ownerNote: token.ownerNote };
   return { ...result, resources, ...(viewerUserId && viewerUserId === token.ownerUserId ? { ownerNote: token.ownerNote } : {}) };
@@ -27,7 +28,7 @@ function publicToken(token: typeof tokens.$inferSelect, includeHidden = false, v
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] }, bodyLimit: 64 * 1024 });
 await app.register(cookie);
 await app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute' });
-await app.register(import('@fastify/multipart'), { limits: { files: 1, fileSize: 12 * 1024 * 1024, fields: 0 } });
+await app.register(import('@fastify/multipart'), { limits: { files: 12, fileSize: 12 * 1024 * 1024, fields: 0, parts: 12 } });
 const port = Number(process.env.PORT ?? 3000);
 const isProduction = process.env.NODE_ENV === 'production';
 const sessionSecret = process.env.SESSION_SECRET ?? '';
@@ -282,8 +283,8 @@ app.post('/api/campaigns/:campaignId/initiative/start', async (request, reply) =
   for (const [tieOrder, entry] of input.entries.entries()) {
     let hidden = entry.hidden;
     if (entry.tokenId) {
-      const [token] = await db.select({ id: tokens.id, hidden: tokens.hidden }).from(tokens).where(and(eq(tokens.id, entry.tokenId), eq(tokens.sceneId, input.sceneId))).limit(1);
-      if (!token) return reply.code(400).send({ error: 'INVALID_TOKEN' });
+      const [token] = await db.select({ id: tokens.id, hidden: tokens.hidden, deletedAt: tokens.deletedAt }).from(tokens).where(and(eq(tokens.id, entry.tokenId), eq(tokens.sceneId, input.sceneId))).limit(1);
+      if (!token || token.deletedAt) return reply.code(400).send({ error: 'INVALID_TOKEN' });
       hidden ||= token.hidden;
     }
     validatedEntries.push({ ...entry, hidden, tieOrder });
@@ -551,7 +552,7 @@ app.post('/api/scenes/:sceneId/duplicate', async (request, reply) => {
     const layerMap = new Map(sourceLayers.map((layer, index) => [layer.id, copiedLayers[index]!.id]));
     const sourceObjects = await tx.select().from(sceneObjects).where(eq(sceneObjects.sceneId, source.id));
     if (sourceObjects.length) await tx.insert(sceneObjects).values(sourceObjects.map(({ id: _objectId, sceneId: _sceneId, layerId, ...object }) => ({ ...object, sceneId: scene.id, layerId: layerMap.get(layerId)!, version: 1 })));
-    const sourceTokens = await tx.select().from(tokens).where(eq(tokens.sceneId, source.id));
+    const sourceTokens = await tx.select().from(tokens).where(and(eq(tokens.sceneId, source.id), isNull(tokens.deletedAt)));
     if (sourceTokens.length) await tx.insert(tokens).values(sourceTokens.map(({ id: _id, sceneId: _sceneId, ...token }) => ({ ...token, sceneId: scene.id })));
     await tx.insert(auditEvents).values({ campaignId: source.campaignId, actorId: user.id, action: 'scene.duplicated', targetId: scene.id });
     return scene;
@@ -673,30 +674,91 @@ app.post('/api/campaigns/:campaignId/assets', async (request, reply) => {
   const { campaignId } = request.params as { campaignId: string };
   const role = await roleFor(campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-  const file = await request.file();
-  if (!file) return reply.code(400).send({ error: 'FILE_REQUIRED' });
-  let buffer: Buffer;
-  try { buffer = await file.toBuffer(); }
-  catch { return reply.code(413).send({ error: 'FILE_TOO_LARGE' }); }
-  const detected = buffer.subarray(0, 12);
-  const mediaType = detected.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'image/png'
-    : detected[0] === 255 && detected[1] === 216 && detected[2] === 255 ? 'image/jpeg'
-    : detected.toString('ascii', 0, 4) === 'RIFF' && detected.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : null;
-  if (!mediaType) return reply.code(415).send({ error: 'UNSUPPORTED_IMAGE' });
-  const extension = mediaType === 'image/png' ? '.png' : mediaType === 'image/jpeg' ? '.jpg' : '.webp';
-  const storageKey = `${randomBytes(24).toString('hex')}${extension}`;
-  await mkdir(uploadDirectory, { recursive: true });
-  const destination = resolve(uploadDirectory, storageKey);
-  try {
-    await writeFile(destination, buffer, { flag: 'wx', mode: 0o600 });
-    const [asset] = await db.insert(assets).values({ campaignId, storageKey, mediaType, size: buffer.byteLength, checksum: createHash('sha256').update(buffer).digest('hex'), uploaderId: user.id }).returning();
-    if (!asset) throw new Error('Asset metadata creation failed');
-    await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'asset.uploaded', targetId: asset.id });
-    return reply.code(201).send({ asset: { id: asset.id, mediaType: asset.mediaType, size: asset.size } });
-  } catch (error) {
-    await unlink(destination).catch(() => {});
-    throw error;
+  const category = assetCategorySchema.safeParse((request.query as { category?: string }).category ?? 'OTHER');
+  if (!category.success) return reply.code(400).send({ error: 'INVALID_CATEGORY' });
+  const uploaded: Array<{ id: string; name: string; category: string; mediaType: string; size: number; width: number; height: number }> = [];
+  const failures: Array<{ filename: string; error: string }> = [];
+  for await (const file of request.files()) {
+    let buffer: Buffer;
+    try { buffer = await file.toBuffer(); }
+    catch { failures.push({ filename: file.filename, error: 'FILE_TOO_LARGE' }); continue; }
+    let metadata: ReturnType<typeof inspectImage>;
+    try { metadata = inspectImage(buffer); }
+    catch (error) { failures.push({ filename: file.filename, error: error instanceof Error ? error.message : 'INVALID_IMAGE' }); continue; }
+    const extension = metadata.mediaType === 'image/png' ? '.png' : metadata.mediaType === 'image/jpeg' ? '.jpg' : '.webp';
+    const storageKey = `${randomBytes(24).toString('hex')}${extension}`;
+    const filename = file.filename.split(/[\\/]/).pop()?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120) || 'Untitled image';
+    await mkdir(uploadDirectory, { recursive: true });
+    const destination = resolve(uploadDirectory, storageKey);
+    try {
+      await writeFile(destination, buffer, { flag: 'wx', mode: 0o600 });
+      const [asset] = await db.insert(assets).values({ campaignId, name: filename, category: category.data, storageKey, mediaType: metadata.mediaType, size: buffer.byteLength, checksum: createHash('sha256').update(buffer).digest('hex'), uploaderId: user.id }).returning();
+      if (!asset) throw new Error('Asset metadata creation failed');
+      await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'asset.uploaded', targetId: asset.id });
+      uploaded.push({ id: asset.id, name: asset.name, category: asset.category, mediaType: asset.mediaType, size: asset.size, width: metadata.width, height: metadata.height });
+    } catch (error) {
+      await unlink(destination).catch(() => {});
+      throw error;
+    }
   }
+  if (!uploaded.length && !failures.length) return reply.code(400).send({ error: 'FILE_REQUIRED' });
+  const status = failures.length ? uploaded.length ? 207 : failures[0]?.error === 'FILE_TOO_LARGE' ? 413 : 415 : 201;
+  if (!uploaded.length) return reply.code(status).send({ error: failures[0]?.error ?? 'UPLOAD_FAILED', assets: uploaded, failures });
+  return reply.code(status).send({ assets: uploaded, asset: uploaded[0], failures });
+});
+app.get('/api/campaigns/:campaignId/assets', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { campaignId } = request.params as { campaignId: string };
+  const role = await roleFor(campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  const [rows, mapRefs, objectRefs, tokenRefs] = await Promise.all([
+    db.select().from(assets).where(eq(assets.campaignId, campaignId)).orderBy(asc(assets.name)),
+    db.select({ assetId: scenes.backgroundAssetId, uses: sql<number>`count(*)::int` }).from(scenes).where(eq(scenes.campaignId, campaignId)).groupBy(scenes.backgroundAssetId),
+    db.select({ assetId: sceneObjects.assetId, uses: sql<number>`count(*)::int` }).from(sceneObjects).innerJoin(scenes, eq(sceneObjects.sceneId, scenes.id)).where(eq(scenes.campaignId, campaignId)).groupBy(sceneObjects.assetId),
+    db.select({ assetId: tokens.imageAssetId, uses: sql<number>`count(*)::int` }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(scenes.campaignId, campaignId)).groupBy(tokens.imageAssetId),
+  ]);
+  const uses = new Map<string, number>();
+  for (const ref of [...mapRefs, ...objectRefs, ...tokenRefs]) if (ref.assetId) uses.set(ref.assetId, (uses.get(ref.assetId) ?? 0) + ref.uses);
+  const storageBytes = rows.reduce((total, asset) => total + asset.size, 0);
+  return { assets: rows.map((asset) => ({ id: asset.id, name: asset.name, category: asset.category, mediaType: asset.mediaType, size: asset.size, checksum: asset.checksum, usageCount: uses.get(asset.id) ?? 0 })), storageBytes, assetCount: rows.length };
+});
+app.patch('/api/assets/:assetId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { assetId } = request.params as { assetId: string };
+  const input = parseBody(updateAssetSchema, request.body);
+  const [asset] = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
+  if (!asset) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(asset.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  const [updated] = await db.update(assets).set(input).where(eq(assets.id, assetId)).returning();
+  if (!updated) return reply.code(404).send({ error: 'NOT_FOUND' });
+  await db.insert(auditEvents).values({ campaignId: asset.campaignId, actorId: user.id, action: 'asset.updated', targetId: asset.id });
+  return { asset: { id: updated.id, name: updated.name, category: updated.category, mediaType: updated.mediaType, size: updated.size } };
+});
+app.delete('/api/assets/:assetId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { assetId } = request.params as { assetId: string };
+  const [asset] = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
+  if (!asset) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(asset.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  const removed = await db.transaction(async (tx) => {
+    const [lockedAsset] = await tx.select({ id: assets.id }).from(assets).where(and(eq(assets.id, asset.id), eq(assets.campaignId, asset.campaignId))).for('update').limit(1);
+    if (!lockedAsset) return false;
+    const refs = await Promise.all([
+      tx.select({ id: scenes.id }).from(scenes).where(eq(scenes.backgroundAssetId, asset.id)).limit(1),
+      tx.select({ id: sceneObjects.id }).from(sceneObjects).where(eq(sceneObjects.assetId, asset.id)).limit(1),
+      tx.select({ id: tokens.id }).from(tokens).where(eq(tokens.imageAssetId, asset.id)).limit(1),
+    ]);
+    if (refs.some((items) => items.length)) return false;
+    const [deleted] = await tx.delete(assets).where(and(eq(assets.id, asset.id), eq(assets.campaignId, asset.campaignId))).returning({ id: assets.id });
+    if (!deleted) return false;
+    await tx.insert(auditEvents).values({ campaignId: asset.campaignId, actorId: user.id, action: 'asset.deleted', targetId: asset.id });
+    return true;
+  });
+  if (!removed) return reply.code(409).send({ error: 'ASSET_IN_USE' });
+  await unlink(resolve(uploadDirectory, asset.storageKey)).catch((error: unknown) => app.log.error({ err: error, assetId: asset.id }, 'Deleted asset file cleanup failed'));
+  return reply.code(204).send();
 });
 app.put('/api/scenes/:sceneId/background', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
@@ -725,8 +787,10 @@ app.get('/api/assets/:assetId', async (request, reply) => {
   const role = await roleFor(asset.campaignId, user.id);
   if (!role) return reply.code(404).send({ error: 'NOT_FOUND' });
   if (!['OWNER', 'GM'].includes(role)) {
-    const [visibleReference] = await db.select({ id: scenes.id }).from(scenes).where(and(eq(scenes.campaignId, asset.campaignId), eq(scenes.backgroundAssetId, asset.id), eq(scenes.isActive, true), isNull(scenes.archivedAt))).limit(1);
-    if (!visibleReference) return reply.code(404).send({ error: 'NOT_FOUND' });
+    const [visibleMap] = await db.select({ id: scenes.id }).from(scenes).where(and(eq(scenes.campaignId, asset.campaignId), eq(scenes.backgroundAssetId, asset.id), eq(scenes.isActive, true), isNull(scenes.archivedAt))).limit(1);
+    const [visibleObject] = await db.select({ id: sceneObjects.id }).from(sceneObjects).innerJoin(sceneLayers, eq(sceneObjects.layerId, sceneLayers.id)).innerJoin(scenes, eq(sceneObjects.sceneId, scenes.id)).where(and(eq(scenes.campaignId, asset.campaignId), eq(scenes.isActive, true), isNull(scenes.archivedAt), eq(sceneObjects.assetId, asset.id), eq(sceneObjects.visible, true), eq(sceneLayers.visibleToPlayers, true), sql`${sceneLayers.kind} <> 'GM'`)).limit(1);
+    const [visibleToken] = await db.select({ id: tokens.id }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(scenes.campaignId, asset.campaignId), eq(scenes.isActive, true), isNull(scenes.archivedAt), eq(tokens.imageAssetId, asset.id), eq(tokens.hidden, false))).limit(1);
+    if (!visibleMap && !visibleObject && !visibleToken) return reply.code(404).send({ error: 'NOT_FOUND' });
   }
   return reply.type(asset.mediaType).header('x-content-type-options', 'nosniff').header('cache-control', 'private, max-age=3600').send(createReadStream(resolve(uploadDirectory, asset.storageKey)));
 });
@@ -737,7 +801,7 @@ app.get('/api/scenes/:sceneId/tokens', async (request, reply) => {
   if (!scene || scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(scene.campaignId, user.id);
   if (!role || !canReadSceneTokens(role, scene.isActive, scene.archivedAt !== null)) return reply.code(404).send({ error: 'NOT_FOUND' });
-  const rows = await db.select().from(tokens).where(eq(tokens.sceneId, sceneId));
+  const rows = await db.select().from(tokens).where(and(eq(tokens.sceneId, sceneId), isNull(tokens.deletedAt)));
   return rows.filter((token) => !token.hidden || role === 'OWNER' || role === 'GM').map((token) => publicToken(token, role === 'OWNER' || role === 'GM', user.id));
 });
 app.post('/api/tokens', async (request, reply) => {
@@ -748,6 +812,10 @@ app.post('/api/tokens', async (request, reply) => {
   const role = await roleFor(scene.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
   if (scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (input.imageAssetId) {
+    const [asset] = await db.select({ id: assets.id }).from(assets).where(and(eq(assets.id, input.imageAssetId), eq(assets.campaignId, scene.campaignId), eq(assets.category, 'TOKEN'))).limit(1);
+    if (!asset) return reply.code(400).send({ error: 'INVALID_ASSET' });
+  }
   const [token] = await db.insert(tokens).values(input).returning();
   if (!token) throw new Error('Token creation failed');
   const projection = publicToken(token, true); const playerProjection = publicToken(token);
@@ -755,15 +823,90 @@ app.post('/api/tokens', async (request, reply) => {
   ((token.hidden || !scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', token.hidden || !scene.isActive ? projection : playerProjection);
   return reply.code(201).send({ token: projection });
 });
+app.get('/api/campaigns/:campaignId/token-trash', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { campaignId } = request.params as { campaignId: string };
+  const role = await roleFor(campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  return db.select({ id: tokens.id, sceneId: tokens.sceneId, sceneTitle: scenes.title, name: tokens.name, version: tokens.version, deletedAt: tokens.deletedAt, sceneArchivedAt: scenes.archivedAt }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(scenes.campaignId, campaignId), sql`${tokens.deletedAt} IS NOT NULL`)).orderBy(desc(tokens.deletedAt));
+});
+app.delete('/api/tokens/:tokenId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { tokenId } = request.params as { tokenId: string };
+  const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
+  const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
+  if (!row || row.scene.archivedAt || row.token.deletedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(row.scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  const [deleted] = await db.update(tokens).set({ deletedAt: new Date(), version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, input.expectedVersion), isNull(tokens.deletedAt))).returning({ id: tokens.id });
+  if (!deleted) return reply.code(409).send({ error: 'CONFLICT' });
+  await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.deleted', targetId: tokenId });
+  if (row.scene.isActive && !row.token.hidden) io.to(`campaign:${row.scene.campaignId}`).emit('token:hidden', { id: tokenId, sceneId: row.scene.id });
+  return reply.code(204).send();
+});
+app.post('/api/tokens/:tokenId/restore', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { tokenId } = request.params as { tokenId: string };
+  const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
+  const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
+  if (!row || row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(row.scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (!row.token.deletedAt) return reply.code(409).send({ error: 'NOT_DELETED' });
+  const [restored] = await db.update(tokens).set({ deletedAt: null, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, input.expectedVersion), isNotNull(tokens.deletedAt))).returning();
+  if (!restored) return reply.code(409).send({ error: 'CONFLICT' });
+  await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.restored', targetId: tokenId });
+  const room = `campaign:${row.scene.campaignId}`;
+  if (row.scene.isActive && !restored.hidden) io.to(room).emit('token:created', publicToken(restored));
+  else io.to(`${room}:gm`).emit('token:created', publicToken(restored, true));
+  return { token: publicToken(restored, true) };
+});
+app.patch('/api/scenes/:sceneId/tokens/group', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const input = parseBody(updateTokenGroupSchema, request.body);
+  const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+  if (!scene || scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  const ids = input.updates.map((item) => item.tokenId);
+  const result = await db.transaction(async (tx) => {
+    const rows = await tx.select().from(tokens).where(and(eq(tokens.sceneId, sceneId), inArray(tokens.id, ids))).for('update');
+    if (rows.length !== input.updates.length || rows.some((row) => row.deletedAt)) return { error: 'NOT_FOUND' as const };
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    if (input.updates.some((item) => byId.get(item.tokenId)?.version !== item.expectedVersion)) return { error: 'CONFLICT' as const };
+    const updated = [];
+    for (const item of input.updates) {
+      const previous = byId.get(item.tokenId)!;
+      const [next] = await tx.update(tokens).set({ ...item.patch, version: previous.version + 1 }).where(and(eq(tokens.id, previous.id), eq(tokens.version, item.expectedVersion), isNull(tokens.deletedAt))).returning();
+      if (!next) throw new Error('Locked group token changed during transaction');
+      updated.push({ previous, token: next });
+      await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'token.group_updated', targetId: next.id });
+    }
+    return { updated };
+  });
+  if ('error' in result) return reply.code(result.error === 'CONFLICT' ? 409 : 404).send({ error: result.error });
+  const room = `campaign:${scene.campaignId}`;
+  for (const { previous, token } of result.updated) {
+    if (scene.isActive && !previous.hidden && token.hidden) io.to(room).emit('token:hidden', { id: token.id, sceneId });
+    else if (scene.isActive && !token.hidden) io.to(room).emit(previous.hidden ? 'token:created' : 'token:updated', publicToken(token));
+    io.to(`${room}:gm`).emit('token:updated', publicToken(token, true));
+  }
+  return { tokens: result.updated.map(({ token }) => publicToken(token, true)) };
+});
 app.patch('/api/tokens/:tokenId', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
   const { tokenId } = request.params as { tokenId: string };
   const input = parseBody(updateTokenSchema, request.body);
   const { expectedVersion, ...patch } = input;
   const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
-  if (!row || row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (!row || row.scene.archivedAt || row.token.deletedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(row.scene.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (patch.imageAssetId) {
+    const [asset] = await db.select({ id: assets.id }).from(assets).where(and(eq(assets.id, patch.imageAssetId), eq(assets.campaignId, row.scene.campaignId), eq(assets.category, 'TOKEN'))).limit(1);
+    if (!asset) return reply.code(400).send({ error: 'INVALID_ASSET' });
+  }
   const [updated] = await db.update(tokens).set({ ...patch, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, expectedVersion))).returning();
   if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
   await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.updated', targetId: tokenId });
@@ -779,7 +922,7 @@ app.post('/api/tokens/:tokenId/resources/adjust', async (request, reply) => {
   const { tokenId } = request.params as { tokenId: string };
   const input = parseBody(adjustTokenResourceSchema, request.body);
   const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
-  if (!row || row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (!row || row.scene.archivedAt || row.token.deletedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(row.scene.campaignId, user.id);
   if (!role || (!['OWNER', 'GM'].includes(role) && (row.token.hidden || !row.scene.isActive || row.token.ownerUserId !== user.id || !row.token.resources[input.resourceIndex].visible))) return reply.code(403).send({ error: 'FORBIDDEN' });
   if (row.token.version !== input.expectedVersion) return reply.code(409).send({ error: 'CONFLICT' });
@@ -799,7 +942,7 @@ app.post('/api/tokens/:tokenId/owner', async (request, reply) => {
   const { tokenId } = request.params as { tokenId: string };
   const input = parseBody(z.object({ ownerUserId: z.uuid().nullable() }), request.body);
   const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
-  if (!row) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (!row || row.token.deletedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(row.scene.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
   if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
@@ -846,7 +989,7 @@ io.on('connection', (socket) => {
     try {
       const input = parseBody(moveTokenSchema, raw);
       const [token] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, input.tokenId)).limit(1);
-      if (!token) return callback?.({ error: 'NOT_FOUND' });
+      if (!token || token.token.deletedAt) return callback?.({ error: 'NOT_FOUND' });
       const room = `campaign:${token.scene.campaignId}`;
       if (!socket.rooms.has(room)) return callback?.({ error: 'FORBIDDEN' });
       const role = await roleFor(token.scene.campaignId, user.id);

@@ -13,7 +13,7 @@ async function request(path, { method = 'GET', body, cookie } = {}) {
   });
   const result = response.status === 204 ? null : await response.json();
   if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${JSON.stringify(result)}`);
-  return { result, cookie: response.headers.getSetCookie().find((item) => item.startsWith('nri_session='))?.split(';')[0] ?? cookie };
+  return { result, status: response.status, cookie: response.headers.getSetCookie().find((item) => item.startsWith('nri_session='))?.split(';')[0] ?? cookie };
 }
 async function register(label) {
   const { result, cookie } = await request('/api/auth/register', { method: 'POST', body: { email: `${label}-${randomUUID()}@nri.local`, password, displayName: label } });
@@ -72,14 +72,46 @@ const mapBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0
 const mapForm = new FormData(); mapForm.set('file', new Blob([mapBytes], { type: 'image/png' }), 'original-map.png');
 const mapUpload = await fetch(`${base}/api/campaigns/${campaign.id}/assets`, { method: 'POST', headers: { cookie: owner.cookie }, body: mapForm });
 assert.equal(mapUpload.status, 201, 'GM can upload a supported map image');
-const { asset } = (await mapUpload.json());
+const { asset, assets: uploadedAssets } = await mapUpload.json();
+assert.equal(asset.name, 'original-map.png'); assert.equal(asset.width, 1); assert.equal(asset.height, 1); assert.equal(uploadedAssets.length, 1);
+const bulkForm = new FormData(); bulkForm.append('files', new Blob([mapBytes], { type: 'image/png' }), 'token-one.png'); bulkForm.append('files', new Blob([mapBytes], { type: 'image/png' }), 'token-two.png');
+const bulkUpload = await fetch(`${base}/api/campaigns/${campaign.id}/assets?category=TOKEN`, { method: 'POST', headers: { cookie: owner.cookie }, body: bulkForm });
+assert.equal(bulkUpload.status, 201, 'GM can upload multiple assets in one request'); const { assets: tokenAssets } = await bulkUpload.json(); assert.equal(tokenAssets.length, 2);
 const { result: { scene: sceneWithMap } } = await request(`/api/scenes/${scene.id}/background`, { method: 'PUT', cookie: owner.cookie, body: { assetId: asset.id, expectedVersion: scene.version } });
 assert.equal(sceneWithMap.backgroundAssetId, asset.id, 'scene persists the map asset reference');
+const playerLibrary = await fetch(`${base}/api/campaigns/${campaign.id}/assets`, { headers: { cookie: player.cookie } });
+assert.equal(playerLibrary.status, 403, 'players cannot browse the GM asset library');
+await request(`/api/assets/${asset.id}`, { method: 'PATCH', cookie: owner.cookie, body: { name: 'Crossroads map', category: 'MAP' } });
+const { result: assetLibrary } = await request(`/api/campaigns/${campaign.id}/assets`, { cookie: owner.cookie });
+assert.equal(assetLibrary.assets.find((item) => item.id === asset.id).name, 'Crossroads map');
+assert.equal(assetLibrary.assets.find((item) => item.id === asset.id).category, 'MAP');
+assert.equal(assetLibrary.assets.find((item) => item.id === asset.id).usageCount, 1, 'library usage counts include scene backgrounds'); assert.equal(assetLibrary.storageBytes, asset.size + tokenAssets.reduce((sum, item) => sum + item.size, 0));
+const inUseAssetDelete = await fetch(`${base}/api/assets/${asset.id}`, { method: 'DELETE', headers: { cookie: owner.cookie } }); assert.equal(inUseAssetDelete.status, 409, 'referenced assets cannot be deleted');
 const mapRead = await fetch(`${base}/api/assets/${asset.id}`, { headers: { cookie: player.cookie } });
 assert.equal(mapRead.status, 200, 'campaign members can read the scene map');
 assert.equal(mapRead.headers.get('content-type'), 'image/png');
 assert.deepEqual(Buffer.from(await mapRead.arrayBuffer()), mapBytes, 'the authorized map download matches the uploaded bytes');
-const { result: { token: playerToken } } = await request('/api/tokens', { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, name: 'Player token', x: 2, y: 3, color: '#c8794a' } });
+const { result: { token: recoverableToken } } = await request('/api/tokens', { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, name: 'Recoverable token', x: 9, y: 9, color: '#667788' } });
+const unauthorizedTokenTrash = await fetch(`${base}/api/campaigns/${campaign.id}/token-trash`, { headers: { cookie: player.cookie } }); assert.equal(unauthorizedTokenTrash.status, 403, 'players cannot browse deleted tokens');
+const deleteRecoverableToken = await fetch(`${base}/api/tokens/${recoverableToken.id}`, { method: 'DELETE', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: recoverableToken.version }) }); assert.equal(deleteRecoverableToken.status, 204, 'GM can move a token into recoverable deletion');
+const tokenSnapshotAfterDelete = await request(`/api/scenes/${scene.id}/tokens`, { cookie: owner.cookie }); assert.equal(tokenSnapshotAfterDelete.result.some((item) => item.id === recoverableToken.id), false, 'deleted tokens are omitted from scene snapshots');
+const tokenTrash = await request(`/api/campaigns/${campaign.id}/token-trash`, { cookie: owner.cookie }); const deletedToken = tokenTrash.result.find((item) => item.id === recoverableToken.id); assert.ok(deletedToken, 'GM trash lists recoverable tokens');
+const { result: { token: restoredToken } } = await request(`/api/tokens/${recoverableToken.id}/restore`, { method: 'POST', cookie: owner.cookie, body: { expectedVersion: deletedToken.version } }); assert.equal(restoredToken.id, recoverableToken.id, 'GM can restore a deleted token');
+const tokenSnapshotAfterRestore = await request(`/api/scenes/${scene.id}/tokens`, { cookie: owner.cookie }); assert.equal(tokenSnapshotAfterRestore.result.some((item) => item.id === recoverableToken.id), true, 'restored tokens return to the scene snapshot');
+const { result: { token: groupToken } } = await request('/api/tokens', { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, name: 'Group token', x: 10, y: 9, color: '#778899' } });
+const groupUpdate = await request(`/api/scenes/${scene.id}/tokens/group`, { method: 'PATCH', cookie: owner.cookie, body: { updates: [{ tokenId: restoredToken.id, expectedVersion: restoredToken.version, patch: { locked: true } }, { tokenId: groupToken.id, expectedVersion: groupToken.version, patch: { locked: true } }] } }); assert.equal(groupUpdate.status, 200); assert.equal(groupUpdate.result.tokens.every((item) => item.locked), true, 'GM can atomically lock a token group');
+const groupUnlocked = await request(`/api/scenes/${scene.id}/tokens/group`, { method: 'PATCH', cookie: owner.cookie, body: { updates: [{ tokenId: restoredToken.id, expectedVersion: groupUpdate.result.tokens[0].version, patch: { locked: false } }, { tokenId: groupToken.id, expectedVersion: groupUpdate.result.tokens[1].version, patch: { locked: false } }] } });
+const groupMoved = await request(`/api/scenes/${scene.id}/tokens/group`, { method: 'PATCH', cookie: owner.cookie, body: { updates: groupUnlocked.result.tokens.map((item) => ({ tokenId: item.id, expectedVersion: item.version, patch: { x: item.x + 2, y: item.y - 1 } })) } });
+assert.equal(groupMoved.status, 200); assert.deepEqual(groupMoved.result.tokens.map(({ x, y }) => [x, y]), [[11, 8], [12, 8]], 'GM can move selected tokens in one version-checked group operation');
+const staleGroupUpdate = await fetch(`${base}/api/scenes/${scene.id}/tokens/group`, { method: 'PATCH', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ updates: [{ tokenId: restoredToken.id, expectedVersion: restoredToken.version, patch: { hidden: true } }, { tokenId: groupToken.id, expectedVersion: groupUpdate.result.tokens[1].version, patch: { hidden: true } }] }) }); assert.equal(staleGroupUpdate.status, 409, 'stale group updates are rejected atomically');
+const groupSnapshot = await request(`/api/scenes/${scene.id}/tokens`, { cookie: owner.cookie }); assert.equal(groupSnapshot.result.find((item) => item.id === restoredToken.id).hidden, false, 'a stale group conflict does not partially change tokens');
+const { result: { token: playerToken } } = await request('/api/tokens', { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, name: 'Player token', x: 2, y: 3, color: '#c8794a', imageAssetId: tokenAssets[0].id } });
+assert.equal(playerToken.imageAssetId, tokenAssets[0].id, 'token image reference persists');
+const tokenImageLibrary = await request(`/api/campaigns/${campaign.id}/assets`, { cookie: owner.cookie }); assert.equal(tokenImageLibrary.result.assets.find((item) => item.id === tokenAssets[0].id).usageCount, 1, 'library usage counts include token images');
+const tokenImageRead = await fetch(`${base}/api/assets/${tokenAssets[0].id}`, { headers: { cookie: player.cookie } }); assert.equal(tokenImageRead.status, 200, 'players can read a token image referenced by a visible token');
+const hiddenTokenImageRead = await fetch(`${base}/api/assets/${tokenAssets[1].id}`, { headers: { cookie: player.cookie } }); assert.equal(hiddenTokenImageRead.status, 404, 'players cannot read an unreferenced token image');
+const deletedUnusedAsset = await fetch(`${base}/api/assets/${tokenAssets[1].id}`, { method: 'DELETE', headers: { cookie: owner.cookie } }); assert.equal(deletedUnusedAsset.status, 204, 'GM can delete an unused campaign asset');
+const afterAssetDelete = await request(`/api/campaigns/${campaign.id}/assets`, { cookie: owner.cookie }); assert.equal(afterAssetDelete.result.storageBytes, asset.size + tokenAssets[0].size, 'storage usage drops after deleting an unused file');
 const playerTokenPatch = await fetch(`${base}/api/tokens/${playerToken.id}`, { method: 'PATCH', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: playerToken.version, name: 'Forged name' }) });
 assert.equal(playerTokenPatch.status, 403, 'players cannot edit token properties through the REST API');
 const resources = [{ label: 'Health', current: 4, maximum: 8, visible: true }, { label: 'Focus', current: 1, maximum: 3, visible: false }];
@@ -137,11 +169,13 @@ assert.equal(ownerNotePayload.ownerNote, 'Updated owner-only note', 'only the ow
 assert.equal(Object.hasOwn(ownerNotePayload, 'gmNote'), false, 'owner-note events do not include GM notes');
 const tokenHiddenForPlayer = expectEvent(playerClient.socket, 'token:hidden');
 const { result: { token: hiddenPlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: tokenWithUpdatedNotes.version, hidden: true } });
+const hiddenTokenImage = await fetch(`${base}/api/assets/${tokenAssets[0].id}`, { headers: { cookie: player.cookie } }); assert.equal(hiddenTokenImage.status, 404, 'players cannot read images attached only to hidden tokens');
 assert.equal(hiddenPlayerToken.hidden, true);
 assert.equal((await tokenHiddenForPlayer).id, playerToken.id, 'players receive a safe removal when a token becomes hidden');
 assert.equal((await request(`/api/scenes/${scene.id}/tokens`, { cookie: player.cookie })).result.some((token) => token.id === playerToken.id), false, 'hidden token is removed from player snapshots');
 const tokenShownForPlayer = expectEvent(playerClient.socket, 'token:created');
 const { result: { token: visiblePlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: hiddenPlayerToken.version, hidden: false } });
+const visibleTokenImage = await fetch(`${base}/api/assets/${tokenAssets[0].id}`, { headers: { cookie: player.cookie } }); assert.equal(visibleTokenImage.status, 200, 'token image access returns when token visibility is restored');
 const shownTokenEvent = await tokenShownForPlayer;
 assert.equal(shownTokenEvent.id, playerToken.id, 'players receive the token when it becomes visible again');
 assert.equal(Object.hasOwn(shownTokenEvent, 'hidden'), false, 'visibility events do not expose hidden-state metadata');
@@ -310,4 +344,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

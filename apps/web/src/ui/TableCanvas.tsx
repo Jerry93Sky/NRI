@@ -1,12 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { Application, Assets, Container, Graphics, Sprite, Text } from 'pixi.js';
+import type { Texture } from 'pixi.js';
 import type { PublicToken } from '@nri/contracts';
 import { zoomToPointer } from './canvasMath';
 
 type Props = {
   tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number;
-  onMove: (token: PublicToken, x: number, y: number) => void; canEdit: (token: PublicToken) => boolean; fitLabel: string; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
+  onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; fitLabel: string; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
 };
 
@@ -28,6 +29,9 @@ export function TableCanvas(props: Props) {
     const grid = new Graphics();
     const objectsDisplay = new Container();
     const pieces = new Container();
+    const tokenTextures = new Map<string, Texture>();
+    const pendingTokenTextures = new Set<string>();
+    let refresh = () => {};
     world.addChild(base, mapLayer, grid, objectsDisplay, pieces);
     app.stage.addChild(world);
     app.stage.eventMode = 'static';
@@ -126,7 +130,24 @@ export function TableCanvas(props: Props) {
         const node = new Container(); node.position.set(token.x * size, token.y * size); node.rotation = token.rotation * Math.PI / 180; node.alpha = token.opacity;
         const width = size * token.width; const height = size * token.height;
         const disc = new Graphics().ellipse(0, 0, width * 0.42, height * 0.42).fill(token.color).stroke({ color: Number.parseInt(token.borderColor.slice(1), 16), alpha: 0.9, width: Math.max(1, size * 0.04) });
-        if (token.showName) { const label = new Text({ text: token.name, style: { fontFamily: 'Arial', fontSize: Math.max(10, size * 0.25), fill: 0xf5eadc, align: 'center' } }); label.anchor.set(0.5, -2); label.y = height * 0.45; node.addChild(disc, label); } else node.addChild(disc);
+        node.addChild(disc);
+        if (token.imageAssetId) {
+          const imageUrl = `/api/assets/${token.imageAssetId}`;
+          const texture = tokenTextures.get(token.imageAssetId);
+          if (texture) {
+            const mask = new Graphics().ellipse(0, 0, width * 0.42, height * 0.42).fill({ color: 0xffffff });
+            const portrait = new Sprite(texture); portrait.anchor.set(0.5); portrait.width = width * 0.84; portrait.height = height * 0.84; portrait.mask = mask; node.addChild(portrait, mask);
+          } else if (!pendingTokenTextures.has(token.imageAssetId)) {
+            pendingTokenTextures.add(token.imageAssetId);
+            void Assets.load(imageUrl).then((loaded) => {
+              tokenTextures.set(token.imageAssetId!, loaded);
+              pendingTokenTextures.delete(token.imageAssetId!);
+              if (!cancelled && latest.current.tokens.some((current) => current.imageAssetId === token.imageAssetId)) refresh();
+            }).catch(() => pendingTokenTextures.delete(token.imageAssetId!));
+          }
+        }
+        const border = new Graphics().ellipse(0, 0, width * 0.42, height * 0.42).stroke({ color: Number.parseInt(token.borderColor.slice(1), 16), alpha: 0.9, width: Math.max(1, size * 0.04) }); node.addChild(border);
+        if (token.showName) { const label = new Text({ text: token.name, style: { fontFamily: 'Arial', fontSize: Math.max(10, size * 0.25), fill: 0xf5eadc, align: 'center' } }); label.anchor.set(0.5, -2); label.y = height * 0.45; node.addChild(label); }
         const resourceText = token.resources.filter((resource) => resource !== null).map((resource) => `${resource.label} ${resource.current}/${resource.maximum}`).join(' · ');
         if (resourceText) { const resourceLabel = new Text({ text: resourceText, style: { fontFamily: 'Arial', fontSize: Math.max(8, size * 0.16), fill: 0xd8c6a9, align: 'center' } }); resourceLabel.anchor.set(0.5, 0); resourceLabel.y = height * 0.45 + Math.max(10, size * 0.24); node.addChild(resourceLabel); }
         node.eventMode = 'static'; node.cursor = latest.current.canEdit(token) && !token.locked ? 'grab' : 'default';
@@ -134,20 +155,24 @@ export function TableCanvas(props: Props) {
           if (!latest.current.canEdit(token) || token.locked) return;
           event.stopPropagation(); node.cursor = 'grabbing';
           const start = event.global.clone(); const origin = node.position.clone();
-          const move = (moveEvent: typeof event) => { const point = moveEvent.global; node.position.set(origin.x + point.x - start.x, origin.y + point.y - start.y); };
+          const groupTokens = latest.current.canManage && latest.current.selectedTokenIds.includes(token.id) ? latest.current.tokens.filter((item) => latest.current.selectedTokenIds.includes(item.id) && latest.current.canEdit(item) && !item.locked) : [];
+          const groupNodes = groupTokens.length > 1 ? [...pieces.children].filter((child) => groupTokens.some((item) => item.id === (child as Container).label)) as Container[] : [];
+          const groupOrigins = groupNodes.map((child) => child.position.clone());
+          const move = (moveEvent: typeof event) => { const point = moveEvent.global; const dx = point.x - start.x; const dy = point.y - start.y; node.position.set(origin.x + dx, origin.y + dy); groupNodes.forEach((child, index) => child.position.set(groupOrigins[index]!.x + dx, groupOrigins[index]!.y + dy)); };
           const up = () => {
             app.stage.off('globalpointermove', move); app.stage.off('pointerup', up); app.stage.off('pointerupoutside', up); node.cursor = 'grab';
             const { gridSize: cellSize, snapToGrid: snap } = latest.current;
             const x = node.x / cellSize; const y = node.y / cellSize;
             const nextX = snap ? Math.round(x) : Number(x.toFixed(2)); const nextY = snap ? Math.round(y) : Number(y.toFixed(2));
-            if (nextX !== token.x || nextY !== token.y) latest.current.onMove(token, nextX, nextY);
+            if (groupTokens.length > 1) { const deltaX = (snap ? Math.round(nextX - token.x) : Number((nextX - token.x).toFixed(2))); const deltaY = (snap ? Math.round(nextY - token.y) : Number((nextY - token.y).toFixed(2))); if (deltaX || deltaY) latest.current.onMoveGroup(groupTokens.map((item) => item.id), deltaX, deltaY); }
+            else if (nextX !== token.x || nextY !== token.y) latest.current.onMove(token, nextX, nextY);
           };
           app.stage.on('globalpointermove', move); app.stage.on('pointerup', up); app.stage.on('pointerupoutside', up);
         });
-        pieces.addChild(node);
+        node.label = token.id; pieces.addChild(node);
       });
     };
-    const refresh = () => {
+    refresh = () => {
       if (latest.current.sceneId !== previousSceneId) { previousSceneId = latest.current.sceneId; restoreCamera(); }
       redrawGrid(); redrawObjects(); redrawTokens(); void redrawMap();
     };

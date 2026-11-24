@@ -19,8 +19,11 @@ All notable project changes will be recorded here.
 - Added versioned GM token properties for name, fill/frame, cell dimensions, rotation, opacity, display order, lock and name visibility; hidden token transitions emit only a safe removal or player-visible creation.
 - Added two generic versioned token resource tracks with label/current/maximum/player-visibility settings, owner-only player adjustments, bounded server updates, and private realtime projections for hidden tracks.
 - Added separate GM and token-owner notes with REST projections and owner-scoped realtime updates.
+- Added recoverable token deletion with a role-scoped trash view and restore, plus all-or-none GM group updates for up to 50 tokens with optimistic version checks.
+- Added atomic group dragging for selected editable tokens; coordinate changes share the same version-checked transaction as group property changes.
+- Added a GM-only categorized campaign image library with multi-file uploads, search, name/size sorting, metadata editing, storage totals and map/object/token reference counts. Unused-only deletion checks references transactionally. Token images render on the tabletop and are served to players only for visible tokens in the active scene. Upload checks image signatures and header dimensions against size and decoded-pixel bounds; full decoding and thumbnail generation remain open.
 - Restricted layer creation to custom layers and changed object-to-layer deletion behavior so a non-empty layer cannot cascade-delete its objects.
-- V0.1.1 is still in progress. Direct layer/object selection, image objects, clipboard workflows, mapped browser acceptance for calibration, token images/notes and group workflows, asset library, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
+- V0.1.1 is still in progress. Direct layer/object selection, image objects, clipboard workflows, mapped browser acceptance for calibration, drag-box token selection, clipboard/undo, asset thumbnails/folders, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
 
 ## Unreleased — V0.1 foundation
 
