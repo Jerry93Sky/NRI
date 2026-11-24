@@ -2,34 +2,26 @@
 
 ## V0.1 shape
 
-Use a pnpm TypeScript workspace with a React/Vite frontend, a Fastify application, shared Zod contracts, and domain modules in a modular monolith. PostgreSQL is the durable source of truth; Socket.IO carries authorized realtime events. Prisma migrations describe the schema. Uploaded media goes to a local storage adapter in development and behind an interface suitable for later S3-compatible storage.
+Use a pnpm TypeScript workspace with a React/Vite frontend, a Fastify application, shared Zod contracts, and cohesive modules in a modular monolith. PostgreSQL is the durable source of truth; Drizzle ORM and Drizzle Kit migrations manage the schema. Socket.IO carries realtime events. Uploaded media currently uses a local filesystem directory configured with `UPLOAD_DIR`; the storage adapter is not yet abstracted for S3.
 
 ```text
 Browser (React, PixiJS)
-  ├── HTTPS JSON API ── Fastify ── domain/application services ── Prisma ── PostgreSQL
+  ├── HTTP JSON API ── Fastify ── route/domain logic ── Drizzle ── PostgreSQL
   └── Socket.IO ─────── auth + campaign room authorization ───────┘
                                       └── asset storage adapter ── local files
 ```
 
-Shared contracts validate all external input and realtime payloads. REST and Socket.IO handlers call the same application/domain services. The browser is a renderer and command source; it is never authoritative for roles, random results, or final state.
+Shared Zod contracts validate selected input boundaries. Several Socket.IO handlers still contain logic directly in `apps/server/src/index.ts`; common REST/socket application services are a V0.1.1 refactoring target. The browser is a renderer and command source; it is never authoritative for roles, random results, or final state.
 
 ## Module boundaries
 
-- `identity`: users, password hashes, sessions, account lifecycle.
-- `campaigns`: campaign metadata, membership, invitations, archive lifecycle.
-- `assets`: validation, storage metadata, safe authorized media delivery.
-- `tabletop`: scenes, layers, tokens, ownership, grid, object versions.
-- `messaging`: public and secret message projection and retention.
-- `dice`: bounded grammar and server-side randomness.
-- `initiative`: turn ordering and atomic transitions.
-- `realtime`: session-to-socket binding, room authorization, sequencing and snapshots.
-- `audit`: append-only records for sensitive changes, with careful redaction.
+Current code is primarily in `apps/server/src/index.ts` and `apps/server/src/db/`: auth, campaigns/membership, assets, scenes/tokens, messaging, dice, initiative, sockets and audit writes are route-level concerns. `packages/contracts` contains shared schemas and pure dice/movement rules. The named modules below are boundaries to extract as related V0.1.1 work is implemented, not existing directories.
 
 Do not add placeholder modules for later products.
 
 ## State flow and concurrency
 
-Authenticate every HTTP and WebSocket connection. Resolve campaign membership and role on each operation. Validate a command, check its object version and permissions, apply it in a database transaction, record audit where needed, commit, then publish a sanitized versioned event. Clients send command IDs for retry-safe critical operations. A stale version returns a conflict and authoritative revision; it does not overwrite silently. Reconnect uses a permission-filtered snapshot plus events after the snapshot cursor.
+Authenticate every HTTP and WebSocket connection. The current handlers resolve membership for protected requests and use optimistic versions for scene/token/initiative writes. Not every multi-record operation shares a transaction, mutation command IDs are not implemented, and reconnect currently reloads scene state instead of replaying a durable event cursor. V0.1.1 should close these gaps before making broader reliability claims.
 
 ## Security and operations
 

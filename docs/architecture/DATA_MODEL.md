@@ -11,11 +11,11 @@ PostgreSQL is the source of truth. Every campaign-owned record carries `campaign
 | Campaign | id, ownerId, title, description, coverAssetId, archivedAt, timestamps |
 | CampaignMembership | campaignId, userId, role (OWNER/GM/PLAYER), joinedAt; unique campaign/user |
 | CampaignInvitation | campaignId, tokenHash, expiry, revokedAt, creatorId, acceptedAt; unique token hash |
-| Scene | campaignId, title, dimensions, backgroundAssetId, grid settings, archivedAt, version |
-| SceneLayer | sceneId, stable key, ordering, visibility/locking metadata |
-| Asset | campaignId, storage key, media type, dimensions, size, checksum, uploaderId |
-| SceneObject | campaignId, sceneId, layerId, type, position/transform, visibility, version, JSON props |
-| Token | SceneObject subtype or linked record, display data and optional character link; V0.1 has no character model |
+| Scene | campaignId, title, dimensions, backgroundAssetId, grid appearance/offset/snap/distance settings, sort order, active/published flags, initial camera values, archivedAt, optimistic version |
+| SceneLayer | **Not implemented in V0.1/V0.1.1 yet.** Planned entity for ordered visibility/locking metadata. |
+| Asset | campaignId, storage key, detected media type, size, checksum, uploaderId; decoded dimensions are not stored yet |
+| SceneObject | **Not implemented in V0.1/V0.1.1 yet.** Planned entity for transforms, visibility, version, and layer reference. |
+| Token | Scene-owned record with display data, grid-unit position, color, visibility, owner and optimistic version; V0.1 has no character model |
 | TokenOwnership | tokenId, userId; unique token/user; authorization checked on server |
 | ChatMessage | campaignId, senderId, channel/recipient, body, timestamp; secret recipient scoped |
 | DiceRoll | campaignId, userId, parsed expression, server result and timestamp |
@@ -23,7 +23,7 @@ PostgreSQL is the source of truth. Every campaign-owned record carries `campaign
 | InitiativeEntry | trackerId, tokenId or participant reference, initiative, tie order, hidden flag |
 | AuditEvent | campaignId, actorId, action, target, timestamp, redacted metadata |
 
-Prefer numeric database IDs internally and opaque identifiers at public boundaries. Token ownership is separate from campaign role. Every mutable scene object and initiative tracker has an optimistic version. Critical invite acceptance, role changes, token ownership changes, secret visibility changes, and initiative transitions are atomic and audited. Avoid storing plaintext invitation/session secrets.
+Prefer numeric database IDs internally and opaque identifiers at public boundaries. Token ownership is separate from campaign role. Mutable scenes, tokens, and initiative trackers use optimistic versions. Critical invite acceptance, role changes, token ownership changes, scene activation, and initiative transitions are audited. Avoid storing plaintext invitation/session secrets. Current scene duplicate/activation and archive fallback operations use transactions; future scene objects need the same server-side campaign scope and transaction rules.
 
 ## Explicitly deferred
 

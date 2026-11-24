@@ -1,10 +1,11 @@
 # Product roadmap
 
-Statuses describe plans, not current implementation. V0.1 is the only active release scope.
+Statuses describe plans, not current implementation. V0.1.1 is the active release scope; V0.1 remains unmerged and pending acceptance.
 
 | Version | Focus | Dependencies | Exit criteria | Constraints / architecture |
 |---|---|---|---|---|
 | V0.1 | Foundation & Multiplayer Virtual Tabletop | None | Durable campaigns, auth and scoped roles, scenes, maps, tokens, chat, dice, initiative, reconnect, bilingual UI; automated and manual acceptance recorded | System-neutral modular monolith; server-authoritative; no billing, advanced lighting, or rules automation |
+| V0.1.1 | Tabletop Foundation Completion & Playability | Existing V0.1 branch | Scene lifecycle and privacy, layers/objects, grid calibration, expanded tokens, asset library, tabletop tools, reliability/security checks, Playwright, backup/restore, measured performance, playable demo; owner acceptance recorded | Continue the existing branch and PR; do not claim incomplete V0.1 foundations as accepted |
 | V0.2 | Tactical Tabletop | V0.1 scene, object, and realtime contracts | Walls and doors; visibility and lighting tested for permissions and performance | Visibility is server-filtered; keep renderer independent from persistence |
 | V0.3 | Character Studio | Stable identity, campaign membership, asset and permission model | Configurable character sheets and ownership in campaigns | Schema-defined fields; no single game system baked into core |
 | V0.4 | Universal Rules Engine | Character Studio; versioned rule packages | Authors can define and safely execute checks and mechanics without arbitrary server code | Sandboxed declarative rules, versioning, migrations, deterministic evaluation |

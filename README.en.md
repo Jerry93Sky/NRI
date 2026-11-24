@@ -4,28 +4,29 @@ NRI Platform is a system-neutral virtual tabletop for role-playing games. Its co
 
 ## Status
 
-- **Version:** V0.1 — Foundation & Multiplayer Virtual Tabletop
+- **Version:** V0.1.1 — Tabletop Foundation Completion & Playability
 - **Implementation:** IN_PROGRESS
 - **Automated checks:** AUTOMATED_TESTS_PASSED for the local checks that exist
 - **Owner acceptance:** MANUAL_ACCEPTANCE_PENDING
 
-The API and web interface run locally, and the demo campaign `Amber Crossing` is open in the app browser. V0.1 is not accepted yet: backup restore, performance measurements, full browser coverage, and owner acceptance remain outstanding. See the [acceptance report](docs/releases/V0.1_ACCEPTANCE_REPORT.md) for evidence and counts.
+The API and web interface run locally, and `Amber Crossing` is available for manual review. V0.1.1 remains in progress: object layers, grid calibration, expanded token properties, asset library, tabletop tools, Playwright, backup/restore, and load checks are incomplete. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md).
 
 ## Implemented
 
 - Registration, login, logout, sessions, and rate limits.
 - Campaigns, Owner/GM/Player roles, capped and revocable invitations, archive and restore.
-- Scenes with uploaded map backgrounds, a canvas grid, tokens, ownership assignment, server-authorized movement, and Socket.IO synchronization.
+- Scenes with a player-active version and GM drafts, rename, duplicate, archive/restore, ordering, and configurable grid/camera; players receive only the active scene.
+- Tokens, ownership assignment, server-authorized movement, and Socket.IO synchronization.
 - Public and private chat, server-side dice rolls, and initiative with hidden-turn filtering.
 - Russian and English UI, local development, Docker Compose, PostgreSQL migrations, and a CI workflow.
 
-## V0.1 limitations
+## V0.1.1 limitations
 
-- The UI supports creating and selecting scenes; scene rename, duplicate, and archive flows are incomplete. Grid size and settings cannot be changed through the UI.
+- Scene layers and freeform objects, grid calibration, expanded token sheets, and undo/redo are not implemented yet.
 - Maps accept PNG/JPEG/WebP up to 12 MB; local storage does not validate full image decoding or dimension limits.
-- There is no automated Playwright suite, isolated backup restore drill, or performance measurement report.
+- There is no automated Playwright suite, isolated backup restore drill, or performance measurement report. Package-local Vitest suites and a PostgreSQL API/Socket.IO smoke have been run.
 - Full layer/object editing, campaign export, and production deployment are not complete. GitHub Actions has passed on the work branch.
-- Full security review and owner acceptance are pending.
+- The asset library and additional tabletop tools are incomplete; full security review and owner acceptance are pending.
 
 ## Stack
 
@@ -59,4 +60,4 @@ The multiplayer integration test is documented in the [acceptance report](docs/r
 - [Threat model](docs/security/THREAT_MODEL.md) · [Commercial strategy](docs/product/COMMERCIAL_STRATEGY.md)
 - [Changelog](CHANGELOG.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-V0.2 Tactical Tabletop is the next release; its gates and dependencies are in the roadmap. No project-wide source license has been selected; all rights remain with their owners.
+V0.1.1 is the active phase; V0.2 Tactical Tabletop starts after its acceptance. No project-wide source license has been selected; all rights remain with their owners.

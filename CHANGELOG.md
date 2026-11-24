@@ -2,6 +2,15 @@
 
 All notable project changes will be recorded here.
 
+## Unreleased — V0.1.1
+
+- Added per-scene grid, map size, distance, and camera settings with optimistic versions and a migration that preserves existing scenes.
+- Added active player scenes and GM-only drafts, scene duplicate/archive/restore/reorder flows, and server filtering for player scene and token snapshots.
+- Added regression coverage for scene privacy, stale edits, activation, fallback, and recovery to the multiplayer smoke runner.
+- Added non-empty Vitest suites for server scene access policy and web camera zoom math; removed `--passWithNoTests` from server and web scripts.
+- Lazy-loaded the Pixi tabletop; current measured web entry and canvas chunks are documented in the V0.1.1 acceptance report.
+- V0.1.1 is still in progress. Layers, calibration, richer tokens, asset library, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
+
 ## Unreleased — V0.1 foundation
 
 - Initialized the repository and V0.1 work branch.
