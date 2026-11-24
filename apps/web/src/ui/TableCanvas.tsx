@@ -4,7 +4,7 @@ import type { PublicToken } from '@nri/contracts';
 import { zoomToPointer } from './canvasMath';
 
 type Props = {
-  tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x: number; y: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
+  tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number;
   onMove: (token: PublicToken, x: number, y: number) => void; canEdit: (token: PublicToken) => boolean; fitLabel: string;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
@@ -90,6 +90,20 @@ export function TableCanvas(props: Props) {
             };
             shape.cursor = 'grabbing'; app.stage.on('globalpointermove', move); app.stage.on('pointerup', finish); app.stage.on('pointerupoutside', finish);
           });
+          const resizeHandle = new Graphics().rect(-6, -6, 12, 12).fill({ color: 0xf3c78b }).stroke({ color: 0x342a24, width: 1 });
+          resizeHandle.position.set(item.width / 2, item.height / 2); resizeHandle.eventMode = 'static'; resizeHandle.cursor = 'nwse-resize';
+          resizeHandle.on('pointerdown', (event) => {
+            event.stopPropagation();
+            const move = (moveEvent: typeof event) => { const point = shape.toLocal(moveEvent.global); resizeHandle.position.set(Math.max(4, point.x), Math.max(4, point.y)); };
+            const finish = (finishEvent: typeof event) => {
+              app.stage.off('globalpointermove', move); app.stage.off('pointerup', finish); app.stage.off('pointerupoutside', finish);
+              const point = shape.toLocal(finishEvent.global); const width = Math.max(8, Math.round(point.x * 2)); const height = Math.max(8, Math.round(point.y * 2));
+              const x = Math.round(shape.x - width / 2); const y = Math.round(shape.y - height / 2);
+              if (width !== item.width || height !== item.height) latest.current.onEditObject(item.id, { x, y, width, height });
+            };
+            app.stage.on('globalpointermove', move); app.stage.on('pointerup', finish); app.stage.on('pointerupoutside', finish);
+          });
+          shape.addChild(resizeHandle);
         }
         objectsDisplay.addChild(shape);
       }
