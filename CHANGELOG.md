@@ -7,7 +7,7 @@ All notable project changes will be recorded here.
 - Added per-scene grid, map size, distance, and camera settings with optimistic versions and a migration that preserves existing scenes.
 - Added active player scenes and GM-only drafts, scene duplicate/archive/restore/reorder flows, and server filtering for player scene and token snapshots.
 - Added regression coverage for scene privacy, stale edits, activation, fallback, and recovery to the multiplayer smoke runner.
-- Added non-empty Vitest suites for server scene access policy and web camera zoom math; removed `--passWithNoTests` from server and web scripts.
+- Added non-empty Vitest suites for server scene access policy and web camera zoom math; removed `--passWithNoTests` from all package test scripts.
 - Lazy-loaded the Pixi tabletop; current measured web entry and canvas chunks are documented in the V0.1.1 acceptance report.
 - Localized scene preparation actions, settings, camera controls, and canvas hints in Russian and English.
 - Added map-based grid calibration with two-point measurement, cell-count sizing, and unsaved cell-size/offset preview; mapped browser acceptance remains pending.
@@ -20,7 +20,7 @@ All notable project changes will be recorded here.
 - Added two generic versioned token resource tracks with label/current/maximum/player-visibility settings, owner-only player adjustments, bounded server updates, and private realtime projections for hidden tracks.
 - Added separate GM and token-owner notes with REST projections and owner-scoped realtime updates.
 - Added recoverable token deletion with a role-scoped trash view and restore, plus all-or-none GM group updates for up to 50 tokens with optimistic version checks.
-- Added atomic group dragging for selected editable tokens; coordinate changes share the same version-checked transaction as group property changes.
+- Added atomic group dragging for selected editable tokens; coordinate changes share the same version-checked transaction as group property changes. Added a 20-step movement-only undo/redo that rejects stale versions.
 - Added a GM-only categorized campaign image library with multi-file uploads, search, name/size sorting, metadata editing, storage totals and map/object/token reference counts. Unused-only deletion checks references transactionally. Token images render on the tabletop and are served to players only for visible tokens in the active scene. Upload checks image signatures and header dimensions against size and decoded-pixel bounds; full decoding and thumbnail generation remain open.
 - Restricted layer creation to custom layers and changed object-to-layer deletion behavior so a non-empty layer cannot cascade-delete its objects.
 - V0.1.1 is still in progress. Direct layer/object selection, image objects, clipboard workflows, mapped browser acceptance for calibration, drag-box token selection, clipboard/undo, asset thumbnails/folders, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
