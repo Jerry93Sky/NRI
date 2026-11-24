@@ -2,12 +2,12 @@ import { useEffect, useRef } from 'react';
 import { Application, Assets, Container, Graphics, Sprite, Text } from 'pixi.js';
 import type { Texture } from 'pixi.js';
 import type { PublicToken } from '@nri/contracts';
-import { zoomToPointer } from './canvasMath';
+import { measureSceneDistance, zoomToPointer } from './canvasMath';
 
 type Props = {
   tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
-  backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number;
-  onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; fitLabel: string; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
+  backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number; unitsPerCell: number; unitLabel: string;
+  onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; fitLabel: string; rulerActive: boolean; rulerLabel: string; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
 };
 
@@ -27,12 +27,13 @@ export function TableCanvas(props: Props) {
     const base = new Graphics().rect(-20000, -20000, 40000, 40000).fill({ color: 0x222421 });
     const mapLayer = new Container();
     const grid = new Graphics();
+    const rulerDisplay = new Container();
     const objectsDisplay = new Container();
     const pieces = new Container();
     const tokenTextures = new Map<string, Texture>();
     const pendingTokenTextures = new Set<string>();
     let refresh = () => {};
-    world.addChild(base, mapLayer, grid, objectsDisplay, pieces);
+    world.addChild(base, mapLayer, grid, rulerDisplay, objectsDisplay, pieces);
     app.stage.addChild(world);
     app.stage.eventMode = 'static';
 
@@ -172,9 +173,25 @@ export function TableCanvas(props: Props) {
         node.label = token.id; pieces.addChild(node);
       });
     };
+    const rulerPoints: Array<{ x: number; y: number }> = [];
+    const redrawRuler = () => {
+      rulerDisplay.removeChildren().forEach((child) => child.destroy({ children: true }));
+      if (!latest.current.rulerActive || rulerPoints.length === 0) return;
+      const line = new Graphics().moveTo(rulerPoints[0]!.x, rulerPoints[0]!.y);
+      for (const point of rulerPoints.slice(1)) line.lineTo(point.x, point.y);
+      line.stroke({ color: 0xf3c78b, width: 2 / world.scale.x });
+      rulerDisplay.addChild(line);
+      const last = rulerPoints[rulerPoints.length - 1]!;
+      const distance = measureSceneDistance(rulerPoints, latest.current.gridSize, latest.current.unitsPerCell);
+      const label = new Text({ text: `${distance.toFixed(1)} ${latest.current.unitLabel}`, style: { fontFamily: 'Arial', fontSize: 16 / world.scale.x, fill: 0xf3c78b, stroke: { color: 0x222421, width: 4 / world.scale.x } } });
+      label.anchor.set(0.5, 1);
+      label.position.set(last.x, last.y - 8 / world.scale.x);
+      rulerDisplay.addChild(label);
+    };
     refresh = () => {
-      if (latest.current.sceneId !== previousSceneId) { previousSceneId = latest.current.sceneId; restoreCamera(); }
-      redrawGrid(); redrawObjects(); redrawTokens(); void redrawMap();
+      if (latest.current.sceneId !== previousSceneId) { previousSceneId = latest.current.sceneId; rulerPoints.length = 0; restoreCamera(); }
+      if (!latest.current.rulerActive) rulerPoints.length = 0;
+      redrawGrid(); redrawRuler(); redrawObjects(); redrawTokens(); void redrawMap();
     };
     const fit = () => fitScene();
     const calibrationPoints: Array<{ x: number; y: number }> = [];
@@ -186,6 +203,11 @@ export function TableCanvas(props: Props) {
         latest.current.onCalibrationComplete(calibrationPoints[0]!, calibrationPoints[1]!);
         calibrationPoints.length = 0;
       }
+    };
+    const onRulerClick = (event: { global: { x: number; y: number } }) => {
+      if (!latest.current.rulerActive || latest.current.calibrationActive) return;
+      rulerPoints.push(world.toLocal(event.global));
+      redrawRuler();
     };
     const onDrawStart = (event: { global: { x: number; y: number }; stopPropagation: () => void }) => {
       if (!latest.current.drawMode || latest.current.calibrationActive) return;
@@ -206,6 +228,7 @@ export function TableCanvas(props: Props) {
       if (cancelled || !host.current) { if (!destroyed) { destroyed = true; app.destroy(true, { children: true }); } return; }
       app.stage.hitArea = app.screen;
       app.stage.on('pointerdown', onCalibrationClick);
+      app.stage.on('pointerdown', onRulerClick);
       app.stage.on('pointerdown', onDrawStart);
       host.current.appendChild(app.canvas); refresh();
       app.canvas.addEventListener('nri-refresh', refresh);
@@ -232,7 +255,7 @@ export function TableCanvas(props: Props) {
   useEffect(() => {
     const canvas = host.current?.querySelector('canvas');
     if (canvas) canvas.dispatchEvent(new Event('nri-refresh'));
-  }, [tokens, props.objects, props.canManage, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY]);
+  }, [tokens, props.objects, props.canManage, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY, props.rulerActive, props.unitsPerCell, props.unitLabel]);
 
-  return <div className="table-canvas" ref={host}><div className="canvas-controls"><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div></div>;
+  return <div className="table-canvas" ref={host}><div className="canvas-controls"><button aria-label={props.rulerLabel} aria-pressed={props.rulerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-ruler'))}>{props.rulerLabel}</button><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div>{props.rulerActive && <span className="ruler-hint">{props.rulerLabel}</span>}</div>;
 }

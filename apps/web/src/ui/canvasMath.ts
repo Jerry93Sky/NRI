@@ -1,5 +1,16 @@
 export type CameraTransform = { scale: number; x: number; y: number };
 
+export function measureSceneDistance(points: Array<{ x: number; y: number }>, gridSize: number, unitsPerCell: number): number {
+  if (!Number.isFinite(gridSize) || gridSize <= 0 || !Number.isFinite(unitsPerCell) || unitsPerCell <= 0) return 0;
+  let pixels = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!;
+    const current = points[index]!;
+    pixels += Math.hypot(current.x - previous.x, current.y - previous.y);
+  }
+  return pixels / gridSize * unitsPerCell;
+}
+
 export function zoomToPointer(current: CameraTransform, pointer: { x: number; y: number }, factor: number, min = 0.25, max = 2.2): CameraTransform {
   const worldX = (pointer.x - current.x) / current.scale;
   const worldY = (pointer.y - current.y) / current.scale;

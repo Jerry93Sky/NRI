@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { calculateCellSize, zoomToPointer } from './canvasMath';
+import { calculateCellSize, measureSceneDistance, zoomToPointer } from './canvasMath';
 
 describe('canvas camera math', () => {
+  it('measures straight and multi-segment paths in scene units', () => {
+    expect(measureSceneDistance([{ x: 0, y: 0 }, { x: 48, y: 0 }], 48, 5)).toBe(5);
+    expect(measureSceneDistance([{ x: 0, y: 0 }, { x: 48, y: 0 }, { x: 48, y: 48 }], 48, 5)).toBe(10);
+    expect(measureSceneDistance([{ x: 0, y: 0 }, { x: 48, y: 48 }], 48, 5)).toBeCloseTo(Math.SQRT2 * 5);
+    expect(measureSceneDistance([{ x: 0, y: 0 }], 48, 5)).toBe(0);
+  });
+
   it('keeps the same world coordinate under the cursor while zooming', () => {
     const camera = { scale: 1, x: 80, y: -30 };
     const pointer = { x: 300, y: 250 };
