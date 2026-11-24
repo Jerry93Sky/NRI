@@ -121,6 +121,9 @@ const { result: { object: publicObject } } = await request(`/api/scenes/${scene.
 const { result: { object: lineObject } } = await request(`/api/scenes/${scene.id}/objects`, { method: 'POST', cookie: owner.cookie, body: { layerId: objectsLayer.id, kind: 'LINE', x: 20, y: 30, width: 96, height: 48, color: '#c8794a', strokeWidth: 3, points: [{ x: 0, y: 24 }, { x: 96, y: 24 }] } });
 assert.equal(lineObject.kind, 'LINE', 'line drawings persist as editable scene objects');
 assert.equal(lineObject.points.length, 2, 'line point geometry round-trips through the scene object API');
+const { result: { object: freehandObject } } = await request(`/api/scenes/${scene.id}/objects`, { method: 'POST', cookie: owner.cookie, body: { layerId: objectsLayer.id, kind: 'FREEHAND', x: 10, y: 12, width: 38, height: 24, color: '#c8794a', strokeWidth: 3, points: [{ x: 0, y: 0 }, { x: 18, y: 8 }, { x: 38, y: 24 }] } });
+assert.equal(freehandObject.kind, 'FREEHAND', 'freehand strokes persist as editable scene objects');
+assert.equal(freehandObject.points.length, 3, 'freehand stroke points round-trip through the scene object API');
 const { result: playerObjectsWithPublic } = await request(`/api/scenes/${scene.id}/objects`, { cookie: player.cookie });
 assert.equal(playerObjectsWithPublic.some((object) => object.id === publicObject.id), true, 'players receive visible objects from public layers');
 const { result: { object: editableObject } } = await request(`/api/scenes/${scene.id}/objects`, { method: 'POST', cookie: owner.cookie, body: { layerId: objectsLayer.id, kind: 'RECTANGLE', x: 100, y: 110, width: 60, height: 40, rotation: 45, opacity: 0.5, zIndex: 3 } });
@@ -261,4 +264,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, token ownership, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, token ownership, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

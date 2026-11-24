@@ -6,7 +6,7 @@ import { zoomToPointer } from './canvasMath';
 type Props = {
   tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number;
-  onMove: (token: PublicToken, x: number, y: number) => void; canEdit: (token: PublicToken) => boolean; fitLabel: string;
+  onMove: (token: PublicToken, x: number, y: number) => void; canEdit: (token: PublicToken) => boolean; fitLabel: string; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
 };
 
@@ -160,12 +160,26 @@ export function TableCanvas(props: Props) {
         calibrationPoints.length = 0;
       }
     };
+    const onDrawStart = (event: { global: { x: number; y: number }; stopPropagation: () => void }) => {
+      if (!latest.current.drawMode || latest.current.calibrationActive) return;
+      event.stopPropagation();
+      const points = [world.toLocal(event.global)];
+      const preview = new Graphics(); world.addChild(preview);
+      const redraw = () => { preview.clear().moveTo(points[0]!.x, points[0]!.y); for (const point of points.slice(1)) preview.lineTo(point.x, point.y); preview.stroke({ color: 0xf3c78b, width: 3 }); };
+      const move = (moveEvent: { global: { x: number; y: number } }) => { const point = world.toLocal(moveEvent.global); const previous = points[points.length - 1]!; if (Math.hypot(point.x - previous.x, point.y - previous.y) >= 2) { points.push(point); redraw(); } };
+      const finish = () => {
+        app.stage.off('globalpointermove', move); app.stage.off('pointerup', finish); app.stage.off('pointerupoutside', finish); preview.destroy();
+        if (points.length > 1) latest.current.onCreateDrawing(points.map(({ x, y }) => ({ x, y })));
+      };
+      app.stage.on('globalpointermove', move); app.stage.on('pointerup', finish); app.stage.on('pointerupoutside', finish);
+    };
     const start = async () => {
       await app.init({ resizeTo: host.current!, background: '#222421', backgroundAlpha: 0, antialias: true, resolution: Math.min(window.devicePixelRatio || 1, 2), autoDensity: true });
       initialized = true;
       if (cancelled || !host.current) { if (!destroyed) { destroyed = true; app.destroy(true, { children: true }); } return; }
       app.stage.hitArea = app.screen;
       app.stage.on('pointerdown', onCalibrationClick);
+      app.stage.on('pointerdown', onDrawStart);
       host.current.appendChild(app.canvas); refresh();
       app.canvas.addEventListener('nri-refresh', refresh);
       window.addEventListener('nri-fit-scene', fit);

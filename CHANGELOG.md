@@ -14,6 +14,7 @@ All notable project changes will be recorded here.
 - Added four scene layers, versioned layer/object APIs, scene duplication with independent layer/object IDs, and player-safe projections for GM-only content.
 - Added a basic layer panel with active-layer selection/order, visibility/lock controls, rectangle/ellipse creation, active-layer canvas dragging/resizing, object visibility/lock, rotation, opacity, z-order, same-scene layer move, duplicate and delete actions; shapes render on the canvas.
 - Added a localized line-object action. Lines are stored as editable scene objects with point geometry and are covered by the multiplayer API smoke.
+- Added a GM freehand mode with live stroke preview and persisted point geometry on the selected unlocked layer.
 - Restricted layer creation to custom layers and changed object-to-layer deletion behavior so a non-empty layer cannot cascade-delete its objects.
 - V0.1.1 is still in progress. Direct layer/object selection and transforms, image objects, layer ordering, clipboard workflows, mapped browser acceptance for calibration, richer tokens, asset library, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
 
