@@ -24,6 +24,7 @@ describe('scene layer and object contracts', () => {
   it('validates layer creation defaults and limits', () => {
     expect(createSceneLayerSchema.parse({ name: 'Effects', kind: 'CUSTOM' })).toMatchObject({ sortOrder: 4, visibleToPlayers: true, locked: false });
     expect(createSceneLayerSchema.safeParse({ name: '', kind: 'CUSTOM' }).success).toBe(false);
+    expect(createSceneLayerSchema.safeParse({ name: 'Extra GM', kind: 'GM' }).success).toBe(false);
   });
   it('requires campaign objects to reference valid layers and image assets', () => {
     const base = { layerId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', kind: 'RECTANGLE', x: 10, y: 15 };

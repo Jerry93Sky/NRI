@@ -7,7 +7,7 @@ export const createCampaignSchema = z.object({ title: z.string().trim().min(1).m
 export const createSceneSchema = z.object({ campaignId: idSchema, title: z.string().trim().min(1).max(80), gridSize: z.number().int().min(16).max(128).default(48) });
 export const createTokenSchema = z.object({ sceneId: idSchema, name: z.string().trim().min(1).max(48), x: z.number().finite().min(-10000).max(10000), y: z.number().finite().min(-10000).max(10000), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#c8794a'), hidden: z.boolean().default(false) });
 export const sceneLayerKindSchema = z.enum(['BACKGROUND', 'OBJECTS', 'TOKENS', 'GM', 'CUSTOM']);
-export const createSceneLayerSchema = z.object({ name: z.string().trim().min(1).max(48), kind: sceneLayerKindSchema, sortOrder: z.number().int().min(-1000).max(1000).default(4), visibleToPlayers: z.boolean().default(true), locked: z.boolean().default(false) });
+export const createSceneLayerSchema = z.object({ name: z.string().trim().min(1).max(48), kind: z.literal('CUSTOM'), sortOrder: z.number().int().min(-1000).max(1000).default(4), visibleToPlayers: z.boolean().default(true), locked: z.boolean().default(false) });
 export const updateSceneLayerSchema = z.object({ name: z.string().trim().min(1).max(48).optional(), sortOrder: z.number().int().min(-1000).max(1000).optional(), visibleToPlayers: z.boolean().optional(), locked: z.boolean().optional(), expectedVersion: z.number().int().positive() }).refine(({ expectedVersion: _version, ...patch }) => Object.values(patch).some((value) => value !== undefined));
 export const sceneObjectKindSchema = z.enum(['IMAGE', 'LINE', 'FREEHAND', 'RECTANGLE', 'ELLIPSE', 'TEXT']);
 const sceneObjectShape = {

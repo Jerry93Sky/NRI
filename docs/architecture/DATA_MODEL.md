@@ -12,7 +12,7 @@ PostgreSQL is the source of truth. Every campaign-owned record carries `campaign
 | CampaignMembership | campaignId, userId, role (OWNER/GM/PLAYER), joinedAt; unique campaign/user |
 | CampaignInvitation | campaignId, tokenHash, expiry, revokedAt, creatorId, acceptedAt; unique token hash |
 | Scene | campaignId, title, dimensions, backgroundAssetId, grid appearance/offset/snap/distance settings, sort order, active/published flags, initial camera values, archivedAt, optimistic version |
-| SceneLayer | Scene-owned ordered layer; kind (BACKGROUND/OBJECTS/TOKENS/GM/CUSTOM), player visibility, lock state, optimistic version. Four canonical layers are backfilled and created for new scenes. |
+| SceneLayer | Scene-owned ordered layer; kind (BACKGROUND/OBJECTS/TOKENS/GM/CUSTOM), player visibility, lock state, optimistic version. Four canonical layers are backfilled and created for new scenes; client-created layers must use CUSTOM. |
 | Asset | campaignId, storage key, detected media type, size, checksum, uploaderId; decoded dimensions are not stored yet |
 | SceneObject | Scene- and layer-owned item with kind, position, size, rotation, opacity, z-order, optional campaign asset, drawing points/text, visibility, lock and optimistic version. Server CRUD and basic rectangle/ellipse canvas rendering/controls exist; selection, transforms, image rendering and complete editing workflows remain open. |
 | Token | Scene-owned record with display data, grid-unit position, color, visibility, owner and optimistic version; V0.1 has no character model |

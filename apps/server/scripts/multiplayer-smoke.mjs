@@ -139,6 +139,8 @@ assert.equal(playerObjectEdit.status, 403, 'players cannot mutate GM layer objec
 const gmLayerExposure = await fetch(`${base}/api/layers/${gmLayer.id}`, { method: 'PATCH', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: gmLayer.version, visibleToPlayers: true }) });
 assert.equal(gmLayerExposure.status, 400, 'GM layer cannot be made visible to players');
 const { result: { layer: customLayer } } = await request(`/api/scenes/${scene.id}/layers`, { method: 'POST', cookie: owner.cookie, body: { name: 'Effects', kind: 'CUSTOM', sortOrder: 4, visibleToPlayers: true } });
+const extraCanonicalLayer = await fetch(`${base}/api/scenes/${scene.id}/layers`, { method: 'POST', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Extra GM', kind: 'GM', sortOrder: 5, visibleToPlayers: true }) });
+assert.equal(extraCanonicalLayer.status, 400, 'clients can create custom layers without duplicating canonical layer kinds');
 const movedBetweenLayers = await request(`/api/objects/${editableObject.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: editableObject.version, layerId: customLayer.id, zIndex: 4 } });
 assert.equal(movedBetweenLayers.result.object.layerId, customLayer.id, 'GM can move an object between layers in the same scene');
 const layerHiddenForPlayer = expectEvent(playerClient.socket, 'scene:layer_hidden');
@@ -147,6 +149,9 @@ const layerHiddenEvent = await layerHiddenForPlayer;
 assert.equal(layerHiddenEvent.layerId, customLayer.id, 'visibility change removes the layer for players');
 assert.equal(Object.hasOwn(layerHiddenEvent, 'name'), false, 'private layer names are not disclosed during hiding');
 assert.equal((await request(`/api/scenes/${scene.id}/layers`, { cookie: player.cookie })).result.some((layer) => layer.id === customLayer.id), false, 'hidden custom layer is absent from subsequent player snapshots');
+const nonEmptyLayerDelete = await fetch(`${base}/api/layers/${customLayer.id}`, { method: 'DELETE', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: privateCustomLayer.version }) });
+assert.equal(nonEmptyLayerDelete.status, 409, 'layers containing objects cannot be deleted');
+assert.equal((await request(`/api/scenes/${scene.id}/objects`, { cookie: owner.cookie })).result.some((object) => object.id === editableObject.id), true, 'rejected layer deletion preserves its objects');
 await request(`/api/objects/${editableObject.id}`, { method: 'DELETE', cookie: owner.cookie, body: { expectedVersion: movedBetweenLayers.result.object.version } });
 await request(`/api/layers/${customLayer.id}`, { method: 'DELETE', cookie: owner.cookie, body: { expectedVersion: privateCustomLayer.version } });
 const ownerMove = expectEvent(ownerClient.socket, 'token:moved');

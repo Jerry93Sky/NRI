@@ -363,7 +363,7 @@ app.post('/api/scenes/:sceneId/layers', async (request, reply) => {
   const role = await roleFor(scene.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
   if (scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-  const [layer] = await db.insert(sceneLayers).values({ ...input, sceneId, visibleToPlayers: input.kind === 'GM' ? false : input.visibleToPlayers }).returning();
+  const [layer] = await db.insert(sceneLayers).values({ ...input, sceneId }).returning();
   if (!layer) throw new Error('Layer creation failed');
   await db.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.layer_created', targetId: layer.id });
   const room = `campaign:${scene.campaignId}`;

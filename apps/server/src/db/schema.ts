@@ -44,7 +44,7 @@ export const sceneLayers = pgTable('scene_layers', {
   visibleToPlayers: boolean('visible_to_players').notNull().default(true), locked: boolean('locked').notNull().default(false), version: integer('version').notNull().default(1),
 }, (t) => [index('scene_layers_scene_idx').on(t.sceneId), index('scene_layers_scene_kind_idx').on(t.sceneId, t.kind), check('scene_layers_kind_check', sql`${t.kind} IN ('BACKGROUND', 'OBJECTS', 'TOKENS', 'GM', 'CUSTOM')`)]);
 export const sceneObjects = pgTable('scene_objects', {
-  id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }), layerId: uuid('layer_id').notNull().references(() => sceneLayers.id, { onDelete: 'cascade' }),
+  id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }), layerId: uuid('layer_id').notNull().references(() => sceneLayers.id, { onDelete: 'restrict' }),
   kind: varchar('kind', { length: 16 }).notNull(), x: doublePrecision('x').notNull(), y: doublePrecision('y').notNull(), width: doublePrecision('width').notNull().default(64), height: doublePrecision('height').notNull().default(64),
   rotation: doublePrecision('rotation').notNull().default(0), opacity: doublePrecision('opacity').notNull().default(1), zIndex: integer('z_index').notNull().default(0),
   assetId: uuid('asset_id').references(() => assets.id, { onDelete: 'set null' }), color: varchar('color', { length: 7 }), strokeWidth: doublePrecision('stroke_width'), points: jsonb('points').$type<Array<{ x: number; y: number }>>(), text: varchar('text', { length: 500 }),
