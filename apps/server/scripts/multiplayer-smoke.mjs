@@ -118,6 +118,9 @@ const { result: gmObjectsWithSecret } = await request(`/api/scenes/${scene.id}/o
 assert.equal(playerObjectsWithoutSecret.some((object) => object.id === secretObject.id), false, 'GM layer objects do not enter player snapshots');
 assert.equal(gmObjectsWithSecret.some((object) => object.id === secretObject.id), true, 'GM can read GM layer objects');
 const { result: { object: publicObject } } = await request(`/api/scenes/${scene.id}/objects`, { method: 'POST', cookie: owner.cookie, body: { layerId: objectsLayer.id, kind: 'ELLIPSE', x: 80, y: 90, width: 40, height: 30, color: '#557799' } });
+const { result: { object: lineObject } } = await request(`/api/scenes/${scene.id}/objects`, { method: 'POST', cookie: owner.cookie, body: { layerId: objectsLayer.id, kind: 'LINE', x: 20, y: 30, width: 96, height: 48, color: '#c8794a', strokeWidth: 3, points: [{ x: 0, y: 24 }, { x: 96, y: 24 }] } });
+assert.equal(lineObject.kind, 'LINE', 'line drawings persist as editable scene objects');
+assert.equal(lineObject.points.length, 2, 'line point geometry round-trips through the scene object API');
 const { result: playerObjectsWithPublic } = await request(`/api/scenes/${scene.id}/objects`, { cookie: player.cookie });
 assert.equal(playerObjectsWithPublic.some((object) => object.id === publicObject.id), true, 'players receive visible objects from public layers');
 const { result: { object: editableObject } } = await request(`/api/scenes/${scene.id}/objects`, { method: 'POST', cookie: owner.cookie, body: { layerId: objectsLayer.id, kind: 'RECTANGLE', x: 100, y: 110, width: 60, height: 40, rotation: 45, opacity: 0.5, zIndex: 3 } });
@@ -258,4 +261,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, token ownership, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy and duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, token ownership, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
