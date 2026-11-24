@@ -107,6 +107,18 @@ export function App() {
     return () => window.removeEventListener('nri-toggle-ruler', toggleRuler);
   }, []);
 
+  useEffect(() => {
+    const onTableKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (event.altKey || event.ctrlKey || event.metaKey || (target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)))) return;
+      if (event.key.toLowerCase() === 'r') { event.preventDefault(); setRulerActive(true); setDrawMode(false); }
+      else if (event.key.toLowerCase() === 'f') { event.preventDefault(); window.dispatchEvent(new Event('nri-fit-scene')); }
+      else if (event.key === 'Escape') { setRulerActive(false); setDrawMode(false); }
+    };
+    window.addEventListener('keydown', onTableKeyDown);
+    return () => window.removeEventListener('keydown', onTableKeyDown);
+  }, []);
+
   useEffect(() => { void api<{ user: User }>('/api/auth/me').then((result) => setUser(result.user)).catch(() => {}); return () => { socket.disconnect(); }; }, [socket]);
   useEffect(() => {
     if (!user) return;
