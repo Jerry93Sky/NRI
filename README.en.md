@@ -25,7 +25,7 @@ The API and web interface run locally, and `Amber Crossing` is available for man
 - Full layer/object editing, expanded token sheets, and undo/redo are not implemented yet. Grid calibration now previews cell size and offsets before saving; map-backed browser acceptance still needs a scene with an uploaded map.
 - Maps accept PNG/JPEG/WebP up to 12 MB; local storage does not validate full image decoding or dimension limits.
 - There is no automated Playwright suite, isolated backup restore drill, or performance measurement report. Package-local Vitest suites and a PostgreSQL API/Socket.IO smoke have been run.
-- Full layer/object editing, campaign export, and production deployment are not complete. GitHub Actions runs #29 and #30 passed on active-layer dragging implementation commit `b65cc5f`.
+- Full layer/object editing, campaign export, and production deployment are not complete. GitHub Actions runs #33 and #34 passed on active-layer drag/resize implementation commit `581b066`.
 - The asset library and additional tabletop tools are incomplete; full security review and owner acceptance are pending.
 
 ## Stack
