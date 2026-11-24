@@ -11,15 +11,16 @@ import { resolve } from 'node:path';
 import argon2 from 'argon2';
 import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenSchema } from '@nri/contracts';
+import { adjustTokenResourceSchema, canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenSchema } from '@nri/contracts';
 import { db, pool } from './db/index.js';
 import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
 import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
 
 function publicToken(token: typeof tokens.$inferSelect, includeHidden = false) {
-  const { hidden: _hidden, id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId } = token;
+  const { hidden: _hidden, resources: _resources, id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId } = token;
   const result = { id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId };
-  return includeHidden ? { ...result, hidden: token.hidden } : result;
+  const resources = includeHidden ? token.resources : token.resources.map((resource) => resource.visible ? { label: resource.label, current: resource.current, maximum: resource.maximum } : null);
+  return includeHidden ? { ...result, resources, hidden: token.hidden } : { ...result, resources };
 }
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] }, bodyLimit: 64 * 1024 });
@@ -770,6 +771,26 @@ app.patch('/api/tokens/:tokenId', async (request, reply) => {
   else if (isVisible) io.to(room).emit(wasVisible ? 'token:updated' : 'token:created', playerProjection);
   io.to(`${room}:gm`).emit('token:updated', projection);
   return { token: projection };
+});
+app.post('/api/tokens/:tokenId/resources/adjust', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { tokenId } = request.params as { tokenId: string };
+  const input = parseBody(adjustTokenResourceSchema, request.body);
+  const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
+  if (!row || row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(row.scene.campaignId, user.id);
+  if (!role || (!['OWNER', 'GM'].includes(role) && (row.token.hidden || !row.scene.isActive || row.token.ownerUserId !== user.id || !row.token.resources[input.resourceIndex].visible))) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (row.token.version !== input.expectedVersion) return reply.code(409).send({ error: 'CONFLICT' });
+  const resources = structuredClone(row.token.resources); const resource = resources[input.resourceIndex]; const current = resource.current + input.delta;
+  if (current < 0 || current > resource.maximum) return reply.code(409).send({ error: 'RESOURCE_LIMIT' });
+  resources[input.resourceIndex] = { ...resource, current };
+  const [updated] = await db.update(tokens).set({ resources, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, input.expectedVersion))).returning();
+  if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
+  await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.resource_adjusted', targetId: tokenId });
+  const room = `campaign:${row.scene.campaignId}`; const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
+  if (!updated.hidden && row.scene.isActive) io.to(room).emit('token:updated', playerProjection);
+  io.to(`${room}:gm`).emit('token:updated', projection);
+  return { token: role === 'OWNER' || role === 'GM' ? projection : playerProjection };
 });
 app.post('/api/tokens/:tokenId/owner', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;

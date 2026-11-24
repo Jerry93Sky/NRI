@@ -6,8 +6,11 @@ export const loginSchema = z.object({ email: z.email().max(254), password: z.str
 export const createCampaignSchema = z.object({ title: z.string().trim().min(1).max(80), description: z.string().trim().max(500).default('') });
 export const createSceneSchema = z.object({ campaignId: idSchema, title: z.string().trim().min(1).max(80), gridSize: z.number().int().min(16).max(128).default(48) });
 export const createTokenSchema = z.object({ sceneId: idSchema, name: z.string().trim().min(1).max(48), x: z.number().finite().min(-10000).max(10000), y: z.number().finite().min(-10000).max(10000), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#c8794a'), hidden: z.boolean().default(false) });
-const tokenPropertyFields = { name: z.string().trim().min(1).max(48), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), width: z.number().finite().min(0.25).max(100), height: z.number().finite().min(0.25).max(100), rotation: z.number().finite().min(-360000).max(360000), opacity: z.number().finite().min(0).max(1), borderColor: z.string().regex(/^#[0-9a-fA-F]{6}$/), zIndex: z.number().int().min(-100000).max(100000), hidden: z.boolean(), locked: z.boolean(), showName: z.boolean() };
+export const tokenResourceSchema = z.object({ label: z.string().trim().min(1).max(24), current: z.number().int().min(0).max(9999), maximum: z.number().int().min(0).max(9999), visible: z.boolean() }).refine((resource) => resource.current <= resource.maximum);
+export const tokenResourcesSchema = z.tuple([tokenResourceSchema, tokenResourceSchema]);
+const tokenPropertyFields = { name: z.string().trim().min(1).max(48), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), width: z.number().finite().min(0.25).max(100), height: z.number().finite().min(0.25).max(100), rotation: z.number().finite().min(-360000).max(360000), opacity: z.number().finite().min(0).max(1), borderColor: z.string().regex(/^#[0-9a-fA-F]{6}$/), zIndex: z.number().int().min(-100000).max(100000), hidden: z.boolean(), locked: z.boolean(), showName: z.boolean(), resources: tokenResourcesSchema };
 export const updateTokenSchema = z.object(tokenPropertyFields).partial().extend({ expectedVersion: z.number().int().positive() }).refine(({ expectedVersion: _version, ...patch }) => Object.values(patch).some((value) => value !== undefined));
+export const adjustTokenResourceSchema = z.object({ resourceIndex: z.union([z.literal(0), z.literal(1)]), delta: z.union([z.literal(-1), z.literal(1)]), expectedVersion: z.number().int().positive() });
 export const sceneLayerKindSchema = z.enum(['BACKGROUND', 'OBJECTS', 'TOKENS', 'GM', 'CUSTOM']);
 export const createSceneLayerSchema = z.object({ name: z.string().trim().min(1).max(48), kind: z.literal('CUSTOM'), sortOrder: z.number().int().min(-1000).max(1000).default(4), visibleToPlayers: z.boolean().default(true), locked: z.boolean().default(false) });
 export const updateSceneLayerSchema = z.object({ name: z.string().trim().min(1).max(48).optional(), sortOrder: z.number().int().min(-1000).max(1000).optional(), visibleToPlayers: z.boolean().optional(), locked: z.boolean().optional(), expectedVersion: z.number().int().positive() }).refine(({ expectedVersion: _version, ...patch }) => Object.values(patch).some((value) => value !== undefined));
@@ -27,13 +30,16 @@ export type CreateCampaignInput = z.infer<typeof createCampaignSchema>;
 export type CreateSceneInput = z.infer<typeof createSceneSchema>;
 export type CreateTokenInput = z.infer<typeof createTokenSchema>;
 export type UpdateTokenInput = z.infer<typeof updateTokenSchema>;
+export type TokenResource = z.infer<typeof tokenResourceSchema>;
+export type AdjustTokenResourceInput = z.infer<typeof adjustTokenResourceSchema>;
 export type CreateSceneLayerInput = z.infer<typeof createSceneLayerSchema>;
 export type SceneLayerKind = z.infer<typeof sceneLayerKindSchema>;
 export type CreateSceneObjectInput = z.infer<typeof createSceneObjectSchema>;
 export type UpdateSceneObjectInput = z.infer<typeof updateSceneObjectSchema>;
 export type MoveTokenInput = z.infer<typeof moveTokenSchema>;
 
-export type PublicToken = { id: string; sceneId: string; name: string; x: number; y: number; color: string; width: number; height: number; rotation: number; opacity: number; borderColor: string; zIndex: number; locked: boolean; showName: boolean; hidden?: boolean; version: number; ownerUserId: string | null };
+export type TokenResourceView = Pick<TokenResource, 'label' | 'current' | 'maximum'> & { visible?: boolean };
+export type PublicToken = { id: string; sceneId: string; name: string; x: number; y: number; color: string; width: number; height: number; rotation: number; opacity: number; borderColor: string; zIndex: number; locked: boolean; showName: boolean; resources: [TokenResourceView | null, TokenResourceView | null]; hidden?: boolean; version: number; ownerUserId: string | null };
 export type TokenMoved = { type: 'token.moved'; token: PublicToken };
 
 export function canMoveToken(role: string | null, actorId: string, ownerUserId: string | null, hidden: boolean): boolean {

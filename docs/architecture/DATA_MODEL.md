@@ -15,7 +15,7 @@ PostgreSQL is the source of truth. Every campaign-owned record carries `campaign
 | SceneLayer | Scene-owned ordered layer; kind (BACKGROUND/OBJECTS/TOKENS/GM/CUSTOM), player visibility, lock state, optimistic version. Four canonical layers are backfilled and created for new scenes; client-created layers must use CUSTOM. |
 | Asset | campaignId, storage key, detected media type, size, checksum, uploaderId; decoded dimensions are not stored yet |
 | SceneObject | Scene- and layer-owned item with kind, position, size, rotation, opacity, z-order, optional campaign asset, drawing points/text, visibility, lock and optimistic version. Server CRUD and basic rectangle/ellipse canvas rendering/controls exist; selection, transforms, image rendering and complete editing workflows remain open. |
-| Token | Scene-owned record with display data, grid-unit position, color, visibility, owner and optimistic version; V0.1 has no character model |
+| Token | Scene-owned record with display data, grid-unit position, color, visibility, owner, two generic `{label,current,maximum,visible}` resource tracks, and optimistic version; V0.1 has no character model |
 | TokenOwnership | tokenId, userId; unique token/user; authorization checked on server |
 | ChatMessage | campaignId, senderId, channel/recipient, body, timestamp; secret recipient scoped |
 | DiceRoll | campaignId, userId, parsed expression, server result and timestamp |
@@ -23,7 +23,7 @@ PostgreSQL is the source of truth. Every campaign-owned record carries `campaign
 | InitiativeEntry | trackerId, tokenId or participant reference, initiative, tie order, hidden flag |
 | AuditEvent | campaignId, actorId, action, target, timestamp, redacted metadata |
 
-Prefer numeric database IDs internally and opaque identifiers at public boundaries. Token ownership is separate from campaign role. Mutable scenes, tokens, and initiative trackers use optimistic versions. Critical invite acceptance, role changes, token ownership changes, scene activation, and initiative transitions are audited. Avoid storing plaintext invitation/session secrets. Scene duplication copies layers and objects with independent IDs in one transaction. Layer/object REST operations check campaign membership and scene scope; mutable records use optimistic versions. Scene activation and archive fallback also use transactions.
+Prefer numeric database IDs internally and opaque identifiers at public boundaries. Token ownership is separate from campaign role. Mutable scenes, tokens, and initiative trackers use optimistic versions. Player token projections include only resource tracks marked visible; owner adjustments are restricted to visible tracks and server-side bounds. Critical invite acceptance, role changes, token ownership changes, scene activation, and initiative transitions are audited. Avoid storing plaintext invitation/session secrets. Scene duplication copies layers and objects with independent IDs in one transaction. Layer/object REST operations check campaign membership and scene scope; mutable records use optimistic versions. Scene activation and archive fallback also use transactions.
 
 ## Explicitly deferred
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canMoveToken, createSceneLayerSchema, createSceneObjectSchema, parseDiceExpression, updateSceneObjectSchema, updateTokenSchema } from './index.js';
+import { adjustTokenResourceSchema, canMoveToken, createSceneLayerSchema, createSceneObjectSchema, parseDiceExpression, updateSceneObjectSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
 
 describe('campaign-scoped token permissions', () => {
   it('allows the owner of a visible player token', () => expect(canMoveToken('PLAYER', 'u1', 'u1', false)).toBe(true));
@@ -45,5 +45,12 @@ describe('token property contracts', () => {
     expect(updateTokenSchema.safeParse({ expectedVersion: 3, opacity: 1.1 }).success).toBe(false);
     expect(updateTokenSchema.safeParse({ expectedVersion: 3, width: 0.1 }).success).toBe(false);
     expect(updateTokenSchema.safeParse({ name: 'Goblin' }).success).toBe(false);
+  });
+  it('requires exactly two system-neutral resources with bounded current values', () => {
+    expect(tokenResourcesSchema.safeParse([{ label: 'Health', current: 4, maximum: 8, visible: true }, { label: 'Focus', current: 1, maximum: 3, visible: false }]).success).toBe(true);
+    expect(tokenResourcesSchema.safeParse([{ label: 'Health', current: 9, maximum: 8, visible: true }, { label: 'Focus', current: 0, maximum: 3, visible: false }]).success).toBe(false);
+    expect(tokenResourcesSchema.safeParse([{ label: 'Health', current: 1, maximum: 8, visible: true }]).success).toBe(false);
+    expect(adjustTokenResourceSchema.safeParse({ resourceIndex: 1, delta: -1, expectedVersion: 2 }).success).toBe(true);
+    expect(adjustTokenResourceSchema.safeParse({ resourceIndex: 2, delta: 0, expectedVersion: 2 }).success).toBe(false);
   });
 });

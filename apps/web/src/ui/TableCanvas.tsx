@@ -127,6 +127,8 @@ export function TableCanvas(props: Props) {
         const width = size * token.width; const height = size * token.height;
         const disc = new Graphics().ellipse(0, 0, width * 0.42, height * 0.42).fill(token.color).stroke({ color: Number.parseInt(token.borderColor.slice(1), 16), alpha: 0.9, width: Math.max(1, size * 0.04) });
         if (token.showName) { const label = new Text({ text: token.name, style: { fontFamily: 'Arial', fontSize: Math.max(10, size * 0.25), fill: 0xf5eadc, align: 'center' } }); label.anchor.set(0.5, -2); label.y = height * 0.45; node.addChild(disc, label); } else node.addChild(disc);
+        const resourceText = token.resources.filter((resource) => resource !== null).map((resource) => `${resource.label} ${resource.current}/${resource.maximum}`).join(' · ');
+        if (resourceText) { const resourceLabel = new Text({ text: resourceText, style: { fontFamily: 'Arial', fontSize: Math.max(8, size * 0.16), fill: 0xd8c6a9, align: 'center' } }); resourceLabel.anchor.set(0.5, 0); resourceLabel.y = height * 0.45 + Math.max(10, size * 0.24); node.addChild(resourceLabel); }
         node.eventMode = 'static'; node.cursor = latest.current.canEdit(token) && !token.locked ? 'grab' : 'default';
         node.on('pointerdown', (event) => {
           if (!latest.current.canEdit(token) || token.locked) return;
