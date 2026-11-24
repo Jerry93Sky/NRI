@@ -16,7 +16,7 @@ The API and web interface run locally, and `Amber Crossing` is available for man
 - Registration, login, logout, sessions, and rate limits.
 - Campaigns, Owner/GM/Player roles, capped and revocable invitations, archive and restore.
 - Scenes with a player-active version and GM drafts, rename, duplicate, archive/restore, ordering, and configurable grid/camera; players receive only the active scene.
-- Tokens, ownership assignment, server-authorized movement, and Socket.IO synchronization. The tabletop has active-layer selection, visibility/lock controls, and rectangle/ellipse create, visibility, lock, rotation, opacity, z-order, same-scene layer move, duplicate, delete, and rendering. The server enforces versions and GM-content filtering. Direct canvas movement/resizing, image rendering, layer ordering, and clipboard workflows remain incomplete.
+- Tokens, ownership assignment, server-authorized movement, and Socket.IO synchronization. The tabletop has active-layer selection, visibility/lock controls, rectangle/ellipse creation, and canvas dragging for editable objects on the active layer. Object visibility, lock, rotation, opacity, z-order, same-scene layer move, duplicate, delete, and rendering are also available. The server enforces versions and GM-content filtering. Resizing, image rendering, layer ordering, and clipboard workflows remain incomplete.
 - Public and private chat, server-side dice rolls, and initiative with hidden-turn filtering.
 - Russian and English UI, local development, Docker Compose, PostgreSQL migrations, and a CI workflow.
 
