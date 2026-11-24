@@ -24,7 +24,7 @@ The API and web interface run locally, and the demo campaign `Amber Crossing` is
 - The UI supports creating and selecting scenes; scene rename, duplicate, and archive flows are incomplete. Grid size and settings cannot be changed through the UI.
 - Maps accept PNG/JPEG/WebP up to 12 MB; local storage does not validate full image decoding or dimension limits.
 - There is no automated Playwright suite, isolated backup restore drill, or performance measurement report.
-- Full layer/object editing, campaign export, and production deployment are not complete. The CI workflow is prepared but has not yet been confirmed on GitHub.
+- Full layer/object editing, campaign export, and production deployment are not complete. GitHub Actions has passed on the work branch.
 - Full security review and owner acceptance are pending.
 
 ## Stack
