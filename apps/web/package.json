@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "vite --host 127.0.0.1", "build": "tsc --noEmit && vite build", "typecheck": "tsc --noEmit", "test": "vitest run --passWithNoTests" },
+  "scripts": { "dev": "vite --host 127.0.0.1", "build": "tsc --noEmit && vite build", "typecheck": "tsc --noEmit", "test": "vitest run" },
   "dependencies": {
     "@nri/contracts": "workspace:*", "i18next": "25.6.3", "pixi.js": "8.23.0", "react": "19.3.1", "react-dom": "19.3.1", "react-i18next": "18.0.3", "socket.io-client": "4.8.4", "zustand": "5.1.0"
   },
