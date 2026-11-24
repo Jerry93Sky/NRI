@@ -83,17 +83,24 @@ const { result: { token: playerToken } } = await request('/api/tokens', { method
 const playerTokenPatch = await fetch(`${base}/api/tokens/${playerToken.id}`, { method: 'PATCH', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: playerToken.version, name: 'Forged name' }) });
 assert.equal(playerTokenPatch.status, 403, 'players cannot edit token properties through the REST API');
 const resources = [{ label: 'Health', current: 4, maximum: 8, visible: true }, { label: 'Focus', current: 1, maximum: 3, visible: false }];
-const { result: { token: customizedToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: playerToken.version, width: 1.5, height: 2, rotation: 45, opacity: 0.75, borderColor: '#aabbcc', zIndex: 2, showName: false, resources } });
+const { result: { token: customizedToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: playerToken.version, width: 1.5, height: 2, rotation: 45, opacity: 0.75, borderColor: '#aabbcc', zIndex: 2, showName: false, resources, gmNote: 'GM secret note', ownerNote: 'Owner-only note' } });
 assert.equal(customizedToken.width, 1.5); assert.equal(customizedToken.rotation, 45); assert.equal(customizedToken.showName, false); assert.deepEqual(customizedToken.resources, resources);
+assert.equal(customizedToken.gmNote, 'GM secret note'); assert.equal(customizedToken.ownerNote, 'Owner-only note');
 const staleTokenPatch = await fetch(`${base}/api/tokens/${playerToken.id}`, { method: 'PATCH', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: playerToken.version, name: 'Stale edit' }) });
 assert.equal(staleTokenPatch.status, 409, 'stale token property writes are rejected');
 const { result: assignment } = await request(`/api/tokens/${playerToken.id}/owner`, { method: 'POST', cookie: owner.cookie, body: { ownerUserId: player.user.id } });
 const { result: { token: hiddenToken } } = await request('/api/tokens', { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, name: 'Hidden GM note', x: 6, y: 2, color: '#886644', hidden: true } });
 const { result: playerTokens } = await request(`/api/scenes/${scene.id}/tokens`, { cookie: player.cookie });
+const { result: observerTokens } = await request(`/api/scenes/${scene.id}/tokens`, { cookie: observer.cookie });
 const { result: ownerTokens } = await request(`/api/scenes/${scene.id}/tokens`, { cookie: owner.cookie });
 assert.equal(Object.hasOwn(playerTokens.find((item) => item.id === playerToken.id), 'hidden'), false, 'player-visible token projections omit the hidden-state flag');
 assert.deepEqual(playerTokens.find((item) => item.id === playerToken.id).resources, [{ label: 'Health', current: 4, maximum: 8 }, null], 'player token projections include only resources marked visible');
 assert.deepEqual(ownerTokens.find((item) => item.id === playerToken.id).resources, resources, 'GM token projections include both resource tracks and visibility settings');
+assert.equal(playerTokens.find((item) => item.id === playerToken.id).ownerNote, 'Owner-only note', 'token owners receive their owner note');
+assert.equal(Object.hasOwn(playerTokens.find((item) => item.id === playerToken.id), 'gmNote'), false, 'players never receive GM notes');
+assert.equal(Object.hasOwn(observerTokens.find((item) => item.id === playerToken.id), 'ownerNote'), false, 'other players never receive owner notes');
+assert.equal(Object.hasOwn(observerTokens.find((item) => item.id === playerToken.id), 'gmNote'), false, 'other players never receive GM notes');
+assert.equal(ownerTokens.find((item) => item.id === playerToken.id).gmNote, 'GM secret note');
 assert.equal(ownerTokens.find((item) => item.id === hiddenToken.id).hidden, true, 'GM token projections include hidden-state management data');
 assert.equal(playerTokens.some((item) => item.id === hiddenToken.id), false, 'hidden token must not appear in player snapshot');
 assert.equal(ownerTokens.some((item) => item.id === hiddenToken.id), true, 'GM snapshot must include hidden token');
@@ -123,8 +130,13 @@ const { result: { token: resourceAdjustedToken } } = await request(`/api/tokens/
 assert.equal(resourceAdjustedToken.resources[0].current, 3, 'token owners can decrement their visible resource');
 assert.equal(resourceAdjustedToken.resources[1], null, 'players cannot read the hidden resource');
 await resourceUpdatedForOwner;
+const ownerNoteEvent = expectEvent(playerClient.socket, 'token:owner_note');
+const { result: { token: tokenWithUpdatedNotes } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: resourceAdjustedToken.version, ownerNote: 'Updated owner-only note' } });
+const ownerNotePayload = await ownerNoteEvent;
+assert.equal(ownerNotePayload.ownerNote, 'Updated owner-only note', 'only the owner receives owner-note changes in realtime');
+assert.equal(Object.hasOwn(ownerNotePayload, 'gmNote'), false, 'owner-note events do not include GM notes');
 const tokenHiddenForPlayer = expectEvent(playerClient.socket, 'token:hidden');
-const { result: { token: hiddenPlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: resourceAdjustedToken.version, hidden: true } });
+const { result: { token: hiddenPlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: tokenWithUpdatedNotes.version, hidden: true } });
 assert.equal(hiddenPlayerToken.hidden, true);
 assert.equal((await tokenHiddenForPlayer).id, playerToken.id, 'players receive a safe removal when a token becomes hidden');
 assert.equal((await request(`/api/scenes/${scene.id}/tokens`, { cookie: player.cookie })).result.some((token) => token.id === playerToken.id), false, 'hidden token is removed from player snapshots');
@@ -298,4 +310,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, map ACL, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

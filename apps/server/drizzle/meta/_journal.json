@@ -78,6 +78,13 @@
       "when": 1795533996776,
       "tag": "0010_token_resources",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795534736327,
+      "tag": "0011_low_eternals",
+      "breakpoints": true
     }
   ]
 }

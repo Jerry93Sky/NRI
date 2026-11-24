@@ -44,6 +44,8 @@ describe('token property contracts', () => {
     expect(updateTokenSchema.parse({ expectedVersion: 3, width: 1.5, rotation: 45, hidden: true })).toMatchObject({ expectedVersion: 3, width: 1.5, rotation: 45, hidden: true });
     expect(updateTokenSchema.safeParse({ expectedVersion: 3, opacity: 1.1 }).success).toBe(false);
     expect(updateTokenSchema.safeParse({ expectedVersion: 3, width: 0.1 }).success).toBe(false);
+    expect(updateTokenSchema.parse({ expectedVersion: 3, gmNote: 'private prep', ownerNote: 'Share with token owner' })).toMatchObject({ gmNote: 'private prep', ownerNote: 'Share with token owner' });
+    expect(updateTokenSchema.safeParse({ expectedVersion: 3, gmNote: 'x'.repeat(4001) }).success).toBe(false);
     expect(updateTokenSchema.safeParse({ name: 'Goblin' }).success).toBe(false);
   });
   it('requires exactly two system-neutral resources with bounded current values', () => {

@@ -16,11 +16,12 @@ import { db, pool } from './db/index.js';
 import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
 import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
 
-function publicToken(token: typeof tokens.$inferSelect, includeHidden = false) {
-  const { hidden: _hidden, resources: _resources, id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId } = token;
+function publicToken(token: typeof tokens.$inferSelect, includeHidden = false, viewerUserId?: string) {
+  const { hidden: _hidden, resources: _resources, gmNote: _gmNote, ownerNote: _ownerNote, id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId } = token;
   const result = { id, sceneId, name, x, y, color, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId };
   const resources = includeHidden ? token.resources : token.resources.map((resource) => resource.visible ? { label: resource.label, current: resource.current, maximum: resource.maximum } : null);
-  return includeHidden ? { ...result, resources, hidden: token.hidden } : { ...result, resources };
+  if (includeHidden) return { ...result, resources, hidden: token.hidden, gmNote: token.gmNote, ownerNote: token.ownerNote };
+  return { ...result, resources, ...(viewerUserId && viewerUserId === token.ownerUserId ? { ownerNote: token.ownerNote } : {}) };
 }
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] }, bodyLimit: 64 * 1024 });
@@ -737,7 +738,7 @@ app.get('/api/scenes/:sceneId/tokens', async (request, reply) => {
   const role = await roleFor(scene.campaignId, user.id);
   if (!role || !canReadSceneTokens(role, scene.isActive, scene.archivedAt !== null)) return reply.code(404).send({ error: 'NOT_FOUND' });
   const rows = await db.select().from(tokens).where(eq(tokens.sceneId, sceneId));
-  return rows.filter((token) => !token.hidden || role === 'OWNER' || role === 'GM').map((token) => publicToken(token, role === 'OWNER' || role === 'GM'));
+  return rows.filter((token) => !token.hidden || role === 'OWNER' || role === 'GM').map((token) => publicToken(token, role === 'OWNER' || role === 'GM', user.id));
 });
 app.post('/api/tokens', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
@@ -767,6 +768,7 @@ app.patch('/api/tokens/:tokenId', async (request, reply) => {
   if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
   await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.updated', targetId: tokenId });
   const room = `campaign:${row.scene.campaignId}`; const wasVisible = !row.token.hidden && row.scene.isActive; const isVisible = !updated.hidden && row.scene.isActive; const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
+  if (!updated.hidden && row.scene.isActive && updated.ownerUserId && updated.ownerNote !== row.token.ownerNote) io.to(`user:${updated.ownerUserId}`).emit('token:owner_note', { id: updated.id, ownerUserId: updated.ownerUserId, ownerNote: updated.ownerNote, version: updated.version });
   if (wasVisible && !isVisible) io.to(room).emit('token:hidden', { id: updated.id, sceneId: updated.sceneId });
   else if (isVisible) io.to(room).emit(wasVisible ? 'token:updated' : 'token:created', playerProjection);
   io.to(`${room}:gm`).emit('token:updated', projection);
@@ -805,6 +807,7 @@ app.post('/api/tokens/:tokenId/owner', async (request, reply) => {
   const [updated] = await db.update(tokens).set({ ownerUserId: input.ownerUserId, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, row.token.version))).returning();
   if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
   await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.owner_changed', targetId: tokenId });
+  if (!updated.hidden && row.scene.isActive) for (const memberId of new Set([row.token.ownerUserId, updated.ownerUserId].filter((id): id is string => Boolean(id)))) io.to(`user:${memberId}`).emit('token:owner_note', { id: updated.id, ownerUserId: updated.ownerUserId, ownerNote: updated.ownerNote, version: updated.version });
   const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
   ((updated.hidden || !row.scene.isActive) ? io.to(`campaign:${row.scene.campaignId}:gm`) : io.to(`campaign:${row.scene.campaignId}`)).emit('token:updated', updated.hidden || !row.scene.isActive ? projection : playerProjection);
   return { token: projection };

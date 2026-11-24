@@ -37,7 +37,7 @@ REST endpoints implement scene activation and editing, token creation/ownership,
 | `scene:layer_hidden` | Campaign room receives only `{sceneId, layerId}` when a formerly visible layer becomes private; layer name/details remain GM-only |
 | `scene:object_created`, `scene:object_updated`, `scene:object_deleted` | Public visible active-scene objects go to campaign room; GM-only, hidden, draft-scene and private transitions stay in GM room; public objects leaving visibility emit a remove event |
 
-Players receive only the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive/archived scenes are denied. Hidden token snapshots, hidden token resource tracks, scene layers/objects, and hidden initiative details use separate role projections. Players may adjust visible resource tracks only on owned tokens. Player layer/object snapshots omit GM or non-visible layers and invisible objects. Clients must not use local filtering as an access control.
+Players receive only the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive/archived scenes are denied. Hidden token snapshots, hidden token resource tracks, GM notes, owner notes, scene layers/objects, and hidden initiative details use separate role projections. GM token notes stay in GM projections; owner notes are sent to the assigned owner's user room only while the token is visible in the active scene. Players may adjust visible resource tracks only on owned tokens. Player layer/object snapshots omit GM or non-visible layers and invisible objects. Clients must not use local filtering as an access control.
 
 ## Concurrency and recovery limits
 
