@@ -6,7 +6,7 @@ import { zoomToPointer } from './canvasMath';
 type Props = {
   tokens: PublicToken[]; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number;
-  onMove: (token: PublicToken, x: number, y: number) => void; canEdit: (token: PublicToken) => boolean;
+  onMove: (token: PublicToken, x: number, y: number) => void; canEdit: (token: PublicToken) => boolean; fitLabel: string;
 };
 
 export function TableCanvas(props: Props) {
@@ -130,5 +130,5 @@ export function TableCanvas(props: Props) {
     if (canvas) canvas.dispatchEvent(new Event('nri-refresh'));
   }, [tokens, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom]);
 
-  return <div className="table-canvas" ref={host}><div className="canvas-controls"><button aria-label="Fit scene" title="Fit scene" onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>Fit</button></div></div>;
+  return <div className="table-canvas" ref={host}><div className="canvas-controls"><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div></div>;
 }
