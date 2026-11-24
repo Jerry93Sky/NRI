@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { zoomToPointer } from './canvasMath';
+import { calculateCellSize, zoomToPointer } from './canvasMath';
 
 describe('canvas camera math', () => {
   it('keeps the same world coordinate under the cursor while zooming', () => {
@@ -19,5 +19,13 @@ describe('canvas camera math', () => {
     expect(after.scale).toBe(2.2);
     expect((pointer.x - after.x) / after.scale).toBeCloseTo(50);
     expect((pointer.y - after.y) / after.scale).toBeCloseTo(100);
+  });
+
+  it('calibrates cell size from a measured span and rejects out-of-range results', () => {
+    expect(calculateCellSize(192, 4)).toBe(48);
+    expect(calculateCellSize(190, 4)).toBe(48);
+    expect(calculateCellSize(4, 1)).toBeNull();
+    expect(calculateCellSize(1000, 1)).toBeNull();
+    expect(calculateCellSize(100, 0)).toBeNull();
   });
 });

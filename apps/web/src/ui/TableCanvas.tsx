@@ -7,6 +7,7 @@ type Props = {
   tokens: PublicToken[]; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number;
   onMove: (token: PublicToken, x: number, y: number) => void; canEdit: (token: PublicToken) => boolean; fitLabel: string;
+  calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
 };
 
 export function TableCanvas(props: Props) {
@@ -48,12 +49,15 @@ export function TableCanvas(props: Props) {
       grid.clear();
       const { gridSize: size, gridColor: color, gridOpacity: opacity, gridOffsetX: offsetX, gridOffsetY: offsetY, gridEnabled: enabled } = latest.current;
       if (!enabled) return;
+      const gridCellSize = latest.current.gridPreviewSize ?? size;
+      const gridX = latest.current.gridPreviewOffsetX ?? offsetX;
+      const gridY = latest.current.gridPreviewOffsetY ?? offsetY;
       const { sceneWidth: width, sceneHeight: height } = latest.current;
-      const ox = ((offsetX % size) + size) % size;
-      const oy = ((offsetY % size) + size) % size;
-      const startX = ox === 0 ? 0 : ox - size; const startY = oy === 0 ? 0 : oy - size;
-      for (let x = startX; x <= width; x += size) grid.moveTo(x, 0).lineTo(x, height);
-      for (let y = startY; y <= height; y += size) grid.moveTo(0, y).lineTo(width, y);
+      const ox = ((gridX % gridCellSize) + gridCellSize) % gridCellSize;
+      const oy = ((gridY % gridCellSize) + gridCellSize) % gridCellSize;
+      const startX = ox === 0 ? 0 : ox - gridCellSize; const startY = oy === 0 ? 0 : oy - gridCellSize;
+      for (let x = startX; x <= width; x += gridCellSize) grid.moveTo(x, 0).lineTo(x, height);
+      for (let y = startY; y <= height; y += gridCellSize) grid.moveTo(0, y).lineTo(width, y);
       grid.stroke({ color: Number.parseInt(color.slice(1), 16) || 0x44453e, alpha: opacity, width: 1 });
     };
     const redrawMap = async () => {
@@ -98,11 +102,22 @@ export function TableCanvas(props: Props) {
       redrawGrid(); redrawTokens(); void redrawMap();
     };
     const fit = () => fitScene();
+    const calibrationPoints: Array<{ x: number; y: number }> = [];
+    const onCalibrationClick = (event: { global: { x: number; y: number } }) => {
+      if (!latest.current.calibrationActive) { calibrationPoints.length = 0; return; }
+      const point = world.toLocal(event.global);
+      calibrationPoints.push({ x: point.x, y: point.y });
+      if (calibrationPoints.length === 2) {
+        latest.current.onCalibrationComplete(calibrationPoints[0]!, calibrationPoints[1]!);
+        calibrationPoints.length = 0;
+      }
+    };
     const start = async () => {
       await app.init({ resizeTo: host.current!, background: '#222421', backgroundAlpha: 0, antialias: true, resolution: Math.min(window.devicePixelRatio || 1, 2), autoDensity: true });
       initialized = true;
       if (cancelled || !host.current) { if (!destroyed) { destroyed = true; app.destroy(true, { children: true }); } return; }
       app.stage.hitArea = app.screen;
+      app.stage.on('pointerdown', onCalibrationClick);
       host.current.appendChild(app.canvas); refresh();
       app.canvas.addEventListener('nri-refresh', refresh);
       window.addEventListener('nri-fit-scene', fit);
@@ -128,7 +143,7 @@ export function TableCanvas(props: Props) {
   useEffect(() => {
     const canvas = host.current?.querySelector('canvas');
     if (canvas) canvas.dispatchEvent(new Event('nri-refresh'));
-  }, [tokens, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom]);
+  }, [tokens, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY]);
 
   return <div className="table-canvas" ref={host}><div className="canvas-controls"><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div></div>;
 }

@@ -9,7 +9,7 @@ NRI Platform is a system-neutral virtual tabletop for role-playing games. Its co
 - **Automated checks:** AUTOMATED_TESTS_PASSED for the local checks that exist
 - **Owner acceptance:** IN_PROGRESS — V0.1.1 technical gates remain open
 
-The API and web interface run locally, and `Amber Crossing` is available for manual review. V0.1.1 remains in progress: object layers, grid calibration, expanded token properties, asset library, tabletop tools, Playwright, backup/restore, and load checks are incomplete. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md).
+The API and web interface run locally, and `Amber Crossing` is available for manual review. V0.1.1 remains in progress: object layers, image-backed calibration acceptance, expanded token properties, asset library, tabletop tools, Playwright, backup/restore, and load checks are incomplete. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md).
 
 ## Implemented
 
@@ -22,7 +22,7 @@ The API and web interface run locally, and `Amber Crossing` is available for man
 
 ## V0.1.1 limitations
 
-- Scene layers and freeform objects, grid calibration, expanded token sheets, and undo/redo are not implemented yet.
+- Scene layers and freeform objects, expanded token sheets, and undo/redo are not implemented yet. Grid calibration now previews cell size and offsets before saving; map-backed browser acceptance still needs a scene with an uploaded map.
 - Maps accept PNG/JPEG/WebP up to 12 MB; local storage does not validate full image decoding or dimension limits.
 - There is no automated Playwright suite, isolated backup restore drill, or performance measurement report. Package-local Vitest suites and a PostgreSQL API/Socket.IO smoke have been run.
 - Full layer/object editing, campaign export, and production deployment are not complete. GitHub Actions has passed on the work branch.

@@ -10,7 +10,8 @@ All notable project changes will be recorded here.
 - Added non-empty Vitest suites for server scene access policy and web camera zoom math; removed `--passWithNoTests` from server and web scripts.
 - Lazy-loaded the Pixi tabletop; current measured web entry and canvas chunks are documented in the V0.1.1 acceptance report.
 - Localized scene preparation actions, settings, camera controls, and canvas hints in Russian and English.
-- V0.1.1 is still in progress. Layers, calibration, richer tokens, asset library, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
+- Added map-based grid calibration with two-point measurement, cell-count sizing, and unsaved cell-size/offset preview; mapped browser acceptance remains pending.
+- V0.1.1 is still in progress. Layers, mapped browser acceptance for calibration, richer tokens, asset library, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
 
 ## Unreleased — V0.1 foundation
 

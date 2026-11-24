@@ -6,3 +6,9 @@ export function zoomToPointer(current: CameraTransform, pointer: { x: number; y:
   const scale = Math.max(min, Math.min(max, current.scale * factor));
   return { scale, x: pointer.x - worldX * scale, y: pointer.y - worldY * scale };
 }
+
+export function calculateCellSize(distance: number, cellCount: number, min = 8, max = 256): number | null {
+  if (!Number.isFinite(distance) || !Number.isFinite(cellCount) || distance <= 0 || cellCount <= 0) return null;
+  const size = Math.round(distance / cellCount);
+  return size >= min && size <= max ? size : null;
+}
