@@ -5,7 +5,7 @@ import type { PublicToken } from '@nri/contracts';
 import { measureSceneDistance, selectTokenIdsInRect, zoomToPointer } from './canvasMath';
 
 type Props = {
-  tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
+  tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; assetId: string | null; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number; unitsPerCell: number; unitLabel: string;
   onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; fitLabel: string; rulerActive: boolean; rulerLabel: string; selectionMode: boolean; selectionLabel: string; onSelectTokens: (ids: string[]) => void; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
@@ -33,6 +33,8 @@ export function TableCanvas(props: Props) {
     const pieces = new Container();
     const tokenTextures = new Map<string, Texture>();
     const pendingTokenTextures = new Set<string>();
+    const objectTextures = new Map<string, Texture>();
+    const pendingObjectTextures = new Set<string>();
     let refresh = () => {};
     world.addChild(base, mapLayer, grid, rulerDisplay, objectsDisplay, pieces, selectionDisplay);
     app.stage.addChild(world);
@@ -81,6 +83,22 @@ export function TableCanvas(props: Props) {
           shape.moveTo(item.points[0]!.x - item.width / 2, item.points[0]!.y - item.height / 2);
           for (const point of item.points.slice(1)) shape.lineTo(point.x - item.width / 2, point.y - item.height / 2);
           shape.stroke({ color, alpha: 1, width: item.strokeWidth ?? 2 });
+        } else if (item.kind === 'IMAGE' && item.assetId) {
+          const texture = objectTextures.get(item.assetId);
+          if (texture) {
+            const image = new Sprite(texture); image.anchor.set(0.5); image.width = item.width; image.height = item.height; shape.addChild(image);
+          } else {
+            shape.rect(-item.width / 2, -item.height / 2, item.width, item.height).fill({ color, alpha: 0.22 }).stroke({ color, alpha: 1, width: 1 });
+            if (!pendingObjectTextures.has(item.assetId)) {
+              pendingObjectTextures.add(item.assetId);
+              const assetId = item.assetId;
+              void Assets.load(`/api/assets/${assetId}`).then((texture) => {
+                objectTextures.set(assetId, texture);
+                pendingObjectTextures.delete(assetId);
+                if (!cancelled && latest.current.objects.some((current) => current.id === item.id && current.assetId === assetId && (current.visible || latest.current.canManage))) refresh();
+              }).catch(() => pendingObjectTextures.delete(assetId));
+            }
+          }
         } else if (item.kind === 'TEXT' && item.text) shape.rect(-item.width / 2, -item.height / 2, item.width, item.height).fill({ color, alpha: 0.18 }).stroke({ color, alpha: 1, width: 1 });
         else continue;
         if (latest.current.canEditObject(item)) {
