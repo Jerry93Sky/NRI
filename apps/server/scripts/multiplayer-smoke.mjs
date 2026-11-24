@@ -141,10 +141,12 @@ assert.equal(gmLayerExposure.status, 400, 'GM layer cannot be made visible to pl
 const { result: { layer: customLayer } } = await request(`/api/scenes/${scene.id}/layers`, { method: 'POST', cookie: owner.cookie, body: { name: 'Effects', kind: 'CUSTOM', sortOrder: 4, visibleToPlayers: true } });
 const extraCanonicalLayer = await fetch(`${base}/api/scenes/${scene.id}/layers`, { method: 'POST', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Extra GM', kind: 'GM', sortOrder: 5, visibleToPlayers: true }) });
 assert.equal(extraCanonicalLayer.status, 400, 'clients can create custom layers without duplicating canonical layer kinds');
+const sortedCustomLayer = await request(`/api/layers/${customLayer.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: customLayer.version, sortOrder: -1 } });
+assert.equal((await request(`/api/scenes/${scene.id}/layers`, { cookie: owner.cookie })).result[0].id, customLayer.id, 'layer order updates persist and affect scene projections');
 const movedBetweenLayers = await request(`/api/objects/${editableObject.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: editableObject.version, layerId: customLayer.id, zIndex: 4 } });
 assert.equal(movedBetweenLayers.result.object.layerId, customLayer.id, 'GM can move an object between layers in the same scene');
 const layerHiddenForPlayer = expectEvent(playerClient.socket, 'scene:layer_hidden');
-const { result: { layer: privateCustomLayer } } = await request(`/api/layers/${customLayer.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: customLayer.version, visibleToPlayers: false } });
+const { result: { layer: privateCustomLayer } } = await request(`/api/layers/${customLayer.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: sortedCustomLayer.result.layer.version, visibleToPlayers: false } });
 const layerHiddenEvent = await layerHiddenForPlayer;
 assert.equal(layerHiddenEvent.layerId, customLayer.id, 'visibility change removes the layer for players');
 assert.equal(Object.hasOwn(layerHiddenEvent, 'name'), false, 'private layer names are not disclosed during hiding');

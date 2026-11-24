@@ -4,7 +4,7 @@ import type { PublicToken } from '@nri/contracts';
 import { zoomToPointer } from './canvasMath';
 
 type Props = {
-  tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
+  tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number;
   onMove: (token: PublicToken, x: number, y: number) => void; canEdit: (token: PublicToken) => boolean; fitLabel: string;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
@@ -64,7 +64,7 @@ export function TableCanvas(props: Props) {
     const redrawObjects = () => {
       objectsDisplay.removeChildren().forEach((child) => child.destroy({ children: true }));
       const colorOf = (value: string | null) => Number.parseInt((value ?? '#c8794a').slice(1), 16) || 0xc8794a;
-      for (const item of latest.current.objects.toSorted((a, b) => a.zIndex - b.zIndex || a.y - b.y || a.x - b.x)) {
+      for (const item of latest.current.objects.toSorted((a, b) => (latest.current.layerSortOrder[a.layerId] ?? 0) - (latest.current.layerSortOrder[b.layerId] ?? 0) || a.zIndex - b.zIndex || a.y - b.y || a.x - b.x)) {
         if (!item.visible && !latest.current.canManage) continue;
         const alpha = item.opacity * (item.visible ? 1 : 0.35);
         const color = colorOf(item.color);
@@ -191,7 +191,7 @@ export function TableCanvas(props: Props) {
   useEffect(() => {
     const canvas = host.current?.querySelector('canvas');
     if (canvas) canvas.dispatchEvent(new Event('nri-refresh'));
-  }, [tokens, props.objects, props.canManage, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY]);
+  }, [tokens, props.objects, props.canManage, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY]);
 
   return <div className="table-canvas" ref={host}><div className="canvas-controls"><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div></div>;
 }
