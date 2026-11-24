@@ -9,23 +9,23 @@ NRI Platform is a system-neutral virtual tabletop for role-playing games. Its co
 - **Automated checks:** AUTOMATED_TESTS_PASSED for the local checks that exist
 - **Owner acceptance:** IN_PROGRESS — V0.1.1 technical gates remain open
 
-The API and web interface run locally, and `Amber Crossing` is available for manual review. V0.1.1 remains in progress: object layers, image-backed calibration acceptance, expanded token properties, asset library, tabletop tools, Playwright, backup/restore, and load checks are incomplete. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md).
+The API and web interface run locally, and `Amber Crossing` is available for manual review. A basic layer panel and rectangle/ellipse objects are available, while full object editing, image-backed calibration acceptance, expanded token properties, asset library, tabletop tools, Playwright, backup/restore, and load checks remain incomplete. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md).
 
 ## Implemented
 
 - Registration, login, logout, sessions, and rate limits.
 - Campaigns, Owner/GM/Player roles, capped and revocable invitations, archive and restore.
 - Scenes with a player-active version and GM drafts, rename, duplicate, archive/restore, ordering, and configurable grid/camera; players receive only the active scene.
-- Tokens, ownership assignment, server-authorized movement, and Socket.IO synchronization.
+- Tokens, ownership assignment, server-authorized movement, and Socket.IO synchronization. The tabletop has active-layer selection, visibility/lock controls, and rectangle/ellipse create, visibility, lock, rotation, opacity, z-order, same-scene layer move, duplicate, delete, and rendering. The server enforces versions and GM-content filtering. Direct canvas movement/resizing, image rendering, layer ordering, and clipboard workflows remain incomplete.
 - Public and private chat, server-side dice rolls, and initiative with hidden-turn filtering.
 - Russian and English UI, local development, Docker Compose, PostgreSQL migrations, and a CI workflow.
 
 ## V0.1.1 limitations
 
-- Scene layers and freeform objects, expanded token sheets, and undo/redo are not implemented yet. Grid calibration now previews cell size and offsets before saving; map-backed browser acceptance still needs a scene with an uploaded map.
+- Full layer/object editing, expanded token sheets, and undo/redo are not implemented yet. Grid calibration now previews cell size and offsets before saving; map-backed browser acceptance still needs a scene with an uploaded map.
 - Maps accept PNG/JPEG/WebP up to 12 MB; local storage does not validate full image decoding or dimension limits.
 - There is no automated Playwright suite, isolated backup restore drill, or performance measurement report. Package-local Vitest suites and a PostgreSQL API/Socket.IO smoke have been run.
-- Full layer/object editing, campaign export, and production deployment are not complete. GitHub Actions has passed on the work branch.
+- Full layer/object editing, campaign export, and production deployment are not complete. GitHub Actions passed on the previously published commit; current changes await CI.
 - The asset library and additional tabletop tools are incomplete; full security review and owner acceptance are pending.
 
 ## Stack

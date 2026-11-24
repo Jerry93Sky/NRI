@@ -4,7 +4,7 @@ import type { PublicToken } from '@nri/contracts';
 import { zoomToPointer } from './canvasMath';
 
 type Props = {
-  tokens: PublicToken[]; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
+  tokens: PublicToken[]; objects: Array<{ id: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number;
   onMove: (token: PublicToken, x: number, y: number) => void; canEdit: (token: PublicToken) => boolean; fitLabel: string;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
@@ -26,8 +26,9 @@ export function TableCanvas(props: Props) {
     const base = new Graphics().rect(-20000, -20000, 40000, 40000).fill({ color: 0x222421 });
     const mapLayer = new Container();
     const grid = new Graphics();
+    const objectsDisplay = new Container();
     const pieces = new Container();
-    world.addChild(base, mapLayer, grid, pieces);
+    world.addChild(base, mapLayer, grid, objectsDisplay, pieces);
     app.stage.addChild(world);
     app.stage.eventMode = 'static';
 
@@ -59,6 +60,25 @@ export function TableCanvas(props: Props) {
       for (let x = startX; x <= width; x += gridCellSize) grid.moveTo(x, 0).lineTo(x, height);
       for (let y = startY; y <= height; y += gridCellSize) grid.moveTo(0, y).lineTo(width, y);
       grid.stroke({ color: Number.parseInt(color.slice(1), 16) || 0x44453e, alpha: opacity, width: 1 });
+    };
+    const redrawObjects = () => {
+      objectsDisplay.removeChildren().forEach((child) => child.destroy({ children: true }));
+      const colorOf = (value: string | null) => Number.parseInt((value ?? '#c8794a').slice(1), 16) || 0xc8794a;
+      for (const item of latest.current.objects.toSorted((a, b) => a.zIndex - b.zIndex || a.y - b.y || a.x - b.x)) {
+        if (!item.visible && !latest.current.canManage) continue;
+        const alpha = item.opacity * (item.visible ? 1 : 0.35);
+        const color = colorOf(item.color);
+        const shape = new Graphics(); shape.position.set(item.x + item.width / 2, item.y + item.height / 2); shape.rotation = item.rotation * Math.PI / 180; shape.alpha = alpha;
+        if (item.kind === 'RECTANGLE') shape.rect(-item.width / 2, -item.height / 2, item.width, item.height).fill({ color }).stroke({ color, alpha: Math.min(alpha + 0.2, 1), width: item.strokeWidth ?? 1 });
+        else if (item.kind === 'ELLIPSE') shape.ellipse(0, 0, item.width / 2, item.height / 2).fill({ color }).stroke({ color, alpha: Math.min(alpha + 0.2, 1), width: item.strokeWidth ?? 1 });
+        else if ((item.kind === 'LINE' || item.kind === 'FREEHAND') && item.points?.length) {
+          shape.moveTo(item.points[0]!.x - item.width / 2, item.points[0]!.y - item.height / 2);
+          for (const point of item.points.slice(1)) shape.lineTo(point.x - item.width / 2, point.y - item.height / 2);
+          shape.stroke({ color, alpha: 1, width: item.strokeWidth ?? 2 });
+        } else if (item.kind === 'TEXT' && item.text) shape.rect(-item.width / 2, -item.height / 2, item.width, item.height).fill({ color, alpha: 0.18 }).stroke({ color, alpha: 1, width: 1 });
+        else continue;
+        objectsDisplay.addChild(shape);
+      }
     };
     const redrawMap = async () => {
       mapLayer.removeChildren().forEach((child) => child.destroy({ children: true }));
@@ -99,7 +119,7 @@ export function TableCanvas(props: Props) {
     };
     const refresh = () => {
       if (latest.current.sceneId !== previousSceneId) { previousSceneId = latest.current.sceneId; restoreCamera(); }
-      redrawGrid(); redrawTokens(); void redrawMap();
+      redrawGrid(); redrawObjects(); redrawTokens(); void redrawMap();
     };
     const fit = () => fitScene();
     const calibrationPoints: Array<{ x: number; y: number }> = [];
@@ -143,7 +163,7 @@ export function TableCanvas(props: Props) {
   useEffect(() => {
     const canvas = host.current?.querySelector('canvas');
     if (canvas) canvas.dispatchEvent(new Event('nri-refresh'));
-  }, [tokens, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY]);
+  }, [tokens, props.objects, props.canManage, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY]);
 
   return <div className="table-canvas" ref={host}><div className="canvas-controls"><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div></div>;
 }

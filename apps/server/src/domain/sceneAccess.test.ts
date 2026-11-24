@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canListScene, canReadSceneTokens } from './sceneAccess.js';
+import { canListScene, canReadSceneLayer, canReadSceneTokens } from './sceneAccess.js';
 
 describe('scene access projections', () => {
   it('keeps unpublished and archived scenes out of player lists', () => {
@@ -20,5 +20,14 @@ describe('scene access projections', () => {
     expect(canReadSceneTokens('PLAYER', false, false)).toBe(false);
     expect(canReadSceneTokens('PLAYER', true, true)).toBe(false);
     expect(canReadSceneTokens('GM', false, false)).toBe(true);
+  });
+
+  it('never projects GM layers or hidden layers to players', () => {
+    expect(canReadSceneLayer('PLAYER', true, false, true, 'OBJECTS')).toBe(true);
+    expect(canReadSceneLayer('PLAYER', true, false, false, 'OBJECTS')).toBe(false);
+    expect(canReadSceneLayer('PLAYER', true, false, true, 'GM')).toBe(false);
+    expect(canReadSceneLayer('PLAYER', false, false, true, 'OBJECTS')).toBe(false);
+    expect(canReadSceneLayer('GM', false, false, false, 'GM')).toBe(true);
+    expect(canReadSceneLayer('OWNER', true, true, true, 'OBJECTS')).toBe(false);
   });
 });

@@ -8,3 +8,8 @@ export function canListScene(role: CampaignSceneRole, isActive: boolean, archive
 export function canReadSceneTokens(role: CampaignSceneRole, isActive: boolean, archived: boolean) {
   return !archived && (role !== 'PLAYER' || isActive);
 }
+
+export function canReadSceneLayer(role: CampaignSceneRole, isActive: boolean, archived: boolean, visibleToPlayers: boolean, kind: string) {
+  if (archived) return false;
+  return role !== 'PLAYER' || (isActive && visibleToPlayers && kind !== 'GM');
+}

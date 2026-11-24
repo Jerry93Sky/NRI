@@ -11,10 +11,10 @@ import { resolve } from 'node:path';
 import argon2 from 'argon2';
 import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { canMoveToken, createCampaignSchema, createSceneSchema, createTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema } from '@nri/contracts';
+import { canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateSceneLayerSchema, updateSceneObjectSchema } from '@nri/contracts';
 import { db, pool } from './db/index.js';
-import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, scenes, sessions, tokens, users } from './db/schema.js';
-import { canListScene, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
+import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
+import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] }, bodyLimit: 64 * 1024 });
 await app.register(cookie);
@@ -32,6 +32,13 @@ const cookieOptions = { path: '/', httpOnly: true, sameSite: 'lax' as const, sec
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const publicUser = (user: { id: string; email: string; displayName: string }) => ({ id: user.id, email: user.email, displayName: user.displayName });
 const publicScene = (scene: typeof scenes.$inferSelect) => ({ id: scene.id, campaignId: scene.campaignId, title: scene.title, gridSize: scene.gridSize, width: scene.width, height: scene.height, gridColor: scene.gridColor, gridOpacity: scene.gridOpacity, gridOffsetX: scene.gridOffsetX, gridOffsetY: scene.gridOffsetY, gridEnabled: scene.gridEnabled, snapToGrid: scene.snapToGrid, unitsPerCell: scene.unitsPerCell, unitLabel: scene.unitLabel, backgroundAssetId: scene.backgroundAssetId, cameraX: scene.cameraX, cameraY: scene.cameraY, cameraZoom: scene.cameraZoom, version: scene.version });
+const baseLayerKinds = ['BACKGROUND', 'OBJECTS', 'TOKENS', 'GM'] as const;
+const defaultLayerRows = [
+  { name: 'Background', kind: 'BACKGROUND', sortOrder: 0, visibleToPlayers: true, locked: true },
+  { name: 'Objects', kind: 'OBJECTS', sortOrder: 1, visibleToPlayers: true, locked: false },
+  { name: 'Tokens', kind: 'TOKENS', sortOrder: 2, visibleToPlayers: true, locked: false },
+  { name: 'GM', kind: 'GM', sortOrder: 3, visibleToPlayers: false, locked: false },
+] as const;
 
 async function userForCookie(cookieValue?: string) {
   if (!cookieValue) return null;
@@ -337,6 +344,168 @@ app.get('/api/campaigns/:campaignId/scenes', async (request, reply) => {
   const rows = await db.select().from(scenes).where(eq(scenes.campaignId, campaignId)).orderBy(asc(scenes.sortOrder), asc(scenes.id));
   return rows.filter((scene) => canListScene(role, scene.isActive, scene.archivedAt !== null, archived));
 });
+app.get('/api/scenes/:sceneId/layers', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+  if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(scene.campaignId, user.id);
+  if (!role || !canReadSceneTokens(role, scene.isActive, scene.archivedAt !== null)) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const rows = await db.select().from(sceneLayers).where(eq(sceneLayers.sceneId, sceneId)).orderBy(asc(sceneLayers.sortOrder), asc(sceneLayers.id));
+  return rows.filter((layer) => canReadSceneLayer(role, scene.isActive, false, layer.visibleToPlayers, layer.kind));
+});
+app.post('/api/scenes/:sceneId/layers', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const input = parseBody(createSceneLayerSchema, request.body);
+  const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+  if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const [layer] = await db.insert(sceneLayers).values({ ...input, sceneId, visibleToPlayers: input.kind === 'GM' ? false : input.visibleToPlayers }).returning();
+  if (!layer) throw new Error('Layer creation failed');
+  await db.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.layer_created', targetId: layer.id });
+  const room = `campaign:${scene.campaignId}`;
+  ((layer.visibleToPlayers && scene.isActive) ? io.to(room) : io.to(`${room}:gm`)).emit('scene:layer_created', { sceneId, layer });
+  return reply.code(201).send({ layer });
+});
+app.patch('/api/layers/:layerId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { layerId } = request.params as { layerId: string };
+  const input = parseBody(updateSceneLayerSchema, request.body);
+  const [row] = await db.select({ layer: sceneLayers, scene: scenes }).from(sceneLayers).innerJoin(scenes, eq(sceneLayers.sceneId, scenes.id)).where(eq(sceneLayers.id, layerId)).limit(1);
+  if (!row) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(row.scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (row.layer.kind === 'BACKGROUND' && input.locked === false) return reply.code(400).send({ error: 'BACKGROUND_LAYER_LOCKED' });
+  const { expectedVersion, ...patch } = input;
+  if (row.layer.kind === 'GM' && patch.visibleToPlayers === true) return reply.code(400).send({ error: 'GM_LAYER_PRIVATE' });
+  const [updated] = await db.update(sceneLayers).set({ ...patch, version: row.layer.version + 1 }).where(and(eq(sceneLayers.id, layerId), eq(sceneLayers.version, expectedVersion))).returning();
+  if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
+  await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'scene.layer_updated', targetId: layerId });
+  const room = `campaign:${row.scene.campaignId}`;
+  let publicProjection = false;
+  if (row.scene.isActive && row.layer.visibleToPlayers) {
+    if (updated.visibleToPlayers) io.to(room).emit('scene:layer_updated', { sceneId: row.scene.id, layer: updated });
+    else io.to(room).emit('scene:layer_hidden', { sceneId: row.scene.id, layerId: updated.id });
+    publicProjection = true;
+  }
+  if (row.scene.isActive && updated.visibleToPlayers && !row.layer.visibleToPlayers) { io.to(room).emit('scene:layer_updated', { sceneId: row.scene.id, layer: updated }); publicProjection = true; }
+  if (!publicProjection) io.to(`${room}:gm`).emit('scene:layer_updated', { sceneId: row.scene.id, layer: updated });
+  return { layer: updated };
+});
+app.delete('/api/layers/:layerId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { layerId } = request.params as { layerId: string };
+  const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
+  const [row] = await db.select({ layer: sceneLayers, scene: scenes }).from(sceneLayers).innerJoin(scenes, eq(sceneLayers.sceneId, scenes.id)).where(eq(sceneLayers.id, layerId)).limit(1);
+  if (!row) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(row.scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (baseLayerKinds.includes(row.layer.kind as typeof baseLayerKinds[number])) return reply.code(409).send({ error: 'BASE_LAYER_REQUIRED' });
+  const [object] = await db.select({ id: sceneObjects.id }).from(sceneObjects).where(eq(sceneObjects.layerId, layerId)).limit(1);
+  if (object) return reply.code(409).send({ error: 'LAYER_NOT_EMPTY' });
+  const [deleted] = await db.delete(sceneLayers).where(and(eq(sceneLayers.id, layerId), eq(sceneLayers.version, input.expectedVersion))).returning({ id: sceneLayers.id });
+  if (!deleted) return reply.code(409).send({ error: 'CONFLICT' });
+  const room = `campaign:${row.scene.campaignId}`;
+  if (row.scene.isActive && row.layer.visibleToPlayers) io.to(room).emit('scene:layer_deleted', { sceneId: row.scene.id, layerId });
+  else io.to(`${room}:gm`).emit('scene:layer_deleted', { sceneId: row.scene.id, layerId });
+  return reply.code(204).send();
+});
+app.get('/api/scenes/:sceneId/objects', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+  if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(scene.campaignId, user.id);
+  if (!role || !canReadSceneTokens(role, scene.isActive, scene.archivedAt !== null)) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const rows = await db.select({ object: sceneObjects, layer: sceneLayers }).from(sceneObjects).innerJoin(sceneLayers, eq(sceneObjects.layerId, sceneLayers.id)).where(eq(sceneObjects.sceneId, sceneId)).orderBy(asc(sceneObjects.zIndex), asc(sceneObjects.id));
+  return rows.filter(({ object, layer }) => role !== 'PLAYER' || (object.visible && canReadSceneLayer(role, scene.isActive, false, layer.visibleToPlayers, layer.kind))).map(({ object }) => object);
+});
+app.post('/api/scenes/:sceneId/objects', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const input = parseBody(createSceneObjectSchema, request.body);
+  const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+  if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const [layer] = await db.select().from(sceneLayers).where(and(eq(sceneLayers.id, input.layerId), eq(sceneLayers.sceneId, sceneId))).limit(1);
+  if (!layer) return reply.code(400).send({ error: 'INVALID_LAYER' });
+  if (layer.locked) return reply.code(409).send({ error: 'LAYER_LOCKED' });
+  if (layer.kind === 'GM') input.visible = false;
+  if (input.assetId) {
+    const [asset] = await db.select({ id: assets.id }).from(assets).where(and(eq(assets.id, input.assetId), eq(assets.campaignId, scene.campaignId))).limit(1);
+    if (!asset) return reply.code(400).send({ error: 'INVALID_ASSET' });
+  }
+  const [object] = await db.insert(sceneObjects).values({ ...input, sceneId }).returning();
+  if (!object) throw new Error('Scene object creation failed');
+  await db.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.object_created', targetId: object.id });
+  const room = `campaign:${scene.campaignId}`;
+  ((scene.isActive && layer.visibleToPlayers && object.visible && layer.kind !== 'GM') ? io.to(room) : io.to(`${room}:gm`)).emit('scene:object_created', { object });
+  return reply.code(201).send({ object });
+});
+app.patch('/api/objects/:objectId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { objectId } = request.params as { objectId: string };
+  const input = parseBody(updateSceneObjectSchema, request.body);
+  const [row] = await db.select({ object: sceneObjects, layer: sceneLayers, scene: scenes }).from(sceneObjects).innerJoin(sceneLayers, eq(sceneObjects.layerId, sceneLayers.id)).innerJoin(scenes, eq(sceneObjects.sceneId, scenes.id)).where(eq(sceneObjects.id, objectId)).limit(1);
+  if (!row) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(row.scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (row.layer.locked) return reply.code(409).send({ error: 'LAYER_LOCKED' });
+  const { expectedVersion, ...patch } = input;
+  const requestedFields = Object.keys(request.body as Record<string, unknown>).filter((field) => field !== 'expectedVersion');
+  if (row.object.locked && !(patch.locked === false && requestedFields.length === 1 && requestedFields[0] === 'locked')) return reply.code(409).send({ error: 'OBJECT_LOCKED' });
+  let targetLayerKind = row.layer.kind;
+  if (patch.layerId) {
+    const [nextLayer] = await db.select().from(sceneLayers).where(and(eq(sceneLayers.id, patch.layerId), eq(sceneLayers.sceneId, row.scene.id))).limit(1);
+    if (!nextLayer) return reply.code(400).send({ error: 'INVALID_LAYER' });
+    if (nextLayer.locked) return reply.code(409).send({ error: 'LAYER_LOCKED' });
+    targetLayerKind = nextLayer.kind;
+  }
+  if (targetLayerKind === 'GM') patch.visible = false;
+  if (patch.assetId) {
+    const [asset] = await db.select({ id: assets.id }).from(assets).where(and(eq(assets.id, patch.assetId), eq(assets.campaignId, row.scene.campaignId))).limit(1);
+    if (!asset) return reply.code(400).send({ error: 'INVALID_ASSET' });
+  }
+  const [updated] = await db.update(sceneObjects).set({ ...patch, version: row.object.version + 1 }).where(and(eq(sceneObjects.id, objectId), eq(sceneObjects.version, expectedVersion))).returning();
+  if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
+  await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'scene.object_updated', targetId: objectId });
+  const newLayerId = updated.layerId;
+  const [newLayer] = newLayerId === row.layer.id ? [row.layer] : await db.select().from(sceneLayers).where(eq(sceneLayers.id, newLayerId)).limit(1);
+  const room = `campaign:${row.scene.campaignId}`;
+  const wasPublic = row.scene.isActive && row.layer.visibleToPlayers && row.layer.kind !== 'GM' && row.object.visible;
+  const isPublic = row.scene.isActive && newLayer?.visibleToPlayers && newLayer.kind !== 'GM' && updated.visible;
+  if (wasPublic && !isPublic) io.to(room).emit('scene:object_deleted', { sceneId: row.scene.id, objectId });
+  if (isPublic) io.to(room).emit('scene:object_updated', { object: updated });
+  else io.to(`${room}:gm`).emit('scene:object_updated', { object: updated });
+  return { object: updated };
+});
+app.delete('/api/objects/:objectId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { objectId } = request.params as { objectId: string };
+  const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
+  const [row] = await db.select({ object: sceneObjects, layer: sceneLayers, scene: scenes }).from(sceneObjects).innerJoin(sceneLayers, eq(sceneObjects.layerId, sceneLayers.id)).innerJoin(scenes, eq(sceneObjects.sceneId, scenes.id)).where(eq(sceneObjects.id, objectId)).limit(1);
+  if (!row) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(row.scene.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (row.layer.locked) return reply.code(409).send({ error: 'LAYER_LOCKED' });
+  if (row.object.locked) return reply.code(409).send({ error: 'OBJECT_LOCKED' });
+  const [deleted] = await db.delete(sceneObjects).where(and(eq(sceneObjects.id, objectId), eq(sceneObjects.version, input.expectedVersion))).returning({ id: sceneObjects.id });
+  if (!deleted) return reply.code(409).send({ error: 'CONFLICT' });
+  const room = `campaign:${row.scene.campaignId}`;
+  if (row.scene.isActive && row.layer.visibleToPlayers && row.layer.kind !== 'GM' && row.object.visible) io.to(room).emit('scene:object_deleted', { sceneId: row.scene.id, objectId });
+  else io.to(`${room}:gm`).emit('scene:object_deleted', { sceneId: row.scene.id, objectId });
+  await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'scene.object_deleted', targetId: objectId });
+  return reply.code(204).send();
+});
 app.patch('/api/scenes/:sceneId', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
   const { sceneId } = request.params as { sceneId: string };
@@ -369,6 +538,11 @@ app.post('/api/scenes/:sceneId/duplicate', async (request, reply) => {
     const { id: _id, archivedAt: _archivedAt, version: _version, isActive: _isActive, published: _published, sortOrder: _sortOrder, ...copy } = source;
     const [scene] = await tx.insert(scenes).values({ ...copy, title: `${source.title} (copy)`.slice(0, 80), sortOrder: (last?.sortOrder ?? -1) + 1, isActive: false, published: false, archivedAt: null, version: 1 }).returning();
     if (!scene) throw new Error('Scene duplication failed');
+    const sourceLayers = await tx.select().from(sceneLayers).where(eq(sceneLayers.sceneId, source.id)).orderBy(asc(sceneLayers.sortOrder));
+    const copiedLayers = await tx.insert(sceneLayers).values(sourceLayers.map(({ id: _layerId, sceneId: _sceneId, ...layer }) => ({ ...layer, sceneId: scene.id, version: 1 }))).returning();
+    const layerMap = new Map(sourceLayers.map((layer, index) => [layer.id, copiedLayers[index]!.id]));
+    const sourceObjects = await tx.select().from(sceneObjects).where(eq(sceneObjects.sceneId, source.id));
+    if (sourceObjects.length) await tx.insert(sceneObjects).values(sourceObjects.map(({ id: _objectId, sceneId: _sceneId, layerId, ...object }) => ({ ...object, sceneId: scene.id, layerId: layerMap.get(layerId)!, version: 1 })));
     const sourceTokens = await tx.select().from(tokens).where(eq(tokens.sceneId, source.id));
     if (sourceTokens.length) await tx.insert(tokens).values(sourceTokens.map(({ id: _id, sceneId: _sceneId, ...token }) => ({ ...token, sceneId: scene.id })));
     await tx.insert(auditEvents).values({ campaignId: source.campaignId, actorId: user.id, action: 'scene.duplicated', targetId: scene.id });
@@ -414,6 +588,7 @@ app.post('/api/scenes', async (request, reply) => {
     const [last] = await tx.select({ sortOrder: scenes.sortOrder }).from(scenes).where(eq(scenes.campaignId, input.campaignId)).orderBy(desc(scenes.sortOrder)).limit(1);
     const [active] = await tx.select({ id: scenes.id }).from(scenes).where(and(eq(scenes.campaignId, input.campaignId), eq(scenes.isActive, true), isNull(scenes.archivedAt))).limit(1);
     const [created] = await tx.insert(scenes).values({ campaignId: input.campaignId, title: input.title, gridSize: input.gridSize, sortOrder: (last?.sortOrder ?? -1) + 1, isActive: !active, published: !active }).returning();
+    if (created) await tx.insert(sceneLayers).values(defaultLayerRows.map((layer) => ({ ...layer, sceneId: created.id })));
     if (created) await tx.insert(auditEvents).values({ campaignId: input.campaignId, actorId: user.id, action: 'scene.created', targetId: created.id });
     return created;
   });

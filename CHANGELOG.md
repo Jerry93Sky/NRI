@@ -11,7 +11,9 @@ All notable project changes will be recorded here.
 - Lazy-loaded the Pixi tabletop; current measured web entry and canvas chunks are documented in the V0.1.1 acceptance report.
 - Localized scene preparation actions, settings, camera controls, and canvas hints in Russian and English.
 - Added map-based grid calibration with two-point measurement, cell-count sizing, and unsaved cell-size/offset preview; mapped browser acceptance remains pending.
-- V0.1.1 is still in progress. Layers, mapped browser acceptance for calibration, richer tokens, asset library, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
+- Added four scene layers, versioned layer/object APIs, scene duplication with independent layer/object IDs, and player-safe projections for GM-only content.
+- Added a basic layer panel with active-layer selection, visibility/lock controls, rectangle/ellipse creation, object visibility/lock, rotation, opacity, z-order, same-scene layer move, duplicate and delete actions; shapes render on the canvas.
+- V0.1.1 is still in progress. Direct layer/object selection and transforms, image objects, layer ordering, clipboard workflows, mapped browser acceptance for calibration, richer tokens, asset library, other tabletop tools, Playwright, security review, backup/restore, performance testing, and demo expansion remain open.
 
 ## Unreleased — V0.1 foundation
 

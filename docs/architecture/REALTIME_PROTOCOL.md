@@ -16,7 +16,7 @@ The server resolves the opaque HTTP session cookie during the Socket.IO handshak
 | `chat:send` | `{campaignId, body, recipientId?}` | `{ok, message}` or `{error}`; recipient membership and Player-to-GM private-message policy checked |
 | `dice:roll` | `{campaignId, expression}` | `{ok, roll}` or `{error}`; server parses and generates dice results |
 
-REST endpoints currently implement scene activation and editing, token creation/ownership, and initiative mutations. Their successful changes publish selected events after persistence. There is no general command deduplication key; clients should not retry non-idempotent commands blindly.
+REST endpoints implement scene activation and editing, token creation/ownership, layer and scene-object reads/CRUD, and initiative mutations. Layer/object writes check campaign membership, active/archive state, same-scene layer references, asset campaign scope, and optimistic versions. Their successful changes publish privacy-filtered events after persistence. There is no general command deduplication key; clients should not retry non-idempotent commands blindly.
 
 ## Server events and confidentiality
 
@@ -33,8 +33,11 @@ REST endpoints currently implement scene activation and editing, token creation/
 | `dice:result` | Campaign room |
 | `initiative:updated` | Campaign room, player-safe projection |
 | `initiative:gm_updated` | GM room, full projection |
+| `scene:layer_created`, `scene:layer_updated`, `scene:layer_deleted` | Visible layers are sent to the active scene campaign room; all layer changes are also sent to the GM room |
+| `scene:layer_hidden` | Campaign room receives only `{sceneId, layerId}` when a formerly visible layer becomes private; layer name/details remain GM-only |
+| `scene:object_created`, `scene:object_updated`, `scene:object_deleted` | Public visible active-scene objects go to campaign room; GM-only, hidden, draft-scene and private transitions stay in GM room; public objects leaving visibility emit a remove event |
 
-Players receive only the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive/archived scenes are denied. Hidden token snapshots and hidden initiative details use separate role projections. Clients must not use local filtering as an access control.
+Players receive only the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive/archived scenes are denied. Hidden token snapshots, scene layers/objects, and hidden initiative details use separate role projections. Player layer/object snapshots omit GM or non-visible layers and invisible objects. Clients must not use local filtering as an access control.
 
 ## Concurrency and recovery limits
 

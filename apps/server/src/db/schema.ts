@@ -1,4 +1,4 @@
-import { boolean, doublePrecision, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { boolean, check, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
@@ -38,6 +38,18 @@ export const scenes = pgTable('scenes', {
   sortOrder: integer('sort_order').notNull().default(0), isActive: boolean('is_active').notNull().default(false), published: boolean('published').notNull().default(false), cameraX: doublePrecision('camera_x').notNull().default(0), cameraY: doublePrecision('camera_y').notNull().default(0), cameraZoom: doublePrecision('camera_zoom').notNull().default(1),
   archivedAt: timestamp('archived_at', { withTimezone: true }), version: integer('version').notNull().default(1),
 }, (t) => [index('scenes_campaign_idx').on(t.campaignId), uniqueIndex('scenes_one_active_per_campaign_idx').on(t.campaignId).where(sql`${t.isActive} = true`)]);
+export const sceneLayers = pgTable('scene_layers', {
+  id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 48 }).notNull(), kind: varchar('kind', { length: 16 }).notNull(), sortOrder: integer('sort_order').notNull().default(0),
+  visibleToPlayers: boolean('visible_to_players').notNull().default(true), locked: boolean('locked').notNull().default(false), version: integer('version').notNull().default(1),
+}, (t) => [index('scene_layers_scene_idx').on(t.sceneId), index('scene_layers_scene_kind_idx').on(t.sceneId, t.kind), check('scene_layers_kind_check', sql`${t.kind} IN ('BACKGROUND', 'OBJECTS', 'TOKENS', 'GM', 'CUSTOM')`)]);
+export const sceneObjects = pgTable('scene_objects', {
+  id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }), layerId: uuid('layer_id').notNull().references(() => sceneLayers.id, { onDelete: 'cascade' }),
+  kind: varchar('kind', { length: 16 }).notNull(), x: doublePrecision('x').notNull(), y: doublePrecision('y').notNull(), width: doublePrecision('width').notNull().default(64), height: doublePrecision('height').notNull().default(64),
+  rotation: doublePrecision('rotation').notNull().default(0), opacity: doublePrecision('opacity').notNull().default(1), zIndex: integer('z_index').notNull().default(0),
+  assetId: uuid('asset_id').references(() => assets.id, { onDelete: 'set null' }), color: varchar('color', { length: 7 }), strokeWidth: doublePrecision('stroke_width'), points: jsonb('points').$type<Array<{ x: number; y: number }>>(), text: varchar('text', { length: 500 }),
+  visible: boolean('visible').notNull().default(true), locked: boolean('locked').notNull().default(false), version: integer('version').notNull().default(1),
+}, (t) => [index('scene_objects_scene_layer_z_idx').on(t.sceneId, t.layerId, t.zIndex), check('scene_objects_kind_check', sql`${t.kind} IN ('IMAGE', 'LINE', 'FREEHAND', 'RECTANGLE', 'ELLIPSE', 'TEXT')`), check('scene_objects_dimensions_check', sql`${t.width} > 0 AND ${t.height} > 0 AND ${t.opacity} BETWEEN 0 AND 1 AND ${t.rotation} BETWEEN -360000 AND 360000`)]);
 export const tokens = pgTable('tokens', {
   id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 48 }).notNull(), x: doublePrecision('x').notNull(), y: doublePrecision('y').notNull(), color: varchar('color', { length: 7 }).notNull(),
