@@ -157,6 +157,20 @@ const ownerClient = connect(owner.cookie); const playerClient = connect(player.c
 try {
 await Promise.all([ownerClient.connected, playerClient.connected, observerClient.connected]);
 for (const client of [ownerClient.socket, playerClient.socket, observerClient.socket]) assert.equal((await join(client, campaign.id)).ok, true);
+const pointerForPlayer = expectEvent(playerClient.socket, 'scene:pointer');
+const ownerPointerAck = await ack(ownerClient.socket, 'scene:pointer', { campaignId: campaign.id, sceneId: scene.id, x: 120, y: 90 });
+assert.equal(ownerPointerAck.ok, true, 'campaign member can share a pointer on the active scene');
+const receivedOwnerPointer = await pointerForPlayer;
+assert.equal(receivedOwnerPointer.sceneId, scene.id); assert.equal(receivedOwnerPointer.userId, owner.user.id); assert.equal(receivedOwnerPointer.displayName, owner.user.displayName);
+const pointerForOwner = expectEvent(ownerClient.socket, 'scene:pointer');
+const playerPointerAck = await ack(playerClient.socket, 'scene:pointer', { campaignId: campaign.id, sceneId: scene.id, x: 240, y: 180 });
+assert.equal(playerPointerAck.ok, true, 'player can share a pointer on the active scene');
+assert.equal((await pointerForOwner).userId, player.user.id, 'active-scene pointers are broadcast to other campaign members');
+await new Promise((resolve) => setTimeout(resolve, 60));
+const outsidePointer = await ack(playerClient.socket, 'scene:pointer', { campaignId: campaign.id, sceneId: scene.id, x: scene.width + 1, y: 10 });
+assert.equal(outsidePointer.error, 'INVALID', 'pointer coordinates must stay inside scene bounds');
+const unjoinedPointer = await ack(ownerClient.socket, 'scene:pointer', { campaignId: randomUUID(), sceneId: scene.id, x: 20, y: 20 });
+assert.equal(unjoinedPointer.error, 'FORBIDDEN', 'pointer commands require the joined campaign room');
 const unauthorizedResourceAdjustment = await fetch(`${base}/api/tokens/${playerToken.id}/resources/adjust`, { method: 'POST', headers: { cookie: observer.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ resourceIndex: 0, delta: -1, expectedVersion: assignment.token.version }) });
 assert.equal(unauthorizedResourceAdjustment.status, 403, 'other players cannot adjust a token resource');
 const hiddenResourceAdjustment = await fetch(`${base}/api/tokens/${playerToken.id}/resources/adjust`, { method: 'POST', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ resourceIndex: 1, delta: -1, expectedVersion: assignment.token.version }) });
@@ -287,6 +301,8 @@ assert.equal(reconnectTokens.find((item) => item.id === playerToken.id).x, 5, 'c
 const { result: { scene: draft } } = await request(`/api/scenes/${scene.id}/duplicate`, { method: 'POST', cookie: owner.cookie });
 assert.equal(draft.isActive, false, 'a duplicate scene is created as an inactive draft');
 assert.equal(draft.published, false, 'a duplicate scene starts unpublished');
+const draftPointer = await ack(playerClient.socket, 'scene:pointer', { campaignId: campaign.id, sceneId: draft.id, x: 120, y: 90 });
+assert.equal(draftPointer.error, 'FORBIDDEN', 'players cannot publish pointers into a GM draft scene');
 const { result: draftLayers } = await request(`/api/scenes/${draft.id}/layers`, { cookie: owner.cookie });
 assert.deepEqual(draftLayers.map((layer) => layer.kind), ['BACKGROUND', 'OBJECTS', 'TOKENS', 'GM'], 'duplicate scenes receive independent canonical layers');
 const { result: draftObjects } = await request(`/api/scenes/${draft.id}/objects`, { cookie: owner.cookie });
@@ -348,4 +364,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

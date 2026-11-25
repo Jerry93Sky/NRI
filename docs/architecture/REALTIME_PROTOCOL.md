@@ -12,6 +12,7 @@ The server resolves the opaque HTTP session cookie during the Socket.IO handshak
 |---|---|---|
 | `campaign:join` | campaign UUID string | `{ok, role}` or `{error}`; role is resolved on server |
 | `campaign:leave` | campaign UUID string | no acknowledgement |
+| `scene:pointer` | `{campaignId, sceneId, x, y}` | `{ok}` or `{error}`; current membership and joined campaign room are checked, coordinates must be within scene bounds, Players may point only at the active scene, and per-socket updates are rate-limited to 20/sec |
 | `token:move` | `{tokenId, x, y, expectedVersion}` | `{ok, token}` or `{error}`; ownership/role, active scene, room and optimistic token version checked |
 | `chat:send` | `{campaignId, body, recipientId?}` | `{ok, message}` or `{error}`; recipient membership and Player-to-GM private-message policy checked |
 | `dice:roll` | `{campaignId, expression}` | `{ok, roll}` or `{error}`; server parses and generates dice results |
@@ -36,6 +37,7 @@ REST endpoints implement scene activation and editing, token creation/ownership,
 | `scene:layer_created`, `scene:layer_updated`, `scene:layer_deleted` | Visible layers are sent to the active scene campaign room; all layer changes are also sent to the GM room |
 | `scene:layer_hidden` | Campaign room receives only `{sceneId, layerId}` when a formerly visible layer becomes private; layer name/details remain GM-only |
 | `scene:object_created`, `scene:object_updated`, `scene:object_deleted` | Public visible active-scene objects go to campaign room; GM-only, hidden, draft-scene and private transitions stay in GM room; public objects leaving visibility emit a remove event |
+| `scene:pointer` | Transient coordinates and server-derived user identity; active scene pointers go to campaign room, while GM draft pointers go to the GM room only. Clients expire markers after 1.6 seconds; pointers are not persisted |
 
 Players receive only the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive/archived scenes are denied. Hidden token snapshots, hidden token resource tracks, GM notes, owner notes, scene layers/objects, and hidden initiative details use separate role projections. GM token notes stay in GM projections; owner notes are sent to the assigned owner's user room only while the token is visible in the active scene. Players may adjust visible resource tracks only on owned tokens. Player layer/object snapshots omit GM or non-visible layers and invisible objects. Clients must not use local filtering as an access control.
 

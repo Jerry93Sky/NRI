@@ -28,3 +28,5 @@
 .token-group-tools span { width: 100%; color: var(--muted); font-size: 0.85rem; }
 .token-property-card summary { display: flex; align-items: center; gap: 8px; }
 .ruler-hint{position:absolute;z-index:2;top:52px;right:14px;padding:6px 9px;color:#f3c78b;background:#242320dd;border:1px solid #625a4d;border-radius:7px;font-size:10px;pointer-events:none}
+
+.table-canvas.pointer-active canvas{cursor:crosshair}

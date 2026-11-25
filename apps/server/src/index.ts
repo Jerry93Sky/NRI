@@ -969,6 +969,7 @@ io.use(async (socket, next) => {
 });
 io.on('connection', (socket) => {
   const user = socket.data.user as { id: string; displayName: string };
+  let lastPointerAt = 0;
   void socket.join(`user:${user.id}`);
   socket.on('campaign:join', async (campaignId: string, callback?: (result: unknown) => void) => {
     if (typeof campaignId !== 'string' || !z.uuid().safeParse(campaignId).success) return callback?.({ error: 'INVALID' });
@@ -984,6 +985,22 @@ io.on('connection', (socket) => {
     if (typeof campaignId !== 'string' || !z.uuid().safeParse(campaignId).success) return;
     await socket.leave(`campaign:${campaignId}`);
     await socket.leave(`campaign:${campaignId}:gm`);
+  });
+  socket.on('scene:pointer', async (raw: unknown, callback?: (result: unknown) => void) => {
+    try {
+      const input = z.object({ campaignId: z.uuid(), sceneId: z.uuid(), x: z.number().finite().min(0).max(16384), y: z.number().finite().min(0).max(16384) }).parse(raw);
+      if (!socket.rooms.has(`campaign:${input.campaignId}`)) return callback?.({ error: 'FORBIDDEN' });
+      const now = Date.now();
+      if (now - lastPointerAt < 50) return callback?.({ error: 'RATE_LIMITED' });
+      lastPointerAt = now;
+      const role = await roleFor(input.campaignId, user.id);
+      const [scene] = await db.select().from(scenes).where(and(eq(scenes.id, input.sceneId), eq(scenes.campaignId, input.campaignId))).limit(1);
+      if (!role || !scene || scene.archivedAt || (role === 'PLAYER' && !scene.isActive)) return callback?.({ error: 'FORBIDDEN' });
+      if (input.x > scene.width || input.y > scene.height) return callback?.({ error: 'INVALID' });
+      const room = scene.isActive ? `campaign:${input.campaignId}` : `campaign:${input.campaignId}:gm`;
+      socket.to(room).emit('scene:pointer', { sceneId: scene.id, pointerId: socket.id, userId: user.id, displayName: user.displayName, x: input.x, y: input.y });
+      callback?.({ ok: true });
+    } catch { callback?.({ error: 'INVALID' }); }
   });
   socket.on('token:move', async (raw: unknown, callback?: (result: unknown) => void) => {
     try {

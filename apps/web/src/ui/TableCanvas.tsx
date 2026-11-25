@@ -7,7 +7,7 @@ import { measureSceneDistance, selectTokenIdsInRect, zoomToPointer } from './can
 type Props = {
   tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; assetId: string | null; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number; unitsPerCell: number; unitLabel: string;
-  onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; fitLabel: string; rulerActive: boolean; rulerLabel: string; selectionMode: boolean; selectionLabel: string; onSelectTokens: (ids: string[]) => void; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
+  onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; fitLabel: string; rulerActive: boolean; rulerLabel: string; selectionMode: boolean; selectionLabel: string; onSelectTokens: (ids: string[]) => void; pointerActive: boolean; pointerLabel: string; onSharePointer: (x: number, y: number) => void; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
 };
 
@@ -31,12 +31,13 @@ export function TableCanvas(props: Props) {
     const selectionDisplay = new Graphics();
     const objectsDisplay = new Container();
     const pieces = new Container();
+    const pointerDisplay = new Container();
     const tokenTextures = new Map<string, Texture>();
     const pendingTokenTextures = new Set<string>();
     const objectTextures = new Map<string, Texture>();
     const pendingObjectTextures = new Set<string>();
     let refresh = () => {};
-    world.addChild(base, mapLayer, grid, rulerDisplay, objectsDisplay, pieces, selectionDisplay);
+    world.addChild(base, mapLayer, grid, rulerDisplay, objectsDisplay, pieces, selectionDisplay, pointerDisplay);
     app.stage.addChild(world);
     app.stage.eventMode = 'static';
 
@@ -107,6 +108,7 @@ export function TableCanvas(props: Props) {
         if (latest.current.canEditObject(item)) {
           shape.eventMode = 'static'; shape.cursor = 'grab';
           shape.on('pointerdown', (event) => {
+            if (latest.current.pointerActive) { event.stopPropagation(); return; }
             event.stopPropagation();
             const start = world.toLocal(event.global); const originalX = item.x; const originalY = item.y;
             const move = (moveEvent: typeof event) => { const point = world.toLocal(moveEvent.global); shape.position.set(originalX + point.x - start.x + item.width / 2, originalY + point.y - start.y + item.height / 2); };
@@ -120,6 +122,7 @@ export function TableCanvas(props: Props) {
           const resizeHandle = new Graphics().rect(-6, -6, 12, 12).fill({ color: 0xf3c78b }).stroke({ color: 0x342a24, width: 1 });
           resizeHandle.position.set(item.width / 2, item.height / 2); resizeHandle.eventMode = 'static'; resizeHandle.cursor = 'nwse-resize';
           resizeHandle.on('pointerdown', (event) => {
+            if (latest.current.pointerActive) { event.stopPropagation(); return; }
             event.stopPropagation();
             const move = (moveEvent: typeof event) => { const point = shape.toLocal(moveEvent.global); resizeHandle.position.set(Math.max(4, point.x), Math.max(4, point.y)); };
             const finish = (finishEvent: typeof event) => {
@@ -175,6 +178,7 @@ export function TableCanvas(props: Props) {
         if (resourceText) { const resourceLabel = new Text({ text: resourceText, style: { fontFamily: 'Arial', fontSize: Math.max(8, size * 0.16), fill: 0xd8c6a9, align: 'center' } }); resourceLabel.anchor.set(0.5, 0); resourceLabel.y = height * 0.45 + Math.max(10, size * 0.24); node.addChild(resourceLabel); }
         node.eventMode = 'static'; node.cursor = latest.current.canEdit(token) && !token.locked ? 'grab' : 'default';
         node.on('pointerdown', (event) => {
+          if (latest.current.pointerActive) { event.stopPropagation(); return; }
           if (!latest.current.canEdit(token) || token.locked) return;
           event.stopPropagation(); node.cursor = 'grabbing';
           if (latest.current.canManage && latest.current.selectionMode) { node.cursor = 'default'; return; }
@@ -197,6 +201,30 @@ export function TableCanvas(props: Props) {
       });
     };
     const rulerPoints: Array<{ x: number; y: number }> = [];
+    type SharedPointer = { pointerId: string; sceneId: string; displayName: string; x: number; y: number };
+    const remotePointers = new Map<string, SharedPointer>();
+    const pointerTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const clearRemotePointers = () => {
+      for (const timer of pointerTimers.values()) clearTimeout(timer);
+      pointerTimers.clear(); remotePointers.clear(); pointerDisplay.removeChildren().forEach((child) => child.destroy({ children: true }));
+    };
+    const redrawPointers = () => {
+      pointerDisplay.removeChildren().forEach((child) => child.destroy({ children: true }));
+      for (const pointer of remotePointers.values()) {
+        const marker = new Container(); marker.position.set(pointer.x, pointer.y);
+        const crosshair = new Graphics().circle(0, 0, 9).stroke({ color: 0xf3c78b, width: 2 }).moveTo(-13, 0).lineTo(13, 0).moveTo(0, -13).lineTo(0, 13).stroke({ color: 0xf3c78b, width: 2 });
+        const label = new Text({ text: pointer.displayName, style: { fontFamily: 'Arial', fontSize: 12, fill: 0xf3c78b, stroke: { color: 0x222421, width: 3 } } });
+        label.position.set(12, -8); marker.addChild(crosshair, label); pointerDisplay.addChild(marker);
+      }
+    };
+    const receiveSharedPointer = (event: Event) => {
+      const pointer = (event as CustomEvent<SharedPointer>).detail;
+      if (!pointer || pointer.sceneId !== latest.current.sceneId) return;
+      remotePointers.set(pointer.pointerId, pointer);
+      const previous = pointerTimers.get(pointer.pointerId); if (previous) clearTimeout(previous);
+      pointerTimers.set(pointer.pointerId, setTimeout(() => { pointerTimers.delete(pointer.pointerId); remotePointers.delete(pointer.pointerId); redrawPointers(); }, 1600));
+      redrawPointers();
+    };
     const clearSelectionBox = () => { selectionDisplay.clear(); };
     const redrawRuler = () => {
       rulerDisplay.removeChildren().forEach((child) => child.destroy({ children: true }));
@@ -213,15 +241,15 @@ export function TableCanvas(props: Props) {
       rulerDisplay.addChild(label);
     };
     refresh = () => {
-      if (latest.current.sceneId !== previousSceneId) { previousSceneId = latest.current.sceneId; rulerPoints.length = 0; clearSelectionBox(); restoreCamera(); }
+      if (latest.current.sceneId !== previousSceneId) { previousSceneId = latest.current.sceneId; rulerPoints.length = 0; clearSelectionBox(); clearRemotePointers(); restoreCamera(); }
       if (!latest.current.rulerActive) rulerPoints.length = 0;
       if (!latest.current.selectionMode) clearSelectionBox();
-      redrawGrid(); redrawRuler(); redrawObjects(); redrawTokens(); void redrawMap();
+      redrawGrid(); redrawRuler(); redrawObjects(); redrawTokens(); redrawPointers(); void redrawMap();
     };
     const fit = () => fitScene();
     const calibrationPoints: Array<{ x: number; y: number }> = [];
     const onCalibrationClick = (event: { global: { x: number; y: number } }) => {
-      if (!latest.current.calibrationActive) { calibrationPoints.length = 0; return; }
+      if (!latest.current.calibrationActive || latest.current.pointerActive) { calibrationPoints.length = 0; return; }
       const point = world.toLocal(event.global);
       calibrationPoints.push({ x: point.x, y: point.y });
       if (calibrationPoints.length === 2) {
@@ -230,12 +258,12 @@ export function TableCanvas(props: Props) {
       }
     };
     const onRulerClick = (event: { global: { x: number; y: number } }) => {
-      if (!latest.current.rulerActive || latest.current.calibrationActive) return;
+      if (!latest.current.rulerActive || latest.current.calibrationActive || latest.current.pointerActive) return;
       rulerPoints.push(world.toLocal(event.global));
       redrawRuler();
     };
     const onSelectionStart = (event: { global: { x: number; y: number }; stopPropagation: () => void }) => {
-      if (!latest.current.canManage || !latest.current.selectionMode || latest.current.calibrationActive) return;
+      if (!latest.current.canManage || !latest.current.selectionMode || latest.current.calibrationActive || latest.current.pointerActive) return;
       event.stopPropagation();
       const start = world.toLocal(event.global);
       let current = start;
@@ -254,7 +282,7 @@ export function TableCanvas(props: Props) {
       app.stage.on('globalpointermove', move); app.stage.on('pointerup', finish); app.stage.on('pointerupoutside', finish);
     };
     const onDrawStart = (event: { global: { x: number; y: number }; stopPropagation: () => void }) => {
-      if (!latest.current.drawMode || latest.current.calibrationActive) return;
+      if (!latest.current.drawMode || latest.current.calibrationActive || latest.current.pointerActive) return;
       event.stopPropagation();
       const points = [world.toLocal(event.global)];
       const preview = new Graphics(); world.addChild(preview);
@@ -265,6 +293,15 @@ export function TableCanvas(props: Props) {
         if (points.length > 1) latest.current.onCreateDrawing(points.map(({ x, y }) => ({ x, y })));
       };
       app.stage.on('globalpointermove', move); app.stage.on('pointerup', finish); app.stage.on('pointerupoutside', finish);
+    };
+    let lastPointerSent = 0;
+    const onPointerMove = (event: PointerEvent) => {
+      if (!latest.current.pointerActive) return;
+      const now = performance.now(); if (now - lastPointerSent < 80) return;
+      const bounds = app.canvas.getBoundingClientRect();
+      const point = world.toLocal({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+      if (point.x < 0 || point.y < 0 || point.x > latest.current.sceneWidth || point.y > latest.current.sceneHeight) return;
+      lastPointerSent = now; latest.current.onSharePointer(point.x, point.y);
     };
     const start = async () => {
       await app.init({ resizeTo: host.current!, background: '#222421', backgroundAlpha: 0, antialias: true, resolution: Math.min(window.devicePixelRatio || 1, 2), autoDensity: true });
@@ -277,6 +314,8 @@ export function TableCanvas(props: Props) {
       app.stage.on('pointerdown', onSelectionStart);
       host.current.appendChild(app.canvas); refresh();
       app.canvas.addEventListener('nri-refresh', refresh);
+      app.canvas.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('nri-shared-pointer', receiveSharedPointer);
       window.addEventListener('nri-fit-scene', fit);
       app.canvas.addEventListener('wheel', (event) => {
         event.preventDefault(); const bounds = app.canvas.getBoundingClientRect();
@@ -294,13 +333,13 @@ export function TableCanvas(props: Props) {
       app.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     };
     void start();
-    return () => { cancelled = true; window.removeEventListener('nri-fit-scene', fit); if (initialized && !destroyed) { destroyed = true; app.destroy(true, { children: true }); } };
+    return () => { cancelled = true; window.removeEventListener('nri-fit-scene', fit); window.removeEventListener('nri-shared-pointer', receiveSharedPointer); clearRemotePointers(); if (initialized && !destroyed) { destroyed = true; app.destroy(true, { children: true }); } };
   }, []);
 
   useEffect(() => {
     const canvas = host.current?.querySelector('canvas');
     if (canvas) canvas.dispatchEvent(new Event('nri-refresh'));
-  }, [tokens, props.objects, props.canManage, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY, props.rulerActive, props.unitsPerCell, props.unitLabel, props.selectionMode]);
+  }, [tokens, props.objects, props.canManage, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY, props.rulerActive, props.unitsPerCell, props.unitLabel, props.selectionMode, props.pointerActive]);
 
-  return <div className="table-canvas" ref={host}><div className="canvas-controls">{props.canManage && <button aria-label={props.selectionLabel} aria-pressed={props.selectionMode} onClick={() => window.dispatchEvent(new Event('nri-toggle-selection'))}>{props.selectionLabel}</button>}<button aria-label={props.rulerLabel} aria-pressed={props.rulerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-ruler'))}>{props.rulerLabel}</button><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div>{(props.rulerActive || props.selectionMode) && <span className="ruler-hint">{props.selectionMode ? props.selectionLabel : props.rulerLabel}</span>}</div>;
+  return <div className={`table-canvas ${props.pointerActive ? 'pointer-active' : ''}`} ref={host}><div className="canvas-controls">{props.canManage && <button aria-label={props.selectionLabel} aria-pressed={props.selectionMode} onClick={() => window.dispatchEvent(new Event('nri-toggle-selection'))}>{props.selectionLabel}</button>}<button aria-label={props.pointerLabel} aria-pressed={props.pointerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-pointer'))}>{props.pointerLabel}</button><button aria-label={props.rulerLabel} aria-pressed={props.rulerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-ruler'))}>{props.rulerLabel}</button><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div>{(props.rulerActive || props.selectionMode || props.pointerActive) && <span className="ruler-hint">{props.pointerActive ? props.pointerLabel : props.selectionMode ? props.selectionLabel : props.rulerLabel}</span>}</div>;
 }
