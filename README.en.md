@@ -25,7 +25,7 @@ The API and web interface run locally, and `Amber Crossing` is available for man
 - Full layer/object editing, clipboard and broader undo/redo are not implemented yet; movement-only group undo/redo is available; selected tokens can be moved as an atomic group, and bounded group lock/visibility changes are available in the token property rail. Grid calibration now previews cell size and offsets before saving; map-backed browser acceptance still needs a scene with an uploaded map.
 - Images accept PNG/JPEG/WebP up to 12 MB each. Ingest checks file signatures, image headers, dimensions, and a 64 MiB decoded-pixel bound, but does not decode the full image stream. Category metadata, search, name/size sorting, previews, storage totals, and map/object/token usage counts are available; unused-only deletion is enforced. Generated thumbnails and folders remain open.
 - There is no automated Playwright suite, automated backup job, or performance measurement report. An isolated `nri_test` restore passed row-count and referenced-media SHA-256 checks; a production-like maintenance-window drill remains open.
-- Full layer/object editing, campaign export, and production deployment are not complete. GitHub Actions PR run #68 passed on `57d0b6d`; current local documentation changes still need CI.
+- Full layer/object editing, campaign export, and production deployment are not complete. GitHub Actions PR run #82 passed on `caff95e`; documentation changes after that commit await CI.
 - The asset library and additional tabletop tools are incomplete; full security review and owner acceptance are pending.
 
 ## Stack
