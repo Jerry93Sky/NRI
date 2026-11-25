@@ -18,8 +18,9 @@ All notable project changes will be recorded here.
 - Added campaign-library image insertion as editable scene objects and lazy Pixi texture rendering through the existing campaign-scoped asset endpoint. Browser acceptance of this flow remains pending.
 - Added localized creation and editing of text scene objects with Pixi text rendering; browser acceptance remains pending.
 - Added selectable layer-list scene objects and single-object in-app copy/paste with Ctrl/Cmd+C and Ctrl/Cmd+V. Pasting creates a new versioned object on the active editable layer and reuses campaign asset references.
+- Fixed invitation acceptance by only setting JSON content type when a request has a body. Added a two-context Playwright privacy scenario and made it part of CI; broad browser workflow coverage remains open.
 - Added an ephemeral shared pointer with server-checked campaign membership, active-scene/draft privacy, scene-bound validation, and per-socket rate limiting.
-- Remediated the moderate i18next GHSA-6jcc-5g8w-32mx advisory by updating to 26.3.4; the production dependency audit is clean. Targeted review evidence and remaining review scope are recorded in `docs/security/V0.1.1_REVIEW.md`.
+- Remediated moderate i18next GHSA-6jcc-5g8w-32mx and esbuild GHSA-67mh-4wv8-2f99 advisories; full and production dependency audits are clean. Targeted review evidence and remaining review scope are recorded in `docs/security/V0.1.1_REVIEW.md`.
 - Added a localized line-object action. Lines are stored as editable scene objects with point geometry and are covered by the multiplayer API smoke.
 - Added a GM freehand mode with live stroke preview and persisted point geometry on the selected unlocked layer.
 - Added localized drawing color and stroke-width controls plus per-object color editing.
@@ -31,7 +32,7 @@ All notable project changes will be recorded here.
 - Documented the no-overwrite database/media backup procedure and passed an isolated PostgreSQL/media restore drill for `nri_test`.
 - Added a GM-only categorized campaign image library with multi-file uploads, search, name/size sorting, metadata editing, storage totals and map/object/token reference counts. Unused-only deletion checks references transactionally. Token images render on the tabletop and are served to players only for visible tokens in the active scene. Upload checks image signatures and header dimensions against size and decoded-pixel bounds; full decoding and thumbnail generation remain open.
 - Restricted layer creation to custom layers and changed object-to-layer deletion behavior so a non-empty layer cannot cascade-delete its objects.
-- V0.1.1 is still in progress. Canvas object selection, typography controls, token and multi-object clipboard workflows, mapped browser acceptance for calibration and ruler, broader undo, asset thumbnails/folders, player drawing permissions, Playwright, broader security review, automated/quiesced backup validation, performance testing, and demo expansion remain open. The shared pointer has server smoke coverage but still needs browser acceptance.
+- V0.1.1 is still in progress. Canvas object selection, typography controls, token and multi-object clipboard workflows, mapped browser acceptance for calibration and ruler, broader undo, asset thumbnails/folders, player drawing permissions, remaining Playwright scenarios, broader security review, automated/quiesced backup validation, performance testing, and demo expansion remain open. The shared pointer has server smoke coverage but still needs browser acceptance.
 
 ## Unreleased — V0.1 foundation
 

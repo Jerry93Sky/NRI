@@ -1,0 +1,112 @@
+import { expect, test } from '@playwright/test';
+
+async function register(page: import('@playwright/test').Page, name: string, email: string) {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await page.getByLabel('Display name').fill(name);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill('e2e-test-password-24');
+  await page.getByRole('button', { name: 'Create account', exact: true }).first().click();
+  await expect(page.getByRole('heading', { name: 'Your campaigns' })).toBeVisible();
+}
+
+async function requestJson(page: import('@playwright/test').Page, path: string, method = 'GET', body?: unknown) {
+  return page.evaluate(async ({ path, method, body }) => {
+    const response = await fetch(path, {
+      method,
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: response.status, body: response.status === 204 ? null : await response.json() };
+  }, { path, method, body });
+}
+
+test('separate GM and player contexts keep drafts and GM objects private', async ({ browser, baseURL }) => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const gmContext = await browser.newContext({ locale: 'en-US' });
+  const playerContext = await browser.newContext({ locale: 'en-US' });
+  const gmPage = await gmContext.newPage();
+  const playerPage = await playerContext.newPage();
+
+  try {
+    await register(gmPage, 'E2E Guide', `guide-${suffix}@example.test`);
+    const campaignTitle = `E2E Campaign ${suffix}`;
+    await gmPage.getByLabel('Campaign name').fill(campaignTitle);
+    await gmPage.getByLabel('A short description').fill('Isolated browser acceptance data');
+    await gmPage.getByRole('button', { name: /^Create/ }).click();
+    await expect(gmPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
+
+    const activeTitle = `Active ${suffix}`;
+    await gmPage.getByRole('button', { name: /Add scene/ }).first().click();
+    await gmPage.getByLabel('Scene name').fill(activeTitle);
+    const activeResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/scenes') && response.request().method() === 'POST');
+    await gmPage.getByRole('button', { name: /^Create/ }).click();
+    const activeSceneResponse = await activeResponsePromise;
+    const { scene: activeScene } = await activeSceneResponse.json() as { scene: { id: string; campaignId: string } };
+    await expect(gmPage.getByRole('button', { name: 'Add token' })).toBeVisible();
+
+    const layersResult = await requestJson(gmPage, `/api/scenes/${activeScene.id}/layers`);
+    expect(layersResult.status).toBe(200);
+    const layers = layersResult.body as Array<{ id: string; kind: string }>;
+    const gmLayer = layers.find((layer) => layer.kind === 'GM');
+    const objectsLayer = layers.find((layer) => layer.kind === 'OBJECTS');
+    expect(gmLayer).toBeTruthy();
+    expect(objectsLayer).toBeTruthy();
+    const hiddenObjectResult = await requestJson(gmPage, `/api/scenes/${activeScene.id}/objects`, 'POST', {
+      layerId: gmLayer!.id, kind: 'RECTANGLE', x: 100, y: 100, width: 64, height: 64,
+      color: '#cc4444', strokeWidth: 2, visible: true, locked: false,
+    });
+    expect(hiddenObjectResult.status).toBe(201);
+    const hiddenObjectId = (hiddenObjectResult.body as { object: { id: string } }).object.id;
+
+    const tokenResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/tokens') && response.request().method() === 'POST');
+    await gmPage.getByRole('button', { name: 'Add token' }).click();
+    const tokenResponse = await tokenResponsePromise;
+    const { token } = await tokenResponse.json() as { token: { id: string; version: number } };
+
+    const inviteResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/invitations') && response.request().method() === 'POST');
+    await gmPage.getByRole('button', { name: /Invite players/ }).click();
+    const inviteResponse = await inviteResponsePromise;
+    const { invitation } = await inviteResponse.json() as { invitation: string };
+
+    await playerPage.goto(new URL(`/?invite=${encodeURIComponent(invitation)}`, baseURL).toString());
+    await playerPage.getByRole('button', { name: 'Create account' }).click();
+    await playerPage.getByLabel('Display name').fill('E2E Player');
+    await playerPage.getByLabel('Email').fill(`player-${suffix}@example.test`);
+    await playerPage.getByLabel('Password').fill('e2e-test-password-24');
+    await playerPage.getByRole('button', { name: 'Create account', exact: true }).first().click();
+    await expect(playerPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
+
+    const playerScenes = await requestJson(playerPage, `/api/campaigns/${activeScene.campaignId}/scenes`);
+    expect(playerScenes.status).toBe(200);
+    expect((playerScenes.body as Array<{ id: string }>).map((scene) => scene.id)).toEqual([activeScene.id]);
+    const playerLayers = await requestJson(playerPage, `/api/scenes/${activeScene.id}/layers`);
+    expect((playerLayers.body as Array<{ kind: string }>).some((layer) => layer.kind === 'GM')).toBe(false);
+    const playerObjects = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`);
+    expect((playerObjects.body as Array<{ id: string }>).some((object) => object.id === hiddenObjectId)).toBe(false);
+    const deniedObjectWrite = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`, 'POST', {
+      layerId: objectsLayer!.id, kind: 'RECTANGLE', x: 10, y: 10, width: 64, height: 64,
+    });
+    expect(deniedObjectWrite.status).toBe(403);
+    const deniedTokenEdit = await requestJson(playerPage, `/api/tokens/${token.id}`, 'PATCH', {
+      expectedVersion: token.version, name: 'Unauthorized edit',
+    });
+    expect(deniedTokenEdit.status).toBe(403);
+
+    const draftTitle = `GM Draft ${suffix}`;
+    await gmPage.getByRole('button', { name: /Add scene/ }).first().click();
+    await gmPage.getByLabel('Scene name').fill(draftTitle);
+    const draftResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/scenes') && response.request().method() === 'POST');
+    await gmPage.getByRole('button', { name: 'Create', exact: true }).click();
+    const draftResponse = await draftResponsePromise;
+    const { scene: draftScene } = await draftResponse.json() as { scene: { id: string; campaignId: string; isActive: boolean } };
+    expect(draftScene.isActive).toBe(false);
+    await expect(gmPage.getByText(draftTitle, { exact: true })).toBeVisible();
+    await expect(playerPage.getByText(draftTitle, { exact: true })).toHaveCount(0);
+    const stillPrivateScenes = await requestJson(playerPage, `/api/campaigns/${draftScene.campaignId}/scenes`);
+    expect((stillPrivateScenes.body as Array<{ id: string }>).map((scene) => scene.id)).toEqual([activeScene.id]);
+  } finally {
+    await Promise.allSettled([gmContext.close(), playerContext.close()]);
+  }
+});
