@@ -254,3 +254,36 @@ test('GM can select, copy, and paste scene objects atomically', async ({ browser
     await Promise.allSettled([gmContext.close(), playerContext.close()]);
   }
 });
+
+test('GM can drag image files into the campaign asset library', async ({ browser }) => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const context = await browser.newContext({ locale: 'en-US' });
+  const page = await context.newPage();
+  try {
+    await register(page, 'Asset Guide', `assets-${suffix}@example.test`);
+    const campaignTitle = `Asset Drop ${suffix}`;
+    await page.getByLabel('Campaign name').fill(campaignTitle);
+    await page.getByLabel('A short description').fill('Isolated asset drop acceptance data');
+    await page.getByRole('button', { name: /^Create/ }).click();
+    await expect(page.getByRole('heading', { name: campaignTitle })).toBeVisible();
+    await page.getByRole('button', { name: 'Asset library' }).click();
+    await page.getByLabel('Upload as').selectOption('MAP');
+
+    const uploadResponsePromise = page.waitForResponse((response) => response.url().includes('/api/campaigns/') && response.url().includes('/assets?category=MAP') && response.request().method() === 'POST');
+    await page.getByTestId('asset-drop-zone').evaluate((element) => {
+      const canvas = document.createElement('canvas'); canvas.width = 2; canvas.height = 2;
+      const transfer = new DataTransfer();
+      canvas.toBlob((blob) => {
+        if (!blob) throw new Error('Could not create test PNG');
+        transfer.items.add(new File([blob], 'dropped-map.png', { type: 'image/png' }));
+        element.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+        element.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      }, 'image/png');
+    });
+    const uploadResponse = await uploadResponsePromise;
+    expect(uploadResponse.status()).toBe(201);
+    await expect(page.getByRole('textbox', { name: 'Name' })).toHaveValue('dropped-map.png');
+  } finally {
+    await context.close();
+  }
+});
