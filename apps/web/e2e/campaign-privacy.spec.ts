@@ -282,7 +282,11 @@ test('GM can drag image files into the campaign asset library', async ({ browser
     });
     const uploadResponse = await uploadResponsePromise;
     expect(uploadResponse.status()).toBe(201);
+    const uploadBody = await uploadResponse.json() as { asset: { id: string; name: string } };
+    expect(uploadBody.asset.name).toBe('dropped-map.png');
     await expect(page.getByRole('textbox', { name: 'Name' })).toHaveValue('dropped-map.png');
+    await expect(page.getByRole('img', { name: 'dropped-map.png' })).toHaveAttribute('src', `/api/assets/${uploadBody.asset.id}?variant=thumbnail`);
+    await expect(page.getByRole('link', { name: 'dropped-map.png' })).toHaveAttribute('href', `/api/assets/${uploadBody.asset.id}`);
   } finally {
     await context.close();
   }

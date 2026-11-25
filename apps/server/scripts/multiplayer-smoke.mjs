@@ -86,6 +86,10 @@ const mapUpload = await fetch(`${base}/api/campaigns/${campaign.id}/assets`, { m
 assert.equal(mapUpload.status, 201, 'GM can upload a supported map image');
 const { asset, assets: uploadedAssets } = await mapUpload.json();
 assert.equal(asset.name, 'original-map.png'); assert.equal(asset.width, 1); assert.equal(asset.height, 1); assert.equal(uploadedAssets.length, 1);
+const ownerThumbnail = await fetch(`${base}/api/assets/${asset.id}?variant=thumbnail`, { headers: { cookie: owner.cookie } });
+assert.equal(ownerThumbnail.status, 200, 'GM can read a generated asset thumbnail'); assert.equal(ownerThumbnail.headers.get('content-type'), 'image/webp');
+const thumbnailBytes = Buffer.from(await ownerThumbnail.arrayBuffer()); assert.equal(thumbnailBytes.toString('ascii', 0, 4), 'RIFF'); assert.equal(thumbnailBytes.toString('ascii', 8, 12), 'WEBP');
+const privateThumbnail = await fetch(`${base}/api/assets/${asset.id}?variant=thumbnail`, { headers: { cookie: player.cookie } }); assert.equal(privateThumbnail.status, 404, 'players cannot read an unreferenced library thumbnail');
 const bulkForm = new FormData(); bulkForm.append('files', new Blob([mapBytes], { type: 'image/png' }), 'token-one.png'); bulkForm.append('files', new Blob([mapBytes], { type: 'image/png' }), 'token-two.png');
 const bulkUpload = await fetch(`${base}/api/campaigns/${campaign.id}/assets?category=TOKEN`, { method: 'POST', headers: { cookie: owner.cookie }, body: bulkForm });
 assert.equal(bulkUpload.status, 201, 'GM can upload multiple assets in one request'); const { assets: tokenAssets } = await bulkUpload.json(); assert.equal(tokenAssets.length, 2);
@@ -103,6 +107,7 @@ const mapRead = await fetch(`${base}/api/assets/${asset.id}`, { headers: { cooki
 assert.equal(mapRead.status, 200, 'campaign members can read the scene map');
 assert.equal(mapRead.headers.get('content-type'), 'image/png');
 assert.deepEqual(Buffer.from(await mapRead.arrayBuffer()), mapBytes, 'the authorized map download matches the uploaded bytes');
+const mapThumbnailRead = await fetch(`${base}/api/assets/${asset.id}?variant=thumbnail`, { headers: { cookie: player.cookie } }); assert.equal(mapThumbnailRead.status, 200, 'players can read a thumbnail for the active scene map'); assert.equal(mapThumbnailRead.headers.get('content-type'), 'image/webp');
 const { result: { token: recoverableToken } } = await request('/api/tokens', { method: 'POST', cookie: owner.cookie, body: { sceneId: scene.id, name: 'Recoverable token', x: 9, y: 9, color: '#667788' } });
 const unauthorizedTokenTrash = await fetch(`${base}/api/campaigns/${campaign.id}/token-trash`, { headers: { cookie: player.cookie } }); assert.equal(unauthorizedTokenTrash.status, 403, 'players cannot browse deleted tokens');
 const deleteRecoverableToken = await fetch(`${base}/api/tokens/${recoverableToken.id}`, { method: 'DELETE', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: recoverableToken.version }) }); assert.equal(deleteRecoverableToken.status, 204, 'GM can move a token into recoverable deletion');
@@ -200,12 +205,14 @@ assert.equal(Object.hasOwn(ownerNotePayload, 'gmNote'), false, 'owner-note event
 const tokenHiddenForPlayer = expectEvent(playerClient.socket, 'token:hidden');
 const { result: { token: hiddenPlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: tokenWithUpdatedNotes.version, hidden: true } });
 const hiddenTokenImage = await fetch(`${base}/api/assets/${tokenAssets[0].id}`, { headers: { cookie: player.cookie } }); assert.equal(hiddenTokenImage.status, 404, 'players cannot read images attached only to hidden tokens');
+const hiddenTokenThumbnail = await fetch(`${base}/api/assets/${tokenAssets[0].id}?variant=thumbnail`, { headers: { cookie: player.cookie } }); assert.equal(hiddenTokenThumbnail.status, 404, 'players cannot read thumbnails attached only to hidden tokens');
 assert.equal(hiddenPlayerToken.hidden, true);
 assert.equal((await tokenHiddenForPlayer).id, playerToken.id, 'players receive a safe removal when a token becomes hidden');
 assert.equal((await request(`/api/scenes/${scene.id}/tokens`, { cookie: player.cookie })).result.some((token) => token.id === playerToken.id), false, 'hidden token is removed from player snapshots');
 const tokenShownForPlayer = expectEvent(playerClient.socket, 'token:created');
 const { result: { token: visiblePlayerToken } } = await request(`/api/tokens/${playerToken.id}`, { method: 'PATCH', cookie: owner.cookie, body: { expectedVersion: hiddenPlayerToken.version, hidden: false } });
 const visibleTokenImage = await fetch(`${base}/api/assets/${tokenAssets[0].id}`, { headers: { cookie: player.cookie } }); assert.equal(visibleTokenImage.status, 200, 'token image access returns when token visibility is restored');
+const visibleTokenThumbnail = await fetch(`${base}/api/assets/${tokenAssets[0].id}?variant=thumbnail`, { headers: { cookie: player.cookie } }); assert.equal(visibleTokenThumbnail.status, 200, 'thumbnail access returns when token visibility is restored');
 const shownTokenEvent = await tokenShownForPlayer;
 assert.equal(shownTokenEvent.id, playerToken.id, 'players receive the token when it becomes visible again');
 assert.equal(Object.hasOwn(shownTokenEvent, 'hidden'), false, 'visibility events do not expose hidden-state metadata');

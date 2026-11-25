@@ -6,7 +6,7 @@ import rateLimit from '@fastify/rate-limit';
 import { Server } from 'socket.io';
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import argon2 from 'argon2';
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
@@ -16,6 +16,7 @@ import { db, pool } from './db/index.js';
 import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
 import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
 import { decodeImage, inspectImage } from './domain/imageMetadata.js';
+import { assetThumbnailKey, makeAssetThumbnail } from './domain/assetThumbnail.js';
 
 function publicToken(token: typeof tokens.$inferSelect, includeHidden = false, viewerUserId?: string) {
   const { hidden: _hidden, resources: _resources, gmNote: _gmNote, ownerNote: _ownerNote, id, sceneId, name, x, y, color, imageAssetId, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId } = token;
@@ -732,17 +733,20 @@ app.post('/api/campaigns/:campaignId/assets', async (request, reply) => {
     catch (error) { failures.push({ filename: file.filename, error: error instanceof Error ? error.message : 'INVALID_IMAGE' }); continue; }
     const extension = metadata.mediaType === 'image/png' ? '.png' : metadata.mediaType === 'image/jpeg' ? '.jpg' : '.webp';
     const storageKey = `${randomBytes(24).toString('hex')}${extension}`;
+    const thumbnailKey = assetThumbnailKey(storageKey);
     const filename = file.filename.split(/[\\/]/).pop()?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120) || 'Untitled image';
     await mkdir(uploadDirectory, { recursive: true });
     const destination = resolve(uploadDirectory, storageKey);
+    const thumbnailDestination = resolve(uploadDirectory, thumbnailKey);
     try {
       await writeFile(destination, buffer, { flag: 'wx', mode: 0o600 });
+      await writeFile(thumbnailDestination, await makeAssetThumbnail(buffer), { flag: 'wx', mode: 0o600 });
       const [asset] = await db.insert(assets).values({ campaignId, name: filename, category: category.data, storageKey, mediaType: metadata.mediaType, size: buffer.byteLength, checksum: createHash('sha256').update(buffer).digest('hex'), uploaderId: user.id }).returning();
       if (!asset) throw new Error('Asset metadata creation failed');
       await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'asset.uploaded', targetId: asset.id });
       uploaded.push({ id: asset.id, name: asset.name, category: asset.category, mediaType: asset.mediaType, size: asset.size, width: metadata.width, height: metadata.height });
     } catch (error) {
-      await unlink(destination).catch(() => {});
+      await Promise.all([unlink(destination).catch(() => {}), unlink(thumbnailDestination).catch(() => {})]);
       throw error;
     }
   }
@@ -802,7 +806,10 @@ app.delete('/api/assets/:assetId', async (request, reply) => {
     return true;
   });
   if (!removed) return reply.code(409).send({ error: 'ASSET_IN_USE' });
-  await unlink(resolve(uploadDirectory, asset.storageKey)).catch((error: unknown) => app.log.error({ err: error, assetId: asset.id }, 'Deleted asset file cleanup failed'));
+  await Promise.all([
+    unlink(resolve(uploadDirectory, asset.storageKey)).catch((error: unknown) => app.log.error({ err: error, assetId: asset.id }, 'Deleted asset file cleanup failed')),
+    unlink(resolve(uploadDirectory, assetThumbnailKey(asset.storageKey))).catch((error: unknown) => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') app.log.error({ err: error, assetId: asset.id }, 'Deleted asset thumbnail cleanup failed'); }),
+  ]);
   return reply.code(204).send();
 });
 app.put('/api/scenes/:sceneId/background', async (request, reply) => {
@@ -827,6 +834,8 @@ app.put('/api/scenes/:sceneId/background', async (request, reply) => {
 app.get('/api/assets/:assetId', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
   const { assetId } = request.params as { assetId: string };
+  const variant = (request.query as { variant?: string }).variant;
+  if (variant !== undefined && variant !== 'thumbnail') return reply.code(400).send({ error: 'INVALID_VARIANT' });
   const [asset] = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
   if (!asset) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(asset.campaignId, user.id);
@@ -836,6 +845,22 @@ app.get('/api/assets/:assetId', async (request, reply) => {
     const [visibleObject] = await db.select({ id: sceneObjects.id }).from(sceneObjects).innerJoin(sceneLayers, eq(sceneObjects.layerId, sceneLayers.id)).innerJoin(scenes, eq(sceneObjects.sceneId, scenes.id)).where(and(eq(scenes.campaignId, asset.campaignId), eq(scenes.isActive, true), isNull(scenes.archivedAt), eq(sceneObjects.assetId, asset.id), eq(sceneObjects.visible, true), eq(sceneLayers.visibleToPlayers, true), sql`${sceneLayers.kind} <> 'GM'`)).limit(1);
     const [visibleToken] = await db.select({ id: tokens.id }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(scenes.campaignId, asset.campaignId), eq(scenes.isActive, true), isNull(scenes.archivedAt), eq(tokens.imageAssetId, asset.id), eq(tokens.hidden, false))).limit(1);
     if (!visibleMap && !visibleObject && !visibleToken) return reply.code(404).send({ error: 'NOT_FOUND' });
+  }
+  if (variant === 'thumbnail') {
+    const thumbnailPath = resolve(uploadDirectory, assetThumbnailKey(asset.storageKey));
+    let thumbnail: Buffer;
+    try { thumbnail = await readFile(thumbnailPath); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const original = await readFile(resolve(uploadDirectory, asset.storageKey));
+      thumbnail = await makeAssetThumbnail(original);
+      try { await writeFile(thumbnailPath, thumbnail, { flag: 'wx', mode: 0o600 }); }
+      catch (writeError) {
+        if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError;
+        thumbnail = await readFile(thumbnailPath);
+      }
+    }
+    return reply.type('image/webp').header('x-content-type-options', 'nosniff').header('cache-control', 'private, max-age=3600').send(thumbnail);
   }
   return reply.type(asset.mediaType).header('x-content-type-options', 'nosniff').header('cache-control', 'private, max-age=3600').send(createReadStream(resolve(uploadDirectory, asset.storageKey)));
 });
