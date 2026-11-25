@@ -18,6 +18,7 @@ All notable project changes will be recorded here.
 - Added campaign-library image insertion as editable scene objects and lazy Pixi texture rendering through the existing campaign-scoped asset endpoint. Browser acceptance of this flow remains pending.
 - Added localized creation and editing of text scene objects with Pixi text rendering; browser acceptance remains pending.
 - Added selectable layer-list scene objects and single-object in-app copy/paste with Ctrl/Cmd+C and Ctrl/Cmd+V. Pasting creates a new versioned object on the active editable layer and reuses campaign asset references.
+- Added Shift/Ctrl/Cmd multi-selection and atomic copy/paste for up to 50 scene objects. The server validates every source version, creates independent objects in one transaction, and preserves hidden-object visibility; stale sources return a conflict without partial copies.
 - Fixed invitation acceptance by only setting JSON content type when a request has a body. Added a two-context Playwright privacy scenario and made it part of CI; broad browser workflow coverage remains open.
 - Added GM single- and multi-token copy/paste. The server validates campaign membership, all source versions, and the same-campaign destination before atomically creating up to 50 new IDs; copies clear owner assignment/private owner notes. Stale group copies create no partial tokens.
 - Extended the two-context Playwright privacy scenario to verify a copied hidden GM object stays hidden when placed on the player-visible Objects layer.
@@ -36,7 +37,7 @@ All notable project changes will be recorded here.
 - Documented the no-overwrite database/media backup procedure and passed an isolated PostgreSQL/media restore drill for `nri_test`.
 - Added a GM-only categorized campaign image library with multi-file uploads, search, name/size sorting, metadata editing, storage totals and map/object/token reference counts. Unused-only deletion checks references transactionally. Token images render on the tabletop and are served to players only for visible tokens in the active scene. Uploads use signature, dimension, and bounded full-decode checks; generated thumbnails remain open.
 - Restricted layer creation to custom layers and changed object-to-layer deletion behavior so a non-empty layer cannot cascade-delete its objects.
-- V0.1.1 is still in progress. Canvas object selection, typography controls, multi-object clipboard, mapped browser acceptance for calibration and ruler, broader undo, asset thumbnails/folders, player drawing permissions, remaining Playwright scenarios, broader security review, automated/quiesced backup validation, performance testing, and demo expansion remain open. The shared pointer has server smoke coverage but still needs browser acceptance.
+- V0.1.1 is still in progress. Typography controls, mapped browser acceptance for calibration and ruler, broader undo, asset thumbnails/folders, player drawing permissions, remaining Playwright scenarios, broader security review, automated/quiesced backup validation, performance testing, and demo expansion remain open. The shared pointer has server smoke coverage but still needs browser acceptance.
 
 ## Unreleased — V0.1 foundation
 

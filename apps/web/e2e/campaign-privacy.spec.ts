@@ -171,3 +171,86 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await Promise.allSettled([gmContext.close(), playerContext.close()]);
   }
 });
+
+test('GM can select, copy, and paste scene objects atomically', async ({ browser, baseURL }) => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const gmContext = await browser.newContext({ locale: 'en-US' });
+  const playerContext = await browser.newContext({ locale: 'en-US' });
+  const gmPage = await gmContext.newPage();
+  const playerPage = await playerContext.newPage();
+
+  try {
+    await register(gmPage, 'Clipboard Guide', `clipboard-guide-${suffix}@example.test`);
+    const campaignTitle = `Clipboard Campaign ${suffix}`;
+    await gmPage.getByLabel('Campaign name').fill(campaignTitle);
+    await gmPage.getByLabel('A short description').fill('Atomic scene object clipboard');
+    await gmPage.getByRole('button', { name: /^Create/ }).click();
+    await expect(gmPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
+
+    const activeTitle = `Clipboard Scene ${suffix}`;
+    await gmPage.getByRole('button', { name: /Add scene/ }).first().click();
+    await gmPage.getByLabel('Scene name').fill(activeTitle);
+    const sceneResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/scenes') && response.request().method() === 'POST');
+    await gmPage.getByRole('button', { name: /^Create/ }).click();
+    const { scene } = await (await sceneResponsePromise).json() as { scene: { id: string; campaignId: string } };
+    const layers = (await requestJson(gmPage, `/api/scenes/${scene.id}/layers`)).body as Array<{ id: string; kind: string }>;
+    const objectsLayer = layers.find((layer) => layer.kind === 'OBJECTS')!;
+    const sourceObjects: Array<{ id: string; version: number }> = [];
+    for (const x of [220, 320]) {
+      const created = await requestJson(gmPage, `/api/scenes/${scene.id}/objects`, 'POST', {
+        layerId: objectsLayer.id, kind: 'RECTANGLE', x, y: 220, width: 64, height: 64, color: '#6688cc', visible: true,
+      });
+      expect(created.status).toBe(201);
+      sourceObjects.push((created.body as { object: { id: string; version: number } }).object);
+    }
+
+    const inviteResult = await requestJson(gmPage, '/api/invitations', 'POST', { campaignId: scene.campaignId, expiresInHours: 1 });
+    const { invitation } = inviteResult.body as { invitation: string };
+    await playerPage.goto(new URL(`/?invite=${encodeURIComponent(invitation)}`, baseURL).toString());
+    await playerPage.getByRole('button', { name: 'Create account' }).click();
+    await playerPage.getByLabel('Display name').fill('Clipboard Player');
+    await playerPage.getByLabel('Email').fill(`clipboard-player-${suffix}@example.test`);
+    await playerPage.getByLabel('Password').fill('e2e-test-password-24');
+    const acceptPromise = playerPage.waitForResponse((response) => /\/api\/invitations\/[^/]+\/accept$/.test(new URL(response.url()).pathname));
+    await playerPage.getByRole('button', { name: 'Create account', exact: true }).first().click();
+    expect((await acceptPromise).status()).toBe(200);
+    await expect(playerPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
+
+    await gmPage.locator('details.layer-tools summary').click();
+    await gmPage.locator('.layer-select').filter({ hasText: 'Objects' }).click();
+    await expect(gmPage.locator(`.scene-object-row[data-object-id="${sourceObjects[0]!.id}"]`)).toBeVisible();
+    for (const [index, source] of sourceObjects.entries()) {
+      await gmPage.locator(`.scene-object-row[data-object-id="${source.id}"] .object-select`).click(index ? { modifiers: ['Shift'] } : {});
+    }
+
+    const groupCopyResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith(`/api/scenes/${scene.id}/objects/duplicate`) && response.request().method() === 'POST');
+    await gmPage.getByRole('button', { name: 'Copy selected objects' }).click();
+    await gmPage.getByRole('button', { name: 'Paste objects' }).click();
+    const groupCopyResponse = await groupCopyResponsePromise;
+    expect(groupCopyResponse.status()).toBe(201);
+    const copied = (await groupCopyResponse.json() as { objects: Array<{ id: string }> }).objects;
+    expect(copied).toHaveLength(2);
+    expect(new Set(copied.map((object) => object.id)).size).toBe(2);
+    expect(copied.every((object) => !sourceObjects.some((source) => source.id === object.id))).toBe(true);
+
+    const beforeConflict = await requestJson(gmPage, `/api/scenes/${scene.id}/objects`);
+    const staleCopy = await requestJson(gmPage, `/api/scenes/${scene.id}/objects/duplicate`, 'POST', {
+      layerId: objectsLayer.id,
+      objects: [
+        { objectId: sourceObjects[0]!.id, expectedVersion: sourceObjects[0]!.version + 99, x: 400, y: 400 },
+        { objectId: sourceObjects[1]!.id, expectedVersion: sourceObjects[1]!.version, x: 500, y: 400 },
+      ],
+    });
+    expect(staleCopy.status).toBe(409);
+    const afterConflict = await requestJson(gmPage, `/api/scenes/${scene.id}/objects`);
+    expect((afterConflict.body as unknown[]).length).toBe((beforeConflict.body as unknown[]).length);
+    const playerObjects = await requestJson(playerPage, `/api/scenes/${scene.id}/objects`);
+    expect(copied.every((object) => (playerObjects.body as Array<{ id: string }>).some((item) => item.id === object.id))).toBe(true);
+    const deniedCopy = await requestJson(playerPage, `/api/scenes/${scene.id}/objects/duplicate`, 'POST', {
+      layerId: objectsLayer.id, objects: [{ objectId: sourceObjects[0]!.id, expectedVersion: sourceObjects[0]!.version, x: 500, y: 500 }],
+    });
+    expect(deniedCopy.status).toBe(403);
+  } finally {
+    await Promise.allSettled([gmContext.close(), playerContext.close()]);
+  }
+});

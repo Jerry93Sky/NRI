@@ -11,7 +11,7 @@ import { resolve } from 'node:path';
 import argon2 from 'argon2';
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, duplicateTokenSchema, duplicateTokensSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateAssetSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema } from '@nri/contracts';
+import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateAssetSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema } from '@nri/contracts';
 import { db, pool } from './db/index.js';
 import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
 import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
@@ -457,6 +457,48 @@ app.post('/api/scenes/:sceneId/objects', async (request, reply) => {
   const room = `campaign:${scene.campaignId}`;
   ((scene.isActive && layer.visibleToPlayers && object.visible && layer.kind !== 'GM') ? io.to(room) : io.to(`${room}:gm`)).emit('scene:object_created', { object });
   return reply.code(201).send({ object });
+});
+app.post('/api/scenes/:sceneId/objects/duplicate', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const input = parseBody(duplicateSceneObjectsSchema, request.body);
+  const result = await db.transaction(async (tx) => {
+    const [scene] = await tx.select().from(scenes).where(eq(scenes.id, sceneId)).for('update').limit(1);
+    if (!scene || scene.archivedAt) return { error: 'NOT_FOUND' as const };
+    const [membership] = await tx.select({ role: memberships.role }).from(memberships)
+      .where(and(eq(memberships.campaignId, scene.campaignId), eq(memberships.userId, user.id))).limit(1);
+    if (!membership || !['OWNER', 'GM'].includes(membership.role)) return { error: 'FORBIDDEN' as const };
+    const [layer] = await tx.select().from(sceneLayers).where(and(eq(sceneLayers.id, input.layerId), eq(sceneLayers.sceneId, sceneId))).for('update').limit(1);
+    if (!layer) return { error: 'INVALID_LAYER' as const };
+    if (layer.locked) return { error: 'LAYER_LOCKED' as const };
+    if (layer.kind === 'BACKGROUND') return { error: 'INVALID_LAYER' as const };
+    const sourceRows = await tx.select().from(sceneObjects)
+      .where(and(eq(sceneObjects.sceneId, sceneId), inArray(sceneObjects.id, input.objects.map((item) => item.objectId))))
+      .orderBy(asc(sceneObjects.id)).for('update');
+    if (sourceRows.length !== input.objects.length) return { error: 'NOT_FOUND' as const };
+    const sources = new Map(sourceRows.map((object) => [object.id, object]));
+    if (input.objects.some((item) => sources.get(item.objectId)?.version !== item.expectedVersion)) return { error: 'CONFLICT' as const };
+    const duplicateRows = input.objects.map((item) => {
+      const source = sources.get(item.objectId)!;
+      const { id: _sourceId, version: _sourceVersion, ...copy } = source;
+      return { ...copy, id: randomUUID(), layerId: layer.id, x: item.x, y: item.y, visible: layer.kind === 'GM' ? false : source.visible, locked: false, version: 1 };
+    });
+    const created = await tx.insert(sceneObjects).values(duplicateRows).returning();
+    const createdById = new Map(created.map((object) => [object.id, object]));
+    const objects = duplicateRows.map((object) => createdById.get(object.id)!);
+    await tx.insert(auditEvents).values(objects.map((object, index) => ({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.object_duplicated', targetId: object.id, detail: `source:${input.objects[index]!.objectId}` })));
+    return { objects, campaignId: scene.campaignId, isActive: scene.isActive, layerVisible: layer.visibleToPlayers, layerKind: layer.kind };
+  });
+  if ('error' in result) {
+    const status = result.error === 'FORBIDDEN' ? 403 : result.error === 'CONFLICT' || result.error === 'LAYER_LOCKED' ? 409 : result.error === 'INVALID_LAYER' ? 400 : 404;
+    return reply.code(status).send({ error: result.error });
+  }
+  const room = `campaign:${result.campaignId}`;
+  for (const object of result.objects) {
+    if (result.isActive && result.layerVisible && result.layerKind !== 'GM' && object.visible) io.to(room).emit('scene:object_created', { object });
+    else io.to(`${room}:gm`).emit('scene:object_created', { object });
+  }
+  return reply.code(201).send({ objects: result.objects });
 });
 app.patch('/api/objects/:objectId', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;

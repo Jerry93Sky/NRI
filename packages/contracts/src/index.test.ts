@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, duplicateTokenSchema, duplicateTokensSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
+import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
 
 describe('campaign-scoped token permissions', () => {
   it('allows the owner of a visible player token', () => expect(canMoveToken('PLAYER', 'u1', 'u1', false)).toBe(true));
@@ -31,6 +31,14 @@ describe('scene layer and object contracts', () => {
     expect(createSceneObjectSchema.parse(base)).toMatchObject({ width: 64, height: 64, opacity: 1, visible: true });
     expect(createSceneObjectSchema.safeParse({ ...base, kind: 'IMAGE' }).success).toBe(false);
     expect(createSceneObjectSchema.safeParse({ ...base, width: -1 }).success).toBe(false);
+  });
+  it('limits scene object clipboard copies and rejects duplicate source IDs', () => {
+    const layerId = '99c025bf-4a53-4608-8caa-0bdb98ac1e90';
+    const objectId = 'ae6d5f19-9a5f-40d7-9bd7-b71057fb1db8';
+    const entry = { objectId, expectedVersion: 1, x: 64, y: 96 };
+    expect(duplicateSceneObjectsSchema.safeParse({ layerId, objects: [entry] }).success).toBe(true);
+    expect(duplicateSceneObjectsSchema.safeParse({ layerId, objects: [entry, entry] }).success).toBe(false);
+    expect(duplicateSceneObjectsSchema.safeParse({ layerId, objects: Array.from({ length: 51 }, (_, index) => ({ ...entry, objectId: `00000000-0000-4000-8000-${index.toString().padStart(12, '0')}` })) }).success).toBe(false);
   });
   it('requires non-empty bounded text for text objects', () => {
     const base = { layerId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', kind: 'TEXT', x: 10, y: 15 };
