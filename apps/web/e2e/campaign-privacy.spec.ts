@@ -75,7 +75,10 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await playerPage.getByLabel('Display name').fill('E2E Player');
     await playerPage.getByLabel('Email').fill(`player-${suffix}@example.test`);
     await playerPage.getByLabel('Password').fill('e2e-test-password-24');
+    const acceptInvitationPromise = playerPage.waitForResponse((response) => /\/api\/invitations\/[^/]+\/accept$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST');
     await playerPage.getByRole('button', { name: 'Create account', exact: true }).first().click();
+    const acceptInvitationResponse = await acceptInvitationPromise;
+    expect(acceptInvitationResponse.status()).toBe(200);
     await expect(playerPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
 
     const playerScenes = await requestJson(playerPage, `/api/campaigns/${activeScene.campaignId}/scenes`);
