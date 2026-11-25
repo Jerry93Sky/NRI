@@ -99,7 +99,10 @@ export function TableCanvas(props: Props) {
               }).catch(() => pendingObjectTextures.delete(assetId));
             }
           }
-        } else if (item.kind === 'TEXT' && item.text) shape.rect(-item.width / 2, -item.height / 2, item.width, item.height).fill({ color, alpha: 0.18 }).stroke({ color, alpha: 1, width: 1 });
+        } else if (item.kind === 'TEXT' && item.text) {
+          const label = new Text({ text: item.text, style: { fontFamily: 'Arial', fontSize: Math.min(48, Math.max(12, item.height * 0.42)), fill: color, align: 'center', wordWrap: true, wordWrapWidth: Math.max(8, item.width - 12) } });
+          label.anchor.set(0.5); shape.addChild(label);
+        }
         else continue;
         if (latest.current.canEditObject(item)) {
           shape.eventMode = 'static'; shape.cursor = 'grab';

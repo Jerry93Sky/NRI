@@ -32,6 +32,15 @@ describe('scene layer and object contracts', () => {
     expect(createSceneObjectSchema.safeParse({ ...base, kind: 'IMAGE' }).success).toBe(false);
     expect(createSceneObjectSchema.safeParse({ ...base, width: -1 }).success).toBe(false);
   });
+  it('requires non-empty bounded text for text objects', () => {
+    const base = { layerId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', kind: 'TEXT', x: 10, y: 15 };
+    expect(createSceneObjectSchema.parse({ ...base, text: 'Read the inscription' })).toMatchObject({ kind: 'TEXT', text: 'Read the inscription' });
+    expect(createSceneObjectSchema.safeParse({ ...base, text: ' '.repeat(4) }).success).toBe(false);
+    expect(createSceneObjectSchema.safeParse({ ...base, text: 'x'.repeat(501) }).success).toBe(false);
+    expect(updateSceneObjectSchema.safeParse({ expectedVersion: 2, text: 'Updated inscription' }).success).toBe(true);
+    expect(updateSceneObjectSchema.safeParse({ expectedVersion: 2, text: '' }).success).toBe(false);
+    expect(updateSceneObjectSchema.safeParse({ expectedVersion: 2, text: null }).success).toBe(false);
+  });
   it('requires optimistic versions for object updates', () => {
     expect(updateSceneObjectSchema.safeParse({ x: 20, expectedVersion: 2 }).success).toBe(true);
     expect(updateSceneObjectSchema.safeParse({ x: 20 }).success).toBe(false);
