@@ -1,3 +1,5 @@
+import sharp from 'sharp';
+
 export type ImageMetadata = { mediaType: 'image/png' | 'image/jpeg' | 'image/webp'; width: number; height: number };
 
 const MAX_AXIS = 8192;
@@ -63,4 +65,20 @@ export function inspectImage(buffer: Buffer): ImageMetadata {
     throw new Error('INVALID_IMAGE');
   }
   throw new Error('UNSUPPORTED_IMAGE');
+}
+
+/** Header checks establish the accepted format and dimensions; decoding verifies the compressed pixel stream. */
+export async function decodeImage(buffer: Buffer, expected: ImageMetadata): Promise<void> {
+  try {
+    const image = sharp(buffer, { failOn: 'warning', limitInputPixels: MAX_DECODED_BYTES / 4, animated: true });
+    const metadata = await image.metadata();
+    if (metadata.format !== expected.mediaType.slice('image/'.length) || metadata.width !== expected.width || metadata.height !== expected.height) throw new Error('INVALID_IMAGE');
+    if ((metadata.pages ?? 1) > 1) throw new Error('ANIMATED_IMAGE_UNSUPPORTED');
+    if (expected.width * expected.height * (metadata.channels ?? 4) > MAX_DECODED_BYTES) throw new Error('IMAGE_DIMENSIONS_UNSUPPORTED');
+    const { data, info } = await image.raw().toBuffer({ resolveWithObject: true });
+    if (info.width !== expected.width || info.height !== expected.height || data.byteLength === 0 || data.byteLength > MAX_DECODED_BYTES) throw new Error('INVALID_IMAGE');
+  } catch (error) {
+    if (error instanceof Error && ['ANIMATED_IMAGE_UNSUPPORTED', 'IMAGE_DIMENSIONS_UNSUPPORTED'].includes(error.message)) throw error;
+    throw new Error('INVALID_IMAGE');
+  }
 }

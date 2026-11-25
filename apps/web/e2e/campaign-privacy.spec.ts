@@ -58,7 +58,19 @@ test('separate GM and player contexts keep drafts and GM objects private', async
       color: '#cc4444', strokeWidth: 2, visible: true, locked: false,
     });
     expect(hiddenObjectResult.status).toBe(201);
-    const hiddenObjectId = (hiddenObjectResult.body as { object: { id: string } }).object.id;
+    const hiddenSource = (hiddenObjectResult.body as { object: { id: string; visible: boolean; version: number; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; assetId: string | null; color: string | null; strokeWidth: number | null; points: unknown; text: string | null } }).object;
+    expect(hiddenSource.visible).toBe(false);
+    const hiddenObjectId = hiddenSource.id;
+    const copiedHiddenObjectResult = await requestJson(gmPage, `/api/scenes/${activeScene.id}/objects`, 'POST', {
+      layerId: objectsLayer!.id, kind: hiddenSource.kind, x: hiddenSource.x + 24, y: hiddenSource.y + 24,
+      width: hiddenSource.width, height: hiddenSource.height, rotation: hiddenSource.rotation, opacity: hiddenSource.opacity,
+      zIndex: hiddenSource.zIndex + 1, assetId: hiddenSource.assetId, color: hiddenSource.color,
+      strokeWidth: hiddenSource.strokeWidth, points: hiddenSource.points, text: hiddenSource.text,
+      visible: hiddenSource.visible, locked: false,
+    });
+    expect(copiedHiddenObjectResult.status).toBe(201);
+    const copiedHiddenObject = (copiedHiddenObjectResult.body as { object: { id: string; visible: boolean } }).object;
+    expect(copiedHiddenObject.visible).toBe(false);
 
     const tokenResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/tokens') && response.request().method() === 'POST');
     await gmPage.getByRole('button', { name: 'Add token' }).click();
@@ -125,6 +137,7 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     expect((playerLayers.body as Array<{ kind: string }>).some((layer) => layer.kind === 'GM')).toBe(false);
     const playerObjects = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`);
     expect((playerObjects.body as Array<{ id: string }>).some((object) => object.id === hiddenObjectId)).toBe(false);
+    expect((playerObjects.body as Array<{ id: string }>).some((object) => object.id === copiedHiddenObject.id)).toBe(false);
     const deniedObjectWrite = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`, 'POST', {
       layerId: objectsLayer!.id, kind: 'RECTANGLE', x: 10, y: 10, width: 64, height: 64,
     });

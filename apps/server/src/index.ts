@@ -15,7 +15,7 @@ import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createCam
 import { db, pool } from './db/index.js';
 import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
 import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
-import { inspectImage } from './domain/imageMetadata.js';
+import { decodeImage, inspectImage } from './domain/imageMetadata.js';
 
 function publicToken(token: typeof tokens.$inferSelect, includeHidden = false, viewerUserId?: string) {
   const { hidden: _hidden, resources: _resources, gmNote: _gmNote, ownerNote: _ownerNote, id, sceneId, name, x, y, color, imageAssetId, width, height, rotation, opacity, borderColor, zIndex, locked, showName, version, ownerUserId } = token;
@@ -683,7 +683,10 @@ app.post('/api/campaigns/:campaignId/assets', async (request, reply) => {
     try { buffer = await file.toBuffer(); }
     catch { failures.push({ filename: file.filename, error: 'FILE_TOO_LARGE' }); continue; }
     let metadata: ReturnType<typeof inspectImage>;
-    try { metadata = inspectImage(buffer); }
+    try {
+      metadata = inspectImage(buffer);
+      await decodeImage(buffer, metadata);
+    }
     catch (error) { failures.push({ filename: file.filename, error: error instanceof Error ? error.message : 'INVALID_IMAGE' }); continue; }
     const extension = metadata.mediaType === 'image/png' ? '.png' : metadata.mediaType === 'image/jpeg' ? '.jpg' : '.webp';
     const storageKey = `${randomBytes(24).toString('hex')}${extension}`;

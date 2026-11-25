@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { io } from 'socket.io-client';
+import sharp from 'sharp';
 
 const base = process.env.NRI_API_URL ?? 'http://127.0.0.1:3001';
 const password = `local-${randomUUID()}-test`;
@@ -68,7 +69,18 @@ assert.equal(roleUpdate.result.membership.role, 'GM', 'owner can grant a campaig
 await request(`/api/campaigns/${campaign.id}/members/${observer.user.id}/role`, { method: 'POST', cookie: owner.cookie, body: { role: 'PLAYER' } });
 const { result: { scene } } = await request('/api/scenes', { method: 'POST', cookie: owner.cookie, body: { campaignId: campaign.id, title: 'Test scene' } });
 assert.equal(scene.isActive, true, 'first scene becomes active for players');
-const mapBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lT8AAAAASUVORK5CYII=', 'base64');
+const mapBytes = await sharp({ create: { width: 1, height: 1, channels: 4, background: '#336699' } }).png().toBuffer();
+let pngChunkOffset = 8; let truncatedMapBytes = mapBytes;
+while (pngChunkOffset + 8 < mapBytes.length) {
+  const chunkLength = mapBytes.readUInt32BE(pngChunkOffset);
+  if (mapBytes.toString('ascii', pngChunkOffset + 4, pngChunkOffset + 8) === 'IDAT') { truncatedMapBytes = mapBytes.subarray(0, pngChunkOffset + 8 + Math.floor(chunkLength / 2)); break; }
+  pngChunkOffset += chunkLength + 12;
+}
+assert.notEqual(truncatedMapBytes, mapBytes, 'test fixture must truncate the PNG pixel stream');
+const invalidMapForm = new FormData(); invalidMapForm.set('file', new Blob([truncatedMapBytes], { type: 'image/png' }), 'truncated.png');
+const invalidMapUpload = await fetch(`${base}/api/campaigns/${campaign.id}/assets`, { method: 'POST', headers: { cookie: owner.cookie }, body: invalidMapForm });
+assert.equal(invalidMapUpload.status, 415, 'the API rejects an image with a truncated compressed pixel stream');
+assert.equal((await invalidMapUpload.json()).failures[0].error, 'INVALID_IMAGE');
 const mapForm = new FormData(); mapForm.set('file', new Blob([mapBytes], { type: 'image/png' }), 'original-map.png');
 const mapUpload = await fetch(`${base}/api/campaigns/${campaign.id}/assets`, { method: 'POST', headers: { cookie: owner.cookie }, body: mapForm });
 assert.equal(mapUpload.status, 201, 'GM can upload a supported map image');
@@ -364,4 +376,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, corrupt-image upload rejection, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
