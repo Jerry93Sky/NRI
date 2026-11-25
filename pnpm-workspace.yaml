@@ -6,3 +6,6 @@ allowBuilds:
   argon2: true
   esbuild: true
   pixi.js: false
+
+overrides:
+  '@esbuild-kit/core-utils>esbuild': 0.25.12
