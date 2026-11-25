@@ -22,6 +22,7 @@ All notable project changes will be recorded here.
 - Added GM single- and multi-token copy/paste. The server validates campaign membership, all source versions, and the same-campaign destination before atomically creating up to 50 new IDs; copies clear owner assignment/private owner notes. Stale group copies create no partial tokens.
 - Extended the two-context Playwright privacy scenario to verify a copied hidden GM object stays hidden when placed on the player-visible Objects layer.
 - Added bounded full decoding for uploaded PNG/JPEG/WebP assets and rejects truncated pixel streams; unit and isolated API smoke coverage exercise the decoder.
+- Updated the CI checkout and Node setup actions to Node 24-compatible releases; disabled setup-node's implicit package-manager cache.
 - Added an ephemeral shared pointer with server-checked campaign membership, active-scene/draft privacy, scene-bound validation, and per-socket rate limiting.
 - Remediated moderate i18next GHSA-6jcc-5g8w-32mx and esbuild GHSA-67mh-4wv8-2f99 advisories; full and production dependency audits are clean. Targeted review evidence and remaining review scope are recorded in `docs/security/V0.1.1_REVIEW.md`.
 - Added a localized line-object action. Lines are stored as editable scene objects with point geometry and are covered by the multiplayer API smoke.
