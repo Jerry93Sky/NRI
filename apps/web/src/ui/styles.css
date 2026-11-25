@@ -30,3 +30,4 @@
 .ruler-hint{position:absolute;z-index:2;top:52px;right:14px;padding:6px 9px;color:#f3c78b;background:#242320dd;border:1px solid #625a4d;border-radius:7px;font-size:10px;pointer-events:none}
 
 .table-canvas.pointer-active canvas{cursor:crosshair}
+.object-clipboard-actions{display:flex;gap:6px}.scene-object-row.selected{outline:1px solid #98734f;background:#342d26}.scene-object-row .object-select{margin-right:auto;text-align:left}
