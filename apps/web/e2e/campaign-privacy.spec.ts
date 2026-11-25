@@ -64,7 +64,7 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await gmPage.getByRole('button', { name: 'Add token' }).click();
     const tokenResponse = await tokenResponsePromise;
     const { token } = await tokenResponse.json() as { token: { id: string; version: number } };
-    await gmPage.getByRole('checkbox', { name: 'Select Token 1' }).check();
+    await gmPage.getByRole('checkbox', { name: 'Select Token 1', exact: true }).check();
     await gmPage.locator('body').click({ position: { x: 20, y: 20 } });
     const duplicateResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith(`/api/tokens/${token.id}/duplicate`) && response.request().method() === 'POST');
     await gmPage.keyboard.press('Control+c');
@@ -75,6 +75,32 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     expect(duplicateToken.id).not.toBe(token.id);
     expect(duplicateToken.name).toBe('Token 1 copy');
     expect(duplicateToken.ownerUserId).toBeNull();
+    await gmPage.getByRole('button', { name: 'Clear selection' }).click();
+    await gmPage.getByRole('checkbox', { name: 'Select Token 1', exact: true }).check();
+    const secondTokenResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/tokens') && response.request().method() === 'POST');
+    await gmPage.getByRole('button', { name: 'Add token' }).click();
+    await secondTokenResponsePromise;
+    await gmPage.getByRole('checkbox', { name: 'Select Token 3' }).check();
+    await gmPage.locator('body').click({ position: { x: 20, y: 20 } });
+    const duplicateGroupResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith(`/api/scenes/${activeScene.id}/tokens/duplicate`) && response.request().method() === 'POST');
+    await gmPage.keyboard.press('Control+c');
+    await gmPage.keyboard.press('Control+v');
+    const duplicateGroupResponse = await duplicateGroupResponsePromise;
+    expect(duplicateGroupResponse.status()).toBe(201);
+    const { tokens: duplicateGroup } = await duplicateGroupResponse.json() as { tokens: Array<{ id: string; version: number }> };
+    expect(duplicateGroup).toHaveLength(2);
+    expect(new Set(duplicateGroup.map((item) => item.id)).size).toBe(2);
+    const beforeStaleGroupCopy = await requestJson(gmPage, `/api/scenes/${activeScene.id}/tokens`);
+    const staleGroupCopy = await requestJson(gmPage, `/api/scenes/${activeScene.id}/tokens/duplicate`, 'POST', {
+      sceneId: activeScene.id,
+      tokens: [
+        { tokenId: token.id, expectedVersion: token.version + 99, x: 400, y: 400 },
+        { tokenId: duplicateGroup[0]!.id, expectedVersion: duplicateGroup[0]!.version, x: 500, y: 400 },
+      ],
+    });
+    expect(staleGroupCopy.status).toBe(409);
+    const afterStaleGroupCopy = await requestJson(gmPage, `/api/scenes/${activeScene.id}/tokens`);
+    expect((afterStaleGroupCopy.body as unknown[]).length).toBe((beforeStaleGroupCopy.body as unknown[]).length);
 
     const inviteResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/invitations') && response.request().method() === 'POST');
     await gmPage.getByRole('button', { name: /Invite players/ }).click();
@@ -111,6 +137,10 @@ test('separate GM and player contexts keep drafts and GM objects private', async
       sceneId: activeScene.id, expectedVersion: token.version, x: 200, y: 200,
     });
     expect(deniedTokenDuplicate.status).toBe(403);
+    const deniedTokenGroupDuplicate = await requestJson(playerPage, `/api/scenes/${activeScene.id}/tokens/duplicate`, 'POST', {
+      sceneId: activeScene.id, tokens: [{ tokenId: token.id, expectedVersion: token.version, x: 200, y: 200 }],
+    });
+    expect(deniedTokenGroupDuplicate.status).toBe(403);
 
     const draftTitle = `GM Draft ${suffix}`;
     await gmPage.getByRole('button', { name: /Add scene/ }).first().click();

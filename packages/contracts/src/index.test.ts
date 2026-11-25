@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, duplicateTokenSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
+import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, duplicateTokenSchema, duplicateTokensSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
 
 describe('campaign-scoped token permissions', () => {
   it('allows the owner of a visible player token', () => expect(canMoveToken('PLAYER', 'u1', 'u1', false)).toBe(true));
@@ -60,6 +60,8 @@ describe('token property contracts', () => {
     expect(createTokenSchema.safeParse({ sceneId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', name: 'Hero', x: 0, y: 0, imageAssetId: 'not-a-uuid' }).success).toBe(false);
     expect(duplicateTokenSchema.safeParse({ sceneId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', expectedVersion: 1, x: 30, y: 48 }).success).toBe(true);
     expect(duplicateTokenSchema.safeParse({ sceneId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', expectedVersion: 0, x: 30, y: 48 }).success).toBe(false);
+    expect(duplicateTokensSchema.safeParse({ sceneId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', tokens: [{ tokenId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', expectedVersion: 1, x: 30, y: 48 }] }).success).toBe(true);
+    expect(duplicateTokensSchema.safeParse({ sceneId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', tokens: [{ tokenId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', expectedVersion: 1, x: 30, y: 48 }, { tokenId: '99c025bf-4a53-4608-8caa-0bdb98ac1e90', expectedVersion: 1, x: 50, y: 48 }] }).success).toBe(false);
   });
   it('requires exactly two system-neutral resources with bounded current values', () => {
     expect(tokenResourcesSchema.safeParse([{ label: 'Health', current: 4, maximum: 8, visible: true }, { label: 'Focus', current: 1, maximum: 3, visible: false }]).success).toBe(true);

@@ -4,14 +4,14 @@ import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import { Server } from 'socket.io';
-import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import argon2 from 'argon2';
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, duplicateTokenSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateAssetSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema } from '@nri/contracts';
+import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, duplicateTokenSchema, duplicateTokensSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateAssetSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema } from '@nri/contracts';
 import { db, pool } from './db/index.js';
 import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
 import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
@@ -857,6 +857,40 @@ app.post('/api/tokens/:tokenId/duplicate', async (request, reply) => {
   const room = `campaign:${result.campaignId}`;
   ((result.token.hidden || !result.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', result.token.hidden || !result.isActive ? publicToken(result.token, true) : publicToken(result.token));
   return reply.code(201).send({ token: publicToken(result.token, true) });
+});
+app.post('/api/scenes/:sceneId/tokens/duplicate', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const input = parseBody(duplicateTokensSchema, request.body);
+  if (input.sceneId !== sceneId) return reply.code(400).send({ error: 'SCENE_MISMATCH' });
+  const result = await db.transaction(async (tx) => {
+    const [destination] = await tx.select().from(scenes).where(eq(scenes.id, sceneId)).for('update').limit(1);
+    if (!destination || destination.archivedAt) return { error: 'NOT_FOUND' as const };
+    const [membership] = await tx.select({ role: memberships.role }).from(memberships)
+      .where(and(eq(memberships.campaignId, destination.campaignId), eq(memberships.userId, user.id))).limit(1);
+    if (!membership || !['OWNER', 'GM'].includes(membership.role)) return { error: 'FORBIDDEN' as const };
+    const sourceRows = await tx.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id))
+      .where(and(inArray(tokens.id, input.tokens.map((item) => item.tokenId)), isNull(tokens.deletedAt), isNull(scenes.archivedAt)))
+      .orderBy(asc(tokens.id)).for('update');
+    if (sourceRows.length !== input.tokens.length || sourceRows.some(({ scene: sourceScene }) => sourceScene.campaignId !== destination.campaignId)) return { error: 'NOT_FOUND' as const };
+    const sources = new Map(sourceRows.map(({ token }) => [token.id, token]));
+    if (input.tokens.some((item) => sources.get(item.tokenId)?.version !== item.expectedVersion)) return { error: 'CONFLICT' as const };
+    const duplicates = input.tokens.map((item) => {
+      const source = sources.get(item.tokenId)!;
+      const { id: _sourceId, sceneId: _sourceSceneId, version: _sourceVersion, deletedAt: _deletedAt, ownerUserId: _ownerUserId, ownerNote: _ownerNote, ...copied } = source;
+      return { ...copied, id: randomUUID(), sceneId: destination.id, name: `${source.name} copy`.slice(0, 48), x: item.x, y: item.y, ownerUserId: null, ownerNote: '', version: 1, deletedAt: null };
+    });
+    const created = await tx.insert(tokens).values(duplicates).returning();
+    await tx.insert(auditEvents).values(created.map((token, index) => ({ campaignId: destination.campaignId, actorId: user.id, action: 'token.duplicated', targetId: token.id, detail: `source:${input.tokens[index]!.tokenId}` })));
+    const byId = new Map(created.map((token) => [token.id, token]));
+    return { tokens: duplicates.map(({ id }) => byId.get(id)!), campaignId: destination.campaignId, isActive: destination.isActive };
+  });
+  if ('error' in result) return reply.code(result.error === 'FORBIDDEN' ? 403 : result.error === 'CONFLICT' ? 409 : 404).send({ error: result.error });
+  const room = `campaign:${result.campaignId}`;
+  for (const token of result.tokens) {
+    ((token.hidden || !result.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', token.hidden || !result.isActive ? publicToken(token, true) : publicToken(token));
+  }
+  return reply.code(201).send({ tokens: result.tokens.map((token) => publicToken(token, true)) });
 });
 app.get('/api/campaigns/:campaignId/token-trash', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
