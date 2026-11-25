@@ -64,6 +64,17 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await gmPage.getByRole('button', { name: 'Add token' }).click();
     const tokenResponse = await tokenResponsePromise;
     const { token } = await tokenResponse.json() as { token: { id: string; version: number } };
+    await gmPage.getByRole('checkbox', { name: 'Select Token 1' }).check();
+    await gmPage.locator('body').click({ position: { x: 20, y: 20 } });
+    const duplicateResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith(`/api/tokens/${token.id}/duplicate`) && response.request().method() === 'POST');
+    await gmPage.keyboard.press('Control+c');
+    await gmPage.keyboard.press('Control+v');
+    const duplicateResponse = await duplicateResponsePromise;
+    expect(duplicateResponse.status()).toBe(201);
+    const { token: duplicateToken } = await duplicateResponse.json() as { token: { id: string; name: string; ownerUserId: string | null } };
+    expect(duplicateToken.id).not.toBe(token.id);
+    expect(duplicateToken.name).toBe('Token 1 copy');
+    expect(duplicateToken.ownerUserId).toBeNull();
 
     const inviteResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/invitations') && response.request().method() === 'POST');
     await gmPage.getByRole('button', { name: /Invite players/ }).click();
@@ -96,6 +107,10 @@ test('separate GM and player contexts keep drafts and GM objects private', async
       expectedVersion: token.version, name: 'Unauthorized edit',
     });
     expect(deniedTokenEdit.status).toBe(403);
+    const deniedTokenDuplicate = await requestJson(playerPage, `/api/tokens/${token.id}/duplicate`, 'POST', {
+      sceneId: activeScene.id, expectedVersion: token.version, x: 200, y: 200,
+    });
+    expect(deniedTokenDuplicate.status).toBe(403);
 
     const draftTitle = `GM Draft ${suffix}`;
     await gmPage.getByRole('button', { name: /Add scene/ }).first().click();

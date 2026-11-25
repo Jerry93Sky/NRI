@@ -6,6 +6,7 @@ export const loginSchema = z.object({ email: z.email().max(254), password: z.str
 export const createCampaignSchema = z.object({ title: z.string().trim().min(1).max(80), description: z.string().trim().max(500).default('') });
 export const createSceneSchema = z.object({ campaignId: idSchema, title: z.string().trim().min(1).max(80), gridSize: z.number().int().min(16).max(128).default(48) });
 export const createTokenSchema = z.object({ sceneId: idSchema, name: z.string().trim().min(1).max(48), x: z.number().finite().min(-10000).max(10000), y: z.number().finite().min(-10000).max(10000), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#c8794a'), imageAssetId: idSchema.nullable().optional(), hidden: z.boolean().default(false) });
+export const duplicateTokenSchema = z.object({ sceneId: idSchema, expectedVersion: z.number().int().positive(), x: z.number().finite().min(-10000).max(10000), y: z.number().finite().min(-10000).max(10000) });
 export const assetCategorySchema = z.enum(['MAP', 'TOKEN', 'DECORATION', 'PORTRAIT', 'OTHER']);
 export const updateAssetSchema = z.object({ name: z.string().trim().min(1).max(120).optional(), category: assetCategorySchema.optional() }).refine((patch) => Object.values(patch).some((value) => value !== undefined));
 export const tokenResourceSchema = z.object({ label: z.string().trim().min(1).max(24), current: z.number().int().min(0).max(9999), maximum: z.number().int().min(0).max(9999), visible: z.boolean() }).refine((resource) => resource.current <= resource.maximum);
