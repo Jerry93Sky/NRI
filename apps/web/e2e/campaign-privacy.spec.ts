@@ -265,6 +265,25 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await gmPage.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(playerPage.getByText('Initiative is not active.')).toBeVisible();
 
+    const visibleTokens = (await requestJson(gmPage, `/api/scenes/${activeScene.id}/tokens`)).body as Array<{ id: string; name: string; hidden: boolean }>;
+    const visibleEntries = visibleTokens.filter((token) => !token.hidden).map((token, index) => ({ tokenId: token.id, label: token.name, score: 20 - index }));
+    const hiddenInitiativeLabel = `Hidden initiative ${suffix}`;
+    const hiddenInitiativeStart = await requestJson(gmPage, `/api/campaigns/${activeScene.campaignId}/initiative/start`, 'POST', {
+      sceneId: activeScene.id,
+      entries: [{ tokenId: null, label: hiddenInitiativeLabel, score: 999, hidden: true }, ...visibleEntries],
+    });
+    expect(hiddenInitiativeStart.status).toBe(200);
+    await expect(gmPage.locator('.initiative-list .initiative-row')).toHaveCount(visibleEntries.length + 1);
+    await expect(gmPage.locator('.initiative-list .initiative-row').filter({ hasText: hiddenInitiativeLabel })).toHaveCount(1);
+    await expect(playerPage.locator('.initiative-list .initiative-row')).toHaveCount(visibleEntries.length);
+    await expect(playerPage.locator('.initiative-list .initiative-row').filter({ hasText: hiddenInitiativeLabel })).toHaveCount(0);
+    await expect(playerPage.locator('.initiative-list .initiative-row.active')).toHaveCount(0);
+    await expect(observerPage.locator('.initiative-list .initiative-row')).toHaveCount(visibleEntries.length);
+    await gmPage.getByRole('button', { name: /Next turn/ }).click();
+    await expect(playerPage.locator('.initiative-list .initiative-row.active')).toHaveCount(1);
+    await gmPage.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(playerPage.getByText('Initiative is not active.')).toBeVisible();
+
     await playerPage.evaluate(() => {
       (window as typeof window & { nriPointerEvents?: Array<{ sceneId: string; displayName: string }> }).nriPointerEvents = [];
       window.addEventListener('nri-shared-pointer', (event) => {
