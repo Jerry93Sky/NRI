@@ -142,6 +142,36 @@ test('separate GM and player contexts keep drafts and GM objects private', async
       layerId: objectsLayer!.id, kind: 'RECTANGLE', x: 10, y: 10, width: 64, height: 64,
     });
     expect(deniedObjectWrite.status).toBe(403);
+    const playerDrawingCheckbox = gmPage.getByLabel('Allow Players to draw');
+    if (await playerDrawingCheckbox.isChecked()) await playerDrawingCheckbox.uncheck();
+    await playerDrawingCheckbox.check();
+    await expect(playerPage.getByRole('button', { name: 'Draw', exact: true })).toBeVisible();
+    await playerPage.getByRole('button', { name: 'Draw', exact: true }).click();
+    const canvas = playerPage.locator('.table-canvas canvas');
+    const canvasBounds = await canvas.boundingBox();
+    expect(canvasBounds).toBeTruthy();
+    const strokeCreated = playerPage.waitForResponse((response) => response.url().endsWith(`/api/scenes/${activeScene.id}/objects`) && response.request().method() === 'POST');
+    const startX = canvasBounds!.x + canvasBounds!.width / 2;
+    const startY = canvasBounds!.y + canvasBounds!.height / 2;
+    await playerPage.mouse.move(startX, startY);
+    await playerPage.mouse.down();
+    await playerPage.mouse.move(startX + 48, startY + 32, { steps: 5 });
+    await playerPage.mouse.up();
+    expect((await strokeCreated).status()).toBe(201);
+    const playerDrawingSnapshot = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`);
+    const ownStroke = (playerDrawingSnapshot.body as Array<{ kind: string; ownedByMe?: boolean; createdBy?: string }>).find((object) => object.kind === 'FREEHAND' && object.ownedByMe);
+    expect(ownStroke).toBeTruthy();
+    expect(ownStroke).not.toHaveProperty('createdBy');
+    const ownDrawingDelete = playerPage.waitForResponse((response) => response.url().endsWith(`/api/objects/${(ownStroke as { id: string }).id}`) && response.request().method() === 'DELETE');
+    await playerPage.getByRole('button', { name: 'Delete my drawing' }).click();
+    expect((await ownDrawingDelete).status()).toBe(204);
+    const afterOwnDrawingDelete = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`);
+    expect((afterOwnDrawingDelete.body as Array<{ id: string }>).some((object) => object.id === (ownStroke as { id: string }).id)).toBe(false);
+    await gmPage.getByLabel('Allow Players to draw').uncheck();
+    const revokedDrawingWrite = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`, 'POST', {
+      layerId: objectsLayer!.id, kind: 'FREEHAND', x: 10, y: 10, width: 20, height: 20, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }],
+    });
+    expect(revokedDrawingWrite.status).toBe(403);
     const deniedTokenEdit = await requestJson(playerPage, `/api/tokens/${token.id}`, 'PATCH', {
       expectedVersion: token.version, name: 'Unauthorized edit',
     });

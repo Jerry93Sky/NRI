@@ -13,6 +13,7 @@ export const sessions = pgTable('user_sessions', {
 export const campaigns = pgTable('campaigns', {
   id: uuid('id').defaultRandom().primaryKey(), ownerId: uuid('owner_id').notNull().references(() => users.id),
   title: varchar('title', { length: 80 }).notNull(), description: varchar('description', { length: 500 }).notNull().default(''),
+  playersCanDraw: boolean('players_can_draw').notNull().default(false),
   archivedAt: timestamp('archived_at', { withTimezone: true }), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('campaigns_owner_idx').on(t.ownerId)]);
 export const memberships = pgTable('campaign_memberships', {
@@ -46,11 +47,12 @@ export const sceneLayers = pgTable('scene_layers', {
 }, (t) => [index('scene_layers_scene_idx').on(t.sceneId), index('scene_layers_scene_kind_idx').on(t.sceneId, t.kind), check('scene_layers_kind_check', sql`${t.kind} IN ('BACKGROUND', 'OBJECTS', 'TOKENS', 'GM', 'CUSTOM')`)]);
 export const sceneObjects = pgTable('scene_objects', {
   id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }), layerId: uuid('layer_id').notNull().references(() => sceneLayers.id, { onDelete: 'restrict' }),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   kind: varchar('kind', { length: 16 }).notNull(), x: doublePrecision('x').notNull(), y: doublePrecision('y').notNull(), width: doublePrecision('width').notNull().default(64), height: doublePrecision('height').notNull().default(64),
   rotation: doublePrecision('rotation').notNull().default(0), opacity: doublePrecision('opacity').notNull().default(1), zIndex: integer('z_index').notNull().default(0),
   assetId: uuid('asset_id').references(() => assets.id, { onDelete: 'restrict' }), color: varchar('color', { length: 7 }), strokeWidth: doublePrecision('stroke_width'), points: jsonb('points').$type<Array<{ x: number; y: number }>>(), text: varchar('text', { length: 500 }),
   visible: boolean('visible').notNull().default(true), locked: boolean('locked').notNull().default(false), version: integer('version').notNull().default(1),
-}, (t) => [index('scene_objects_scene_layer_z_idx').on(t.sceneId, t.layerId, t.zIndex), check('scene_objects_kind_check', sql`${t.kind} IN ('IMAGE', 'LINE', 'FREEHAND', 'RECTANGLE', 'ELLIPSE', 'TEXT')`), check('scene_objects_dimensions_check', sql`${t.width} > 0 AND ${t.height} > 0 AND ${t.opacity} BETWEEN 0 AND 1 AND ${t.rotation} BETWEEN -360000 AND 360000`)]);
+}, (t) => [index('scene_objects_scene_layer_z_idx').on(t.sceneId, t.layerId, t.zIndex), index('scene_objects_creator_idx').on(t.createdBy), check('scene_objects_kind_check', sql`${t.kind} IN ('IMAGE', 'LINE', 'FREEHAND', 'RECTANGLE', 'ELLIPSE', 'TEXT')`), check('scene_objects_dimensions_check', sql`${t.width} > 0 AND ${t.height} > 0 AND ${t.opacity} BETWEEN 0 AND 1 AND ${t.rotation} BETWEEN -360000 AND 360000`)]);
 export const tokens = pgTable('tokens', {
   id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 48 }).notNull(), x: doublePrecision('x').notNull(), y: doublePrecision('y').notNull(), color: varchar('color', { length: 7 }).notNull(), imageAssetId: uuid('image_asset_id').references(() => assets.id, { onDelete: 'set null' }),

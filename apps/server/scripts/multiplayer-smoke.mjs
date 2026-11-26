@@ -226,6 +226,28 @@ assert.deepEqual(gmLayers.map((layer) => layer.kind), ['BACKGROUND', 'OBJECTS', 
 assert.equal(playerLayers.some((layer) => layer.kind === 'GM'), false, 'player layer snapshots omit the GM layer');
 const gmLayer = gmLayers.find((layer) => layer.kind === 'GM');
 const objectsLayer = gmLayers.find((layer) => layer.kind === 'OBJECTS');
+const drawingDisabledCreate = await fetch(`${base}/api/scenes/${scene.id}/objects`, { method: 'POST', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ layerId: objectsLayer.id, kind: 'FREEHAND', x: 4, y: 5, width: 20, height: 20, color: '#22aa88', strokeWidth: 2, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }] }) });
+assert.equal(drawingDisabledCreate.status, 403, 'players cannot draw by default');
+await request(`/api/campaigns/${campaign.id}/player-drawing`, { method: 'PUT', cookie: owner.cookie, body: { enabled: true } });
+const playerShapeDenied = await fetch(`${base}/api/scenes/${scene.id}/objects`, { method: 'POST', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ layerId: objectsLayer.id, kind: 'RECTANGLE', x: 4, y: 5, width: 20, height: 20 }) });
+assert.equal(playerShapeDenied.status, 403, 'drawing permission allows only freehand strokes');
+const playerStroke = await request(`/api/scenes/${scene.id}/objects`, { method: 'POST', cookie: player.cookie, body: { layerId: objectsLayer.id, kind: 'FREEHAND', x: 4, y: 5, width: 20, height: 20, color: '#22aa88', strokeWidth: 2, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }] } });
+assert.equal(playerStroke.status, 201, 'enabled players can create freehand strokes');
+assert.equal(playerStroke.result.object.ownedByMe, true, 'a player response identifies only their own drawing without exposing creator IDs');
+assert.equal(Object.hasOwn(playerStroke.result.object, 'createdBy'), false, 'player drawing responses never expose creator IDs');
+const observerStrokeSnapshot = await request(`/api/scenes/${scene.id}/objects`, { cookie: observer.cookie });
+assert.equal(observerStrokeSnapshot.result.find((object) => object.id === playerStroke.result.object.id).ownedByMe, false, 'other players cannot claim ownership of a stroke');
+const playerStrokeEdit = await request(`/api/objects/${playerStroke.result.object.id}`, { method: 'PATCH', cookie: player.cookie, body: { expectedVersion: playerStroke.result.object.version, color: '#33bb99' } });
+assert.equal(playerStrokeEdit.result.object.ownedByMe, true, 'players can edit their own strokes with a version check');
+const forbiddenPlayerStrokeEdit = await fetch(`${base}/api/objects/${playerStroke.result.object.id}`, { method: 'PATCH', headers: { cookie: observer.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: playerStrokeEdit.result.object.version, color: '#ff0000' }) });
+assert.equal(forbiddenPlayerStrokeEdit.status, 403, 'players cannot edit another player’s stroke');
+const privateLayerStroke = await fetch(`${base}/api/scenes/${scene.id}/objects`, { method: 'POST', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ layerId: gmLayer.id, kind: 'FREEHAND', x: 4, y: 5, width: 20, height: 20, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }] }) });
+assert.equal(privateLayerStroke.status, 403, 'players cannot draw on the GM layer');
+const playerStrokeDelete = await fetch(`${base}/api/objects/${playerStroke.result.object.id}`, { method: 'DELETE', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: playerStrokeEdit.result.object.version }) });
+assert.equal(playerStrokeDelete.status, 204, 'players can delete their own drawing');
+await request(`/api/campaigns/${campaign.id}/player-drawing`, { method: 'PUT', cookie: owner.cookie, body: { enabled: false } });
+const drawingRevokedCreate = await fetch(`${base}/api/scenes/${scene.id}/objects`, { method: 'POST', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ layerId: objectsLayer.id, kind: 'FREEHAND', x: 4, y: 5, width: 20, height: 20, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }] }) });
+assert.equal(drawingRevokedCreate.status, 403, 'revoking permission immediately blocks new player drawings');
 const playerObjectLeak = noEvent(playerClient.socket, 'scene:object_created');
 const { result: { object: secretObject } } = await request(`/api/scenes/${scene.id}/objects`, { method: 'POST', cookie: owner.cookie, body: { layerId: gmLayer.id, kind: 'RECTANGLE', x: 30, y: 40, width: 80, height: 60, color: '#aa3344' } });
 assert.equal(secretObject.visible, false, 'objects created on the GM layer are forced hidden');
@@ -383,4 +405,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, corrupt-image upload rejection, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, corrupt-image upload rejection, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, Player freehand permissions, ownership/privacy, safe deletion/revocation, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

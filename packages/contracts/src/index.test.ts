@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
+import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, campaignDrawingPermissionSchema, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
+
+describe('campaign drawing permission contract', () => {
+  it('accepts only a boolean permission value', () => {
+    expect(campaignDrawingPermissionSchema.safeParse({ enabled: true }).success).toBe(true);
+    expect(campaignDrawingPermissionSchema.safeParse({ enabled: 'true' }).success).toBe(false);
+  });
+});
 
 describe('campaign-scoped token permissions', () => {
   it('allows the owner of a visible player token', () => expect(canMoveToken('PLAYER', 'u1', 'u1', false)).toBe(true));
