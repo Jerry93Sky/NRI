@@ -36,7 +36,40 @@ export function TableCanvas(props: Props) {
     const pendingTokenTextures = new Set<string>();
     const objectTextures = new Map<string, Texture>();
     const pendingObjectTextures = new Set<string>();
+    const trackedAssetUrls = new Set<string>();
+    const pendingAssetLoads = new Map<string, number>();
+    const unloadingAssetUrls = new Map<string, Promise<void>>();
     let refresh = () => {};
+    const loadTexture = async (url: string) => {
+      await unloadingAssetUrls.get(url);
+      trackedAssetUrls.add(url);
+      pendingAssetLoads.set(url, (pendingAssetLoads.get(url) ?? 0) + 1);
+      try {
+        return await Assets.load({ src: url, parser: 'texture' });
+      } finally {
+        const pending = pendingAssetLoads.get(url) ?? 0;
+        if (pending <= 1) pendingAssetLoads.delete(url);
+        else pendingAssetLoads.set(url, pending - 1);
+      }
+    };
+    const releaseUnusedAssetTextures = () => {
+      const usedUrls = new Set<string>();
+      if (!cancelled && latest.current.backgroundUrl) usedUrls.add(latest.current.backgroundUrl);
+      if (!cancelled) {
+        for (const token of latest.current.tokens) if (token.imageAssetId) usedUrls.add(`/api/assets/${token.imageAssetId}`);
+        for (const object of latest.current.objects) {
+          if (object.assetId && (object.visible || latest.current.canManage)) usedUrls.add(`/api/assets/${object.assetId}`);
+        }
+      }
+      for (const assetId of tokenTextures.keys()) if (!usedUrls.has(`/api/assets/${assetId}`)) tokenTextures.delete(assetId);
+      for (const assetId of objectTextures.keys()) if (!usedUrls.has(`/api/assets/${assetId}`)) objectTextures.delete(assetId);
+      for (const url of trackedAssetUrls) {
+        if (usedUrls.has(url) || pendingAssetLoads.has(url)) continue;
+        trackedAssetUrls.delete(url);
+        const unloading = Assets.unload(url).catch(() => {}).finally(() => unloadingAssetUrls.delete(url));
+        unloadingAssetUrls.set(url, unloading);
+      }
+    };
     world.addChild(base, mapLayer, grid, rulerDisplay, objectsDisplay, pieces, selectionDisplay, pointerDisplay);
     app.stage.addChild(world);
     app.stage.eventMode = 'static';
@@ -93,11 +126,16 @@ export function TableCanvas(props: Props) {
             if (!pendingObjectTextures.has(item.assetId)) {
               pendingObjectTextures.add(item.assetId);
               const assetId = item.assetId;
-              void Assets.load({ src: `/api/assets/${assetId}`, parser: 'texture' }).then((texture) => {
+              void loadTexture(`/api/assets/${assetId}`).then((texture) => {
+                if (cancelled || !latest.current.objects.some((current) => current.id === item.id && current.assetId === assetId && (current.visible || latest.current.canManage))) {
+                  pendingObjectTextures.delete(assetId);
+                  releaseUnusedAssetTextures();
+                  return;
+                }
                 objectTextures.set(assetId, texture);
                 pendingObjectTextures.delete(assetId);
-                if (!cancelled && latest.current.objects.some((current) => current.id === item.id && current.assetId === assetId && (current.visible || latest.current.canManage))) refresh();
-              }).catch(() => pendingObjectTextures.delete(assetId));
+                refresh();
+              }).catch(() => { pendingObjectTextures.delete(assetId); releaseUnusedAssetTextures(); });
             }
           }
         } else if (item.kind === 'TEXT' && item.text) {
@@ -143,11 +181,11 @@ export function TableCanvas(props: Props) {
       const sourceUrl = latest.current.backgroundUrl;
       if (!sourceUrl) return;
       try {
-        const texture = await Assets.load({ src: sourceUrl, parser: 'texture' });
-        if (cancelled || latest.current.backgroundUrl !== sourceUrl) return;
+        const texture = await loadTexture(sourceUrl);
+        if (cancelled || latest.current.backgroundUrl !== sourceUrl) { releaseUnusedAssetTextures(); return; }
         const image = new Sprite(texture); image.width = latest.current.sceneWidth; image.height = latest.current.sceneHeight;
         mapLayer.addChild(image);
-      } catch { /* A missing or revoked asset leaves the neutral canvas visible. */ }
+      } catch { /* A missing or revoked asset leaves the neutral canvas visible. */ releaseUnusedAssetTextures(); }
     };
     const redrawTokens = () => {
       pieces.removeChildren().forEach((child) => child.destroy({ children: true }));
@@ -165,11 +203,16 @@ export function TableCanvas(props: Props) {
             const portrait = new Sprite(texture); portrait.anchor.set(0.5); portrait.width = width * 0.84; portrait.height = height * 0.84; portrait.mask = mask; node.addChild(portrait, mask);
           } else if (!pendingTokenTextures.has(token.imageAssetId)) {
             pendingTokenTextures.add(token.imageAssetId);
-            void Assets.load({ src: imageUrl, parser: 'texture' }).then((loaded) => {
+            void loadTexture(imageUrl).then((loaded) => {
+              if (cancelled || !latest.current.tokens.some((current) => current.imageAssetId === token.imageAssetId)) {
+                pendingTokenTextures.delete(token.imageAssetId!);
+                releaseUnusedAssetTextures();
+                return;
+              }
               tokenTextures.set(token.imageAssetId!, loaded);
               pendingTokenTextures.delete(token.imageAssetId!);
-              if (!cancelled && latest.current.tokens.some((current) => current.imageAssetId === token.imageAssetId)) refresh();
-            }).catch(() => pendingTokenTextures.delete(token.imageAssetId!));
+              refresh();
+            }).catch(() => { pendingTokenTextures.delete(token.imageAssetId!); releaseUnusedAssetTextures(); });
           }
         }
         const border = new Graphics().ellipse(0, 0, width * 0.42, height * 0.42).stroke({ color: Number.parseInt(token.borderColor.slice(1), 16), alpha: 0.9, width: Math.max(1, size * 0.04) }); node.addChild(border);
@@ -244,7 +287,7 @@ export function TableCanvas(props: Props) {
       if (latest.current.sceneId !== previousSceneId) { previousSceneId = latest.current.sceneId; rulerPoints.length = 0; clearSelectionBox(); clearRemotePointers(); restoreCamera(); }
       if (!latest.current.rulerActive) rulerPoints.length = 0;
       if (!latest.current.selectionMode) clearSelectionBox();
-      redrawGrid(); redrawRuler(); redrawObjects(); redrawTokens(); redrawPointers(); void redrawMap();
+      redrawGrid(); redrawRuler(); redrawObjects(); redrawTokens(); redrawPointers(); void redrawMap(); releaseUnusedAssetTextures();
     };
     const fit = () => fitScene();
     const calibrationPoints: Array<{ x: number; y: number }> = [];
@@ -342,7 +385,16 @@ export function TableCanvas(props: Props) {
       app.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     };
     void start();
-    return () => { cancelled = true; window.removeEventListener('nri-fit-scene', fit); window.removeEventListener('nri-shared-pointer', receiveSharedPointer); window.removeEventListener('nri-drop-token-asset', onDropTokenAsset); clearRemotePointers(); if (initialized && !destroyed) { destroyed = true; app.destroy(true, { children: true }); } };
+    return () => {
+      cancelled = true;
+      window.removeEventListener('nri-fit-scene', fit);
+      window.removeEventListener('nri-shared-pointer', receiveSharedPointer);
+      window.removeEventListener('nri-drop-token-asset', onDropTokenAsset);
+      clearRemotePointers();
+      if (initialized && !destroyed) { destroyed = true; app.destroy(true, { children: true }); }
+      tokenTextures.clear(); objectTextures.clear();
+      releaseUnusedAssetTextures();
+    };
   }, []);
 
   useEffect(() => {

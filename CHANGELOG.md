@@ -21,6 +21,7 @@ All notable project changes will be recorded here.
 - Added GM drag-box token selection using map-space token bounds; S activates selection, and Escape clears the temporary tool state.
 - Added four scene layers, versioned layer/object APIs, scene duplication with independent layer/object IDs, and player-safe projections for GM-only content.
 - Added a basic layer panel with active-layer selection/order, visibility/lock controls, rectangle/ellipse creation, active-layer canvas dragging/resizing, object visibility/lock, rotation, opacity, z-order, same-scene layer move, duplicate and delete actions; shapes render on the canvas.
+- Added Pixi asset-texture tracking and release for assets no longer used in the current scene. A focused Chromium scenario confirms an image-backed token is fetched again after leaving and returning to its scene; load, FPS, memory, and hardware texture-limit measurements remain open.
 - Added campaign-library image insertion as editable scene objects and lazy Pixi texture rendering through the existing campaign-scoped asset endpoint. Browser acceptance of this flow remains pending.
 - Added localized creation and editing of text scene objects with Pixi text rendering; browser acceptance remains pending.
 - Added selectable layer-list scene objects and single-object in-app copy/paste with Ctrl/Cmd+C and Ctrl/Cmd+V. Pasting creates a new versioned object on the active editable layer and reuses campaign asset references.
