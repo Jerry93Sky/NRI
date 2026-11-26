@@ -323,7 +323,9 @@ test('separate GM and player contexts keep drafts and GM objects private', async
       layerId: objectsLayer!.id, kind: 'FREEHAND', x: 16, y: 16, width: 20, height: 20, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }],
     });
     expect(remainingOwnDrawing.status).toBe(201);
+    const drawingRevocation = gmPage.waitForResponse((response) => response.url().endsWith(`/api/campaigns/${activeScene.campaignId}/player-drawing`) && response.request().method() === 'PUT' && response.request().postDataJSON()?.enabled === false);
     await gmPage.getByLabel('Allow Players to draw').uncheck();
+    expect((await drawingRevocation).status()).toBe(200);
     const revokedDrawingWrite = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`, 'POST', {
       layerId: objectsLayer!.id, kind: 'FREEHAND', x: 10, y: 10, width: 20, height: 20, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }],
     });
@@ -364,6 +366,64 @@ test('separate GM and player contexts keep drafts and GM objects private', async
   } finally {
     releaseHistoryHydration();
     await Promise.allSettled([gmContext.close(), playerContext.close(), observerContext.close()]);
+  }
+});
+
+test('campaign switches discard stale chat and dice state', async ({ browser }) => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const context = await browser.newContext({ locale: 'en-US' });
+  const page = await context.newPage();
+  let firstCampaignHistoryId: string | null = null;
+  let releaseOldHistory = () => {};
+  const oldHistoryGate = new Promise<void>((resolve) => { releaseOldHistory = resolve; });
+  await page.route('**/api/campaigns/*/messages', async (route) => {
+    const campaignId = route.request().url().match(/\/api\/campaigns\/([^/]+)\/messages/)?.[1] ?? null;
+    if (!firstCampaignHistoryId && campaignId) firstCampaignHistoryId = campaignId;
+    if (campaignId === firstCampaignHistoryId) await oldHistoryGate;
+    await route.continue();
+  });
+
+  try {
+    await register(page, 'Switch Guide', `switch-guide-${suffix}@example.test`);
+    const firstTitle = `First campaign ${suffix}`;
+    await page.getByLabel('Campaign name').fill(firstTitle);
+    await page.getByLabel('A short description').fill('Delayed campaign history regression');
+    await page.getByRole('button', { name: /^Create/ }).click();
+    await expect(page.getByRole('heading', { name: firstTitle })).toBeVisible();
+    await expect.poll(() => firstCampaignHistoryId).not.toBeNull();
+    await page.getByRole('button', { name: /Add scene/ }).first().click();
+    await page.getByLabel('Scene name').fill(`Scene ${suffix}`);
+    const sceneCreated = page.waitForResponse((response) => response.url().endsWith('/api/scenes') && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Create', exact: true }).click();
+    expect((await sceneCreated).status()).toBe(201);
+    await expect(page.locator('.live-status')).toHaveText('Live');
+
+    const oldChatMessage = `Old campaign message ${suffix}`;
+    await page.getByPlaceholder('Write a message…').fill(oldChatMessage);
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(page.locator('.chat-messages')).toContainText(oldChatMessage);
+    await page.getByRole('button', { name: /d20/ }).click();
+    await expect(page.locator('.roll-row')).toHaveCount(1);
+
+    await page.getByRole('button', { name: '← Campaigns' }).click();
+    await expect(page.getByRole('heading', { name: 'Your campaigns' })).toBeVisible();
+    const secondTitle = `Second campaign ${suffix}`;
+    await page.getByLabel('Campaign name').fill(secondTitle);
+    await page.getByLabel('A short description').fill('Campaign-local chat and dice state');
+    await page.getByRole('button', { name: /^Create/ }).click();
+    await expect(page.getByRole('heading', { name: secondTitle })).toBeVisible();
+    await expect(page.locator('.chat-messages')).toBeEmpty();
+    await expect(page.locator('.roll-row')).toHaveCount(0);
+
+    const staleHistoryResponsePromise = page.waitForResponse((response) => response.url().includes(`/api/campaigns/${firstCampaignHistoryId}/messages`) && response.request().method() === 'GET');
+    releaseOldHistory();
+    const staleHistoryResponse = await staleHistoryResponsePromise;
+    expect((await staleHistoryResponse.json() as Array<{ body: string }>).some((message) => message.body === oldChatMessage)).toBe(true);
+    await expect(page.locator('.chat-messages')).toBeEmpty();
+    await expect(page.locator('.roll-row')).toHaveCount(0);
+  } finally {
+    releaseOldHistory();
+    await context.close();
   }
 });
 

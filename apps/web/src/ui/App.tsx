@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { useTranslation } from 'react-i18next';
@@ -14,14 +14,14 @@ type CampaignAsset = { id: string; name: string; category: 'MAP' | 'TOKEN' | 'DE
 type DeletedToken = { id: string; sceneId: string; sceneTitle: string; name: string; version: number; deletedAt: string; sceneArchivedAt: string | null };
 type SceneLayer = { id: string; sceneId: string; name: string; kind: string; sortOrder: number; visibleToPlayers: boolean; locked: boolean; version: number };
 type SceneObject = { id: string; sceneId: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; assetId: string | null; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean; version: number; ownedByMe?: boolean };
-type ChatItem = { id: string; senderId: string; displayName: string; body: string; createdAt?: string; private?: boolean; recipientId?: string | null };
+type ChatItem = { id: string; campaignId?: string; senderId: string; displayName: string; body: string; createdAt?: string; private?: boolean; recipientId?: string | null };
 function mergeChatItems(current: ChatItem[], incoming: ChatItem[]) {
   const byId = new Map<string, ChatItem>();
   for (const message of incoming) byId.set(message.id, { ...message, private: Boolean(message.private || message.recipientId) });
   for (const message of current) byId.set(message.id, message);
   return [...byId.values()].sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? '')).slice(-100);
 }
-type RollItem = { id?: string; displayName: string; expression: string; rolls: number[]; modifier: number; result: number; hidden?: boolean };
+type RollItem = { id?: string; campaignId?: string; displayName: string; expression: string; rolls: number[]; modifier: number; result: number; hidden?: boolean };
 type InitiativeView = { tracker: { id: string; active: boolean; round: number; version: number; activeIndex?: number; currentEntryId: string | null } | null; entries: Array<{ id: string; tokenId: string | null; label: string; score: number }> };
 type TokenPosition = { tokenId: string; x: number; y: number };
 type TokenMoveHistory = { positions: TokenPosition[]; expectedVersions: Record<string, number> };
@@ -131,6 +131,8 @@ export function App() {
   const mapInput = useRef<HTMLInputElement>(null);
   const assetInput = useRef<HTMLInputElement>(null);
   const socket = useMemo<Socket>(() => io({ autoConnect: false, withCredentials: true, transports: ['websocket', 'polling'] }), []);
+  const campaignIdRef = useRef(campaign?.campaign.id ?? null);
+  campaignIdRef.current = campaign?.campaign.id ?? null;
   const role = campaign?.role ?? 'PLAYER';
   const canManage = role === 'OWNER' || role === 'GM';
   const canDraw = canManage || (campaign?.campaign.playersCanDraw === true && scene?.isActive === true);
@@ -213,16 +215,23 @@ export function App() {
     }).catch((e) => setError(e.message));
     return () => { active = false; setScene(null); setTokens([]); setLayers([]); setObjects([]); setActiveLayerId(''); socket.emit('campaign:leave', campaign.campaign.id); };
   }, [campaign?.campaign.id]);
-  useEffect(() => {
-    if (!campaign) return;
-    void api<Member[]>(`/api/campaigns/${campaign.campaign.id}/members`).then(setMembers).catch((e) => setError(e.message));
-    void api<Array<ChatItem & { recipientId: string | null }>>(`/api/campaigns/${campaign.campaign.id}/messages`).then((list) => setMessages((current) => mergeChatItems(current, list))).catch((e) => setError((e as Error).message));
-    void api<InitiativeView>(`/api/campaigns/${campaign.campaign.id}/initiative`).then(setInitiative).catch((e) => setError((e as Error).message));
+  useLayoutEffect(() => {
+    let active = true;
+    setMessages([]);
+    setRolls([]);
+    setMembers([]);
+    setInitiative({ tracker: null, entries: [] });
+    if (!campaign) return () => { active = false; };
+    const campaignId = campaign.campaign.id;
+    void api<Member[]>(`/api/campaigns/${campaignId}/members`).then((list) => { if (active) setMembers(list); }).catch((e) => { if (active) setError((e as Error).message); });
+    void api<Array<ChatItem & { recipientId: string | null }>>(`/api/campaigns/${campaignId}/messages`).then((list) => { if (active) setMessages((current) => mergeChatItems(current, list)); }).catch((e) => { if (active) setError((e as Error).message); });
+    void api<InitiativeView>(`/api/campaigns/${campaignId}/initiative`).then((view) => { if (active) setInitiative(view); }).catch((e) => { if (active) setError((e as Error).message); });
+    return () => { active = false; };
   }, [campaign?.campaign.id]);
   useEffect(() => {
-    const onPublicChat = (message: ChatItem) => setMessages((items) => items.some((item) => item.id === message.id) ? items : [...items.slice(-99), message]);
-    const onPrivateChat = (message: ChatItem) => setMessages((items) => items.some((item) => item.id === message.id) ? items : [...items.slice(-99), { ...message, private: true }]);
-    const onDiceResult = (roll: RollItem) => setRolls((items) => roll.id && items.some((item) => item.id === roll.id) ? items : [...items.slice(-19), roll]);
+    const onPublicChat = (message: ChatItem) => { if (message.campaignId === campaignIdRef.current) setMessages((items) => items.some((item) => item.id === message.id) ? items : [...items.slice(-99), message]); };
+    const onPrivateChat = (message: ChatItem) => { if (message.campaignId === campaignIdRef.current) setMessages((items) => items.some((item) => item.id === message.id) ? items : [...items.slice(-99), { ...message, private: true }]); };
+    const onDiceResult = (roll: RollItem) => { if (roll.campaignId === campaignIdRef.current) setRolls((items) => roll.id && items.some((item) => item.id === roll.id) ? items : [...items.slice(-19), roll]); };
     socket.on('chat:message', onPublicChat);
     socket.on('chat:private', onPrivateChat);
     socket.on('dice:result', onDiceResult);
@@ -709,9 +718,10 @@ export function App() {
   }
   function sendChat(event: React.FormEvent) {
     event.preventDefault(); if (!campaign || !chatText.trim()) return;
-    socket.emit('chat:send', { campaignId: campaign.campaign.id, body: chatText, recipientId: messageRecipient || null }, (result: { error?: string; message?: ChatItem }) => { if (result.message) setMessages((items) => items.some((item) => item.id === result.message!.id) ? items : [...items.slice(-99), result.message!]); if (result.error) setError(result.error); }); setChatText('');
+    const campaignId = campaign.campaign.id;
+    socket.emit('chat:send', { campaignId, body: chatText, recipientId: messageRecipient || null }, (result: { error?: string; message?: ChatItem }) => { if (result.message?.campaignId === campaignIdRef.current) setMessages((items) => items.some((item) => item.id === result.message!.id) ? items : [...items.slice(-99), result.message!]); if (result.error && campaignId === campaignIdRef.current) setError(result.error); }); setChatText('');
   }
-  function rollDice() { if (!campaign) return; socket.emit('dice:roll', { campaignId: campaign.campaign.id, expression: '1d20', hidden: hiddenRoll }, (result: { error?: string; roll?: RollItem }) => { if (result.roll) setRolls((items) => result.roll!.id && items.some((item) => item.id === result.roll!.id) ? items : [...items.slice(-19), result.roll!]); if (result.error) setError(result.error); }); }
+  function rollDice() { if (!campaign) return; const campaignId = campaign.campaign.id; socket.emit('dice:roll', { campaignId, expression: '1d20', hidden: hiddenRoll }, (result: { error?: string; roll?: RollItem }) => { if (result.roll?.campaignId === campaignIdRef.current) setRolls((items) => result.roll!.id && items.some((item) => item.id === result.roll!.id) ? items : [...items.slice(-19), result.roll!]); if (result.error && campaignId === campaignIdRef.current) setError(result.error); }); }
 
   if (!user) return <main className="auth-shell"><div className="auth-card"><div className="brand-mark">N</div><p className="eyebrow">TABLETOP, REIMAGINED</p><h1>{t('subtitle')}</h1><p className="muted">A calm, flexible space for stories shared around a table.</p><form onSubmit={submitAuth} className="form-stack">
     {authMode === 'register' && <label>{t('displayName')}<input name="displayName" minLength={1} maxLength={48} required /></label>}

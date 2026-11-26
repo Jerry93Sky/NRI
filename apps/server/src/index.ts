@@ -1237,7 +1237,7 @@ io.on('connection', (socket) => {
       }
       const [message] = await db.insert(messages).values({ campaignId: input.campaignId, senderId: user.id, recipientId: input.recipientId ?? null, body: input.body }).returning();
       if (!message) throw new Error('Message creation failed');
-      const event = { id: message.id, senderId: user.id, displayName: user.displayName, body: message.body, createdAt: message.createdAt, private: Boolean(input.recipientId) };
+      const event = { id: message.id, campaignId: input.campaignId, senderId: user.id, displayName: user.displayName, body: message.body, createdAt: message.createdAt, private: Boolean(input.recipientId) };
       callback?.({ ok: true, message: event });
       if (!input.recipientId) io.to(`campaign:${input.campaignId}`).emit('chat:message', event);
       else {
@@ -1257,7 +1257,7 @@ io.on('connection', (socket) => {
       const rolls = Array.from({ length: count }, () => randomInt(1, sides + 1));
       const result = rolls.reduce((sum, value) => sum + value, modifier);
       const [saved] = await db.insert(diceRolls).values({ campaignId: input.campaignId, userId: user.id, expression: input.expression, result, detail: JSON.stringify({ rolls, modifier }), hidden: input.hidden }).returning();
-      const event = { id: saved?.id, userId: user.id, displayName: user.displayName, expression: input.expression, rolls, modifier, result, hidden: input.hidden };
+      const event = { id: saved?.id, campaignId: input.campaignId, userId: user.id, displayName: user.displayName, expression: input.expression, rolls, modifier, result, hidden: input.hidden };
       callback?.({ ok: true, roll: event });
       io.to(input.hidden ? `campaign:${input.campaignId}:gm` : `campaign:${input.campaignId}`).emit('dice:result', event);
     } catch { callback?.({ error: 'INVALID' }); }
