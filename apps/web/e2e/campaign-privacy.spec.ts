@@ -45,6 +45,11 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     const activeSceneResponse = await activeResponsePromise;
     const { scene: activeScene } = await activeSceneResponse.json() as { scene: { id: string; campaignId: string } };
     await expect(gmPage.getByRole('button', { name: 'Add token' })).toBeVisible();
+    await gmPage.getByRole('button', { name: 'Switch to light theme' }).click();
+    await expect(gmPage.locator('.app-shell')).toHaveAttribute('data-theme', 'light');
+    await expect.poll(() => gmPage.evaluate(() => localStorage.getItem('nri:theme'))).toBe('light');
+    await gmPage.getByRole('button', { name: 'Switch to dark theme' }).click();
+    await expect(gmPage.locator('.app-shell')).toHaveAttribute('data-theme', 'dark');
     const panelWidth = gmPage.getByLabel('Panel width');
     const initialPanelWidth = Number(await panelWidth.inputValue());
     await panelWidth.press('ArrowRight');
