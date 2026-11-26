@@ -12,6 +12,8 @@
     "db:migrate": "corepack pnpm@12.23.0 --filter @nri/server db:migrate",
     "db:seed": "corepack pnpm@12.23.0 --filter @nri/server db:seed",
     "db:seed:playable-amber": "corepack pnpm@12.23.0 --filter @nri/server db:seed:playable-amber",
+    "db:backup": "node --env-file-if-exists=.env scripts/backup.mjs create",
+    "db:backup:verify": "node --env-file-if-exists=.env scripts/backup.mjs verify",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down"
   }

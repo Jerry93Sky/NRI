@@ -1,6 +1,6 @@
 # PostgreSQL and media backup / restore
 
-**Status:** `IN_PROGRESS` — isolated `nri_test` restore drill passed; coordinated production backup automation and scheduled restore validation remain open.
+**Status:** `IN_PROGRESS` — no-overwrite database/media backup with manifest verification is implemented; local create/verify and isolated `nri_test` restore drill passed; coordinated production quiescence and scheduled restore validation remain open.
 
 ## What must be captured
 
@@ -15,38 +15,14 @@ For a coherent maintenance backup:
 5. Verify each checksum before publishing the backup directory. Use a new timestamped destination; refuse to overwrite an existing backup.
 6. Resume writes only after both the dump and media copy pass verification.
 
-Example for the repository's Docker Compose development database (run from the repository root; use a unique destination):
+The repository provides backup creation and verification commands. Install the PostgreSQL client tools so `pg_dump` matches the server major version, configure `DATABASE_URL` and `UPLOAD_DIR`, and run from the repository root. The optional name must be a new simple directory name under `.backups`:
 
 ```powershell
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$destination = Join-Path '.backups' "nri-$stamp"
-$staging = "$destination.incomplete"
-if ((Test-Path -LiteralPath $destination) -or (Test-Path -LiteralPath $staging)) { throw "Backup destination already exists: $destination" }
-New-Item -ItemType Directory -Path $staging | Out-Null
-docker compose exec -T db pg_dump -Fc -U nri_dev -d nri_dev --file=/tmp/nri.dump
-docker compose cp db:/tmp/nri.dump (Join-Path $staging 'database.dump')
-docker compose exec -T db rm -f /tmp/nri.dump
-Copy-Item -LiteralPath '.data/uploads' -Destination (Join-Path $staging 'uploads') -Recurse
-$root = (Resolve-Path -LiteralPath $staging).Path
-$files = Get-ChildItem -LiteralPath $staging -File -Recurse | ForEach-Object {
-  [ordered]@{
-    path = $_.FullName.Substring($root.Length + 1).Replace('\', '/')
-    bytes = $_.Length
-    sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-  }
-}
-$manifestPath = Join-Path $staging 'manifest.json'
-[ordered]@{ createdUtc = (Get-Date).ToUniversalTime().ToString('o'); database = 'nri_dev'; revision = (git rev-parse HEAD); files = $files } |
-  ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 -LiteralPath $manifestPath
-$manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-foreach ($file in $manifest.files) {
-  $path = Join-Path $staging ($file.path.Replace('/', '\'))
-  if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.sha256) { throw "Checksum mismatch: $($file.path)" }
-}
-Move-Item -LiteralPath $staging -Destination $destination
+corepack pnpm@12.23.0 db:backup lantern-vault-before-session
+corepack pnpm@12.23.0 db:backup:verify lantern-vault-before-session
 ```
 
-This example assumes API writes have been stopped before it runs. The database dump and media copy are not an atomic cross-system snapshot while uploads/deletions are in progress. The operator must keep the server quiesced until the copy and manifest verification finish. In production, use the deployment's real database role and media mount path.
+Without a supplied name, creation picks a timestamped unique name. The command stages under `.backups`, refuses existing destinations, rejects symlinks in media, hashes the database dump and every media file, verifies the complete inventory (including missing or extra files), then atomically renames the verified staging directory. Failed runs remove only their unique staging directory. The verifier checks an already-created named backup without changing it. Neither command stops the API: the operator must stop new writes and drain active requests before starting, then resume only after creation and verification finish. Production use requires the deployment's real database role, media path, and quiescence controls.
 
 ## Safe restore
 
@@ -56,6 +32,15 @@ This example assumes API writes have been stopped before it runs. The database d
 4. Restore media into a new empty directory and verify each file checksum. Point an isolated application process at this database and media directory.
 5. Confirm row counts and sample references for users, campaigns, memberships, scenes, assets, tokens, scene objects, messages, dice rolls, and initiative.
 6. Leave the source database, source media, and existing backups untouched until the isolated restore is accepted.
+
+## Backup command verification
+
+- **Date:** 2026-11-26
+- **Source:** isolated local PostgreSQL database `nri_test`; no database rows were changed.
+- **Command:** `node scripts/backup.mjs create codex-backup-check-20261126`, followed by `node scripts/backup.mjs verify codex-backup-check-20261126`.
+- **Result:** create and independent verification passed for 212 files, including the custom-format database archive and the configured local upload directory. The archive remains in ignored `.backups/codex-backup-check-20261126` as a local verification artifact.
+- **No-overwrite check:** a second create attempt with the same name exited before dumping and explicitly refused the existing destination; the original manifest still verified.
+- **Limit:** this did not quiesce the application or validate a maintenance-window restore; it is only isolated command and manifest verification evidence.
 
 ## Restore drill log
 

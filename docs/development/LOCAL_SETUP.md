@@ -22,4 +22,4 @@
 
 The CI database image is pinned by digest to PostgreSQL 16.15, an available supported line. The local app and CI use the same database image.
 
-Automated backup and restore procedures are not implemented yet. Production requires operator-managed secrets, HTTPS, backups, and separate configuration.
+`corepack pnpm@12.23.0 db:backup [name]` creates a no-overwrite PostgreSQL custom dump and media copy under `.backups`, then writes and verifies a SHA-256 manifest. `corepack pnpm@12.23.0 db:backup:verify <name>` verifies an existing backup. Install PostgreSQL client tools matching the server, or use the loopback Docker Compose fallback. Stop writes and drain the API before creating the backup; these commands do not stop application services. Production requires operator-managed secrets, HTTPS, scheduled backup retention, and deployment-specific quiescence and restore procedures.

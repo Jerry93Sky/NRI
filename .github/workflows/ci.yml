@@ -35,6 +35,8 @@ jobs:
       - run: corepack enable && corepack prepare pnpm@12.23.0 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - name: Check operational backup script syntax
+        run: node --check scripts/backup.mjs
       - run: pnpm typecheck
       - run: pnpm db:migrate
       - run: pnpm test

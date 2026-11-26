@@ -15,6 +15,7 @@ apps/web/test-results/
 # Local data, uploads, and logs
 .data/
 uploads/
+.backups/
 *.log
 npm-debug.log*
 pnpm-debug.log*
