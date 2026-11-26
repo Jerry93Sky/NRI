@@ -1249,16 +1249,17 @@ io.on('connection', (socket) => {
   socket.on('dice:roll', async (raw: unknown, callback?: (result: unknown) => void) => {
     try {
       const input = z.object({ campaignId: z.uuid(), ...diceSchema.shape }).parse(raw);
-      if (!socket.rooms.has(`campaign:${input.campaignId}`) || !await roleFor(input.campaignId, user.id)) return callback?.({ error: 'FORBIDDEN' });
+      const role = await roleFor(input.campaignId, user.id);
+      if (!socket.rooms.has(`campaign:${input.campaignId}`) || !role || (input.hidden && role === 'PLAYER')) return callback?.({ error: 'FORBIDDEN' });
       const parsed = parseDiceExpression(input.expression);
       if (!parsed) return callback?.({ error: 'INVALID' });
       const { count, sides, modifier } = parsed;
       const rolls = Array.from({ length: count }, () => randomInt(1, sides + 1));
       const result = rolls.reduce((sum, value) => sum + value, modifier);
-      const [saved] = await db.insert(diceRolls).values({ campaignId: input.campaignId, userId: user.id, expression: input.expression, result, detail: JSON.stringify({ rolls, modifier }) }).returning();
-      const event = { id: saved?.id, userId: user.id, displayName: user.displayName, expression: input.expression, rolls, modifier, result };
+      const [saved] = await db.insert(diceRolls).values({ campaignId: input.campaignId, userId: user.id, expression: input.expression, result, detail: JSON.stringify({ rolls, modifier }), hidden: input.hidden }).returning();
+      const event = { id: saved?.id, userId: user.id, displayName: user.displayName, expression: input.expression, rolls, modifier, result, hidden: input.hidden };
       callback?.({ ok: true, roll: event });
-      io.to(`campaign:${input.campaignId}`).emit('dice:result', event);
+      io.to(input.hidden ? `campaign:${input.campaignId}:gm` : `campaign:${input.campaignId}`).emit('dice:result', event);
     } catch { callback?.({ error: 'INVALID' }); }
   });
   socket.on('disconnect', () => {

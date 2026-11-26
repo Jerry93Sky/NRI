@@ -338,10 +338,24 @@ assert.equal(await privateNotToObserver, true, 'unrelated player does not receiv
 const { result: observerHistory } = await request(`/api/campaigns/${campaign.id}/messages`, { cookie: observer.cookie });
 assert.equal(observerHistory.some((message) => message.id === privateAck.message.id), false, 'unrelated player history omits the private message');
 
+const publicRollToOwner = expectEvent(ownerClient.socket, 'dice:result');
+const publicRollToObserver = expectEvent(observerClient.socket, 'dice:result');
 const rollAck = await ack(playerClient.socket, 'dice:roll', { campaignId: campaign.id, expression: '2d20+1' });
 assert.equal(rollAck.ok, true);
 assert.equal(rollAck.roll.rolls.length, 2);
 assert.ok(rollAck.roll.rolls.every((value) => value >= 1 && value <= 20));
+assert.equal((await publicRollToOwner).id, rollAck.roll.id, 'public roll reaches the campaign owner');
+assert.equal((await publicRollToObserver).id, rollAck.roll.id, 'public roll reaches another player');
+const deniedHiddenRoll = await ack(playerClient.socket, 'dice:roll', { campaignId: campaign.id, expression: '1d20', hidden: true });
+assert.equal(deniedHiddenRoll.error, 'FORBIDDEN', 'Players cannot request a GM-only roll');
+const hiddenRollToOwner = expectEvent(ownerClient.socket, 'dice:result');
+const hiddenRollNotToPlayer = noEvent(playerClient.socket, 'dice:result');
+const hiddenRollNotToObserver = noEvent(observerClient.socket, 'dice:result');
+const hiddenRollAck = await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.id, expression: '1d20', hidden: true });
+assert.equal(hiddenRollAck.ok, true, 'GM can request a GM-only roll');
+assert.equal((await hiddenRollToOwner).hidden, true, 'owner receives the hidden result');
+assert.equal(await hiddenRollNotToPlayer, true, 'hidden roll is not broadcast to Players');
+assert.equal(await hiddenRollNotToObserver, true, 'hidden roll is not broadcast to other campaign members');
 
 playerClient.socket.disconnect();
 const reconnect = new Promise((resolve, reject) => { playerClient.socket.once('connect', resolve); playerClient.socket.once('connect_error', reject); playerClient.socket.connect(); });
@@ -416,4 +430,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, corrupt-image upload rejection, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, server dice, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, Player freehand permissions, ownership/privacy, safe deletion/revocation, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, corrupt-image upload rejection, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, public and GM-only dice rolls with Player denial, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, Player freehand permissions, ownership/privacy, safe deletion/revocation, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

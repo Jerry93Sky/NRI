@@ -1,0 +1,1 @@
+ALTER TABLE "dice_rolls" ADD COLUMN "hidden" boolean DEFAULT false NOT NULL;

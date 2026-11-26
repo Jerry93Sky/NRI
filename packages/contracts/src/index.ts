@@ -30,7 +30,7 @@ export const createSceneObjectSchema = sceneObjectFieldsSchema.extend({ width: s
 export const updateSceneObjectSchema = sceneObjectFieldsSchema.partial().extend({ expectedVersion: z.number().int().positive() }).refine(({ expectedVersion: _version, ...patch }) => Object.values(patch).some((value) => value !== undefined)).refine(({ kind, text }) => kind !== 'TEXT' || Boolean(text?.trim())).refine(({ text }) => text === undefined || (typeof text === 'string' && Boolean(text.trim())));
 export const duplicateSceneObjectsSchema = z.object({ layerId: idSchema, objects: z.array(z.object({ objectId: idSchema, expectedVersion: z.number().int().positive(), x: sceneObjectShape.x, y: sceneObjectShape.y })).min(1).max(50).refine((items) => new Set(items.map((item) => item.objectId)).size === items.length) });
 export const moveTokenSchema = z.object({ tokenId: idSchema, x: z.number().finite().min(-10000).max(10000), y: z.number().finite().min(-10000).max(10000), expectedVersion: z.number().int().positive() });
-export const diceSchema = z.object({ expression: z.string().regex(/^\s*(\d{1,2})?d(4|6|8|10|12|20|100)([+-]\d{1,4})?\s*$/i).max(16) });
+export const diceSchema = z.object({ expression: z.string().regex(/^\s*(\d{1,2})?d(4|6|8|10|12|20|100)([+-]\d{1,4})?\s*$/i).max(16), hidden: z.boolean().default(false) });
 export const inviteSchema = z.object({ campaignId: idSchema, expiresInHours: z.number().int().min(1).max(168).default(72) });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

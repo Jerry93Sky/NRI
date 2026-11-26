@@ -4,7 +4,7 @@ All notable project changes will be recorded here.
 
 ## Unreleased — V0.1.1
 
-- Expanded the privacy browser scenario to three clients: public chat and d20 results reach both players, while private GM chat reaches only its selected player. Merged persisted chat history with concurrent realtime arrivals to prevent late hydration from dropping new messages; raised the signup limiter only in test mode so all browser scenarios can share one isolated API process.
+- Expanded multiplayer browser and API coverage for three-client public/private chat, public d20 results, GM-only hidden rolls, and GM-controlled initiative start/advance/stop. Hidden results are stored with an explicit visibility flag and emitted only to the campaign GM room; Players cannot request them. Chat/dice socket listeners bind before campaign room joins, and persisted history merges with realtime arrivals so the first event or late hydration cannot drop a new message. Raised the signup limiter only in test mode so all browser scenarios can share one isolated API process.
 - Added per-scene grid, map size, distance, and camera settings with optimistic versions and a migration that preserves existing scenes.
 - Added active player scenes and GM-only drafts, scene duplicate/archive/restore/reorder flows, and server filtering for player scene and token snapshots.
 - Added regression coverage for scene privacy, stale edits, activation, fallback, and recovery to the multiplayer smoke runner.

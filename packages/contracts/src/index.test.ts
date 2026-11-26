@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, campaignDrawingPermissionSchema, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
+import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, campaignDrawingPermissionSchema, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, diceSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
 
 describe('campaign drawing permission contract', () => {
   it('accepts only a boolean permission value', () => {
@@ -17,6 +17,11 @@ describe('campaign-scoped token permissions', () => {
 });
 
 describe('dice expression parser', () => {
+  it('defaults to public rolls and validates the GM-only visibility flag', () => {
+    expect(diceSchema.parse({ expression: 'd20' })).toEqual({ expression: 'd20', hidden: false });
+    expect(diceSchema.parse({ expression: 'd20', hidden: true }).hidden).toBe(true);
+    expect(diceSchema.safeParse({ expression: 'd20', hidden: 'true' }).success).toBe(false);
+  });
   it('parses supported bounded expressions', () => expect(parseDiceExpression('2d20+3')).toEqual({ count: 2, sides: 20, modifier: 3 }));
   it('defaults a missing count and modifier', () => expect(parseDiceExpression('d6')).toEqual({ count: 1, sides: 6, modifier: 0 }));
   it('rejects unsupported or unbounded expressions', () => {

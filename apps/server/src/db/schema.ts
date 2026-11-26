@@ -70,7 +70,7 @@ export const messages = pgTable('chat_messages', {
 export const diceRolls = pgTable('dice_rolls', {
   id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id), expression: varchar('expression', { length: 16 }).notNull(), result: integer('result').notNull(),
-  detail: text('detail').notNull(), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  detail: text('detail').notNull(), hidden: boolean('hidden').notNull().default(false), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('dice_campaign_time_idx').on(t.campaignId, t.createdAt)]);
 export const initiatives = pgTable('initiative_trackers', {
   id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }).unique(),

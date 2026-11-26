@@ -23,6 +23,7 @@ async function requestJson(page: import('@playwright/test').Page, path: string, 
 }
 
 test('separate GM and player contexts keep drafts and GM objects private', async ({ browser, baseURL }, testInfo) => {
+  test.setTimeout(240_000);
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const gmContext = await browser.newContext({ locale: 'en-US' });
   const playerContext = await browser.newContext({ locale: 'en-US' });
@@ -244,6 +245,26 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await gmPage.getByRole('button', { name: /d20/ }).click();
     await expect(playerPage.locator('.roll-row')).toHaveCount(priorPlayerRollCount + 1);
     await expect(observerPage.locator('.roll-row')).toHaveCount(priorObserverRollCount + 1);
+    const priorGmRollCount = await gmPage.locator('.roll-row').count();
+    await gmPage.getByLabel('Private roll · GMs only').check();
+    await gmPage.getByRole('button', { name: /d20/ }).click();
+    await expect(gmPage.locator('.roll-row')).toHaveCount(priorGmRollCount + 1);
+    await expect(gmPage.locator('.roll-row').first()).toContainText('Private roll · GMs only');
+    await expect(playerPage.locator('.roll-row')).toHaveCount(priorPlayerRollCount + 1);
+    await expect(observerPage.locator('.roll-row')).toHaveCount(priorObserverRollCount + 1);
+    await gmPage.getByLabel('Private roll · GMs only').uncheck();
+
+    const initiativeScores = gmPage.locator('.initiative-score input');
+    const initiativeEntryCount = await initiativeScores.count();
+    expect(initiativeEntryCount).toBeGreaterThan(0);
+    for (let index = 0; index < initiativeEntryCount; index++) await initiativeScores.nth(index).fill(String(20 - index));
+    await gmPage.getByRole('button', { name: 'Start initiative' }).click();
+    await expect(playerPage.locator('.initiative-list .initiative-row')).toHaveCount(initiativeEntryCount);
+    await gmPage.getByRole('button', { name: /Next turn/ }).click();
+    await expect(playerPage.locator('.initiative-list .initiative-row')).toHaveCount(initiativeEntryCount);
+    await gmPage.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(playerPage.getByText('Initiative is not active.')).toBeVisible();
+
     await playerPage.evaluate(() => {
       (window as typeof window & { nriPointerEvents?: Array<{ sceneId: string; displayName: string }> }).nriPointerEvents = [];
       window.addEventListener('nri-shared-pointer', (event) => {
