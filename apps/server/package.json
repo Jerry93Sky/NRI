@@ -11,6 +11,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/migrate.ts",
     "db:seed": "tsx src/seed.ts",
+    "db:seed:playable-amber": "tsx src/seedPlayableAmber.ts",
     "smoke": "node scripts/multiplayer-smoke.mjs",
     "test": "vitest run"
   },

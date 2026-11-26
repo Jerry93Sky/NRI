@@ -5,9 +5,9 @@ import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import { Server } from 'socket.io';
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { constants as fsConstants, createReadStream } from 'node:fs';
+import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { basename, extname, resolve } from 'node:path';
 import argon2 from 'argon2';
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -147,6 +147,136 @@ app.post('/api/campaigns', async (request, reply) => {
     return campaign;
   });
   return reply.code(201).send({ campaign: created });
+});
+app.post('/api/campaigns/:campaignId/duplicate', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { campaignId } = request.params as { campaignId: string };
+  const role = await roleFor(campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+
+  const sourceAssets = await db.select().from(assets).where(eq(assets.campaignId, campaignId));
+  const sourceBytes = sourceAssets.reduce((total, asset) => total + asset.size, 0);
+  if (sourceAssets.length > 250 || sourceBytes > 256 * 1024 * 1024) return reply.code(413).send({ error: 'CAMPAIGN_COPY_TOO_LARGE' });
+  const prepared: Array<{ sourceId: string; storageKey: string; tempPath: string; finalPath: string }> = [];
+  try {
+    await mkdir(uploadDirectory, { recursive: true });
+    for (const asset of sourceAssets) {
+      if (basename(asset.storageKey) !== asset.storageKey || !/^[\w.-]{1,80}$/.test(asset.storageKey)) throw new Error('Campaign contains an invalid asset storage key.');
+      const sourcePath = resolve(uploadDirectory, asset.storageKey);
+      const bytes = await readFile(sourcePath);
+      if (bytes.byteLength !== asset.size || createHash('sha256').update(bytes).digest('hex') !== asset.checksum) throw new Error('Campaign asset integrity check failed.');
+      const storageKey = `${randomBytes(24).toString('hex')}${extname(asset.storageKey)}`;
+      const tempPath = resolve(uploadDirectory, `.campaign-copy-${randomUUID()}.pending`);
+      const finalPath = resolve(uploadDirectory, storageKey);
+      prepared.push({ sourceId: asset.id, storageKey, tempPath, finalPath });
+      await writeFile(tempPath, bytes, { flag: 'wx', mode: 0o600 });
+    }
+
+    const copied = await db.transaction(async (tx) => {
+      const [source] = await tx.select().from(campaigns).where(and(eq(campaigns.id, campaignId), isNull(campaigns.archivedAt))).for('update').limit(1);
+      if (!source) return { error: 'NOT_FOUND' as const };
+      const [membership] = await tx.select({ role: memberships.role }).from(memberships)
+        .where(and(eq(memberships.campaignId, campaignId), eq(memberships.userId, user.id))).limit(1);
+      if (!membership || !['OWNER', 'GM'].includes(membership.role)) return { error: 'FORBIDDEN' as const };
+
+      const sourceSceneRows = await tx.select().from(scenes).where(eq(scenes.campaignId, campaignId)).orderBy(asc(scenes.sortOrder), asc(scenes.id));
+      const sourceSceneIds = sourceSceneRows.map((scene) => scene.id);
+      const sourceAssetRows = await tx.select().from(assets).where(eq(assets.campaignId, campaignId));
+      if (sourceAssetRows.length !== prepared.length || sourceAssetRows.some((asset) => !prepared.some((file) => file.sourceId === asset.id))) throw new Error('Campaign assets changed while the copy was being prepared.');
+      const sourceLayerRows = sourceSceneIds.length ? await tx.select().from(sceneLayers).where(inArray(sceneLayers.sceneId, sourceSceneIds)) : [];
+      const sourceTokenRows = sourceSceneIds.length ? await tx.select().from(tokens).where(and(inArray(tokens.sceneId, sourceSceneIds), isNull(tokens.deletedAt))) : [];
+      const sourceObjectRows = sourceSceneIds.length ? await tx.select().from(sceneObjects).where(inArray(sceneObjects.sceneId, sourceSceneIds)) : [];
+
+      const [campaign] = await tx.insert(campaigns).values({
+        ownerId: user.id,
+        title: `Copy of ${source.title}`.slice(0, 80),
+        description: source.description,
+        playersCanDraw: source.playersCanDraw,
+      }).returning();
+      if (!campaign) throw new Error('Campaign copy creation failed.');
+      await tx.insert(memberships).values({ campaignId: campaign.id, userId: user.id, role: 'OWNER' });
+
+      const assetIds = new Map<string, string>();
+      for (const sourceAsset of sourceAssetRows) {
+        const file = prepared.find((item) => item.sourceId === sourceAsset.id)!;
+        const [asset] = await tx.insert(assets).values({
+          campaignId: campaign.id,
+          name: sourceAsset.name,
+          category: sourceAsset.category,
+          storageKey: file.storageKey,
+          mediaType: sourceAsset.mediaType,
+          size: sourceAsset.size,
+          checksum: sourceAsset.checksum,
+          uploaderId: user.id,
+        }).returning({ id: assets.id });
+        if (!asset) throw new Error('Campaign copy asset insert failed.');
+        assetIds.set(sourceAsset.id, asset.id);
+      }
+
+      const sceneIds = new Map<string, string>();
+      for (const sourceScene of sourceSceneRows) {
+        const { id: sourceId, campaignId: _sourceCampaignId, ...sceneValues } = sourceScene;
+        const [scene] = await tx.insert(scenes).values({
+          ...sceneValues,
+          campaignId: campaign.id,
+          backgroundAssetId: sourceScene.backgroundAssetId ? assetIds.get(sourceScene.backgroundAssetId) ?? null : null,
+          version: 1,
+        }).returning({ id: scenes.id });
+        if (!scene) throw new Error('Campaign copy scene insert failed.');
+        sceneIds.set(sourceId, scene.id);
+      }
+
+      const layerIds = new Map<string, string>();
+      for (const sourceLayer of sourceLayerRows) {
+        const { id: sourceId, sceneId: sourceSceneId, ...layerValues } = sourceLayer;
+        const [layer] = await tx.insert(sceneLayers).values({ ...layerValues, sceneId: sceneIds.get(sourceSceneId)!, version: 1 }).returning({ id: sceneLayers.id });
+        if (!layer) throw new Error('Campaign copy layer insert failed.');
+        layerIds.set(sourceId, layer.id);
+      }
+
+      for (const sourceToken of sourceTokenRows) {
+        const { id: _id, sceneId: sourceSceneId, imageAssetId, ownerUserId: _ownerUserId, ownerNote: _ownerNote, deletedAt: _deletedAt, ...tokenValues } = sourceToken;
+        await tx.insert(tokens).values({
+          ...tokenValues,
+          sceneId: sceneIds.get(sourceSceneId)!,
+          imageAssetId: imageAssetId ? assetIds.get(imageAssetId) ?? null : null,
+          ownerUserId: null,
+          ownerNote: '',
+          deletedAt: null,
+          version: 1,
+        });
+      }
+
+      for (const sourceObject of sourceObjectRows) {
+        const { id: _id, sceneId: sourceSceneId, layerId: sourceLayerId, assetId, createdBy: _createdBy, ...objectValues } = sourceObject;
+        await tx.insert(sceneObjects).values({
+          ...objectValues,
+          sceneId: sceneIds.get(sourceSceneId)!,
+          layerId: layerIds.get(sourceLayerId)!,
+          assetId: assetId ? assetIds.get(assetId) ?? null : null,
+          createdBy: user.id,
+          version: 1,
+        });
+      }
+
+      await tx.insert(auditEvents).values({ campaignId: campaign.id, actorId: user.id, action: 'campaign.duplicated', targetId: campaign.id, detail: `Copied from ${campaignId}` });
+      for (const file of prepared) {
+        await copyFile(file.tempPath, file.finalPath, fsConstants.COPYFILE_EXCL);
+      }
+      return { campaign };
+    }, { isolationLevel: 'repeatable read' });
+
+    if ('error' in copied) return reply.code(copied.error === 'FORBIDDEN' ? 403 : 404).send({ error: copied.error });
+    return reply.code(201).send({ campaign: copied.campaign });
+  } catch (error) {
+    await Promise.allSettled(prepared.map(async (file) => {
+      await unlink(file.tempPath).catch(() => undefined);
+      await unlink(file.finalPath).catch(() => undefined);
+    }));
+    throw error;
+  } finally {
+    await Promise.allSettled(prepared.map((file) => unlink(file.tempPath)));
+  }
 });
 app.put('/api/campaigns/:campaignId/player-drawing', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;

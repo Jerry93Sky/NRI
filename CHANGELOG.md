@@ -4,6 +4,9 @@ All notable project changes will be recorded here.
 
 ## Unreleased — V0.1.1
 
+- Added an original three-scene “Amber Crossing: The Lantern Vault” demo seed with procedural map and portrait assets, hidden GM content, system-neutral resources, and a facilitator guide/provenance register. The seed is additive, idempotent, and refuses non-loopback or non-`nri_dev`/`nri_demo` databases.
+- Added Owner/GM campaign copying with independent scene/layer/object/token/asset IDs, copied image bytes under new storage keys, preserved draft and GM content, no copied memberships/chat/live initiative, and cleared owner-specific token assignments/notes. Dedicated two-context Playwright coverage verifies copy relationships and Player denial.
+
 - Fixed token dragging under fitted/zoomed canvases by converting pointer deltas back into scene coordinates. Isolated Chromium coverage now drags a token one grid cell and verifies the Player canvas receives the updated projection.
 - Extended the isolated three-client Chromium scenario to take the Player offline and online, verify the connection recovers, and verify campaign realtime chat delivery after rejoining.
 - Expanded multiplayer browser and API coverage for three-client public/private chat, public d20 results, GM-only hidden rolls, and GM-controlled initiative start/advance/stop, including hidden current-turn filtering for Players and Observers. Hidden dice results persist with an explicit visibility flag and emit only to the campaign GM room; Players cannot request them. Chat/dice socket listeners bind before campaign room joins, persisted history merges with realtime arrivals, and campaign-scoped payloads plus stale-request guards keep data isolated when switching campaigns. Playwright checks the cleared chat/dice state in a second campaign after late old history arrives. Raised the signup limiter only in test mode so all browser scenarios can share one isolated API process.

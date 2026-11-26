@@ -13,6 +13,8 @@ The API and web interface run locally, and `Amber Crossing` is available for man
 
 ## Implemented
 
+The “Amber Crossing: The Lantern Vault” demo can be prepared with `corepack pnpm@12.23.0 db:seed:playable-amber`. It creates a separate campaign with three scenes and original procedural maps and portraits, leaving the original `Amber Crossing` untouched. Owners and GMs can make an independent campaign copy with new scene, layer, object, token, asset, and file IDs. See the [session guide](docs/demo/AMBER_CROSSING_PLAY_GUIDE.md) and [asset provenance register](docs/demo/ASSET_PROVENANCE.md). The copy workflow passed a dedicated two-context Playwright scenario; full manual campaign review remains open.
+
 - Registration, login, logout, sessions, and rate limits.
 - Campaigns, Owner/GM/Player roles, capped and revocable invitations, archive and restore.
 - Scenes with a player-active version and GM drafts, rename, duplicate, archive/restore, ordering, and configurable grid/camera; players receive only the active scene.
