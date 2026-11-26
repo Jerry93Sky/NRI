@@ -176,6 +176,22 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     const acceptInvitationResponse = await acceptInvitationPromise;
     expect(acceptInvitationResponse.status()).toBe(200);
     await expect(playerPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
+    await playerPage.evaluate(() => {
+      (window as typeof window & { nriPointerEvents?: Array<{ sceneId: string; displayName: string }> }).nriPointerEvents = [];
+      window.addEventListener('nri-shared-pointer', (event) => {
+        const pointer = (event as CustomEvent<{ sceneId: string; displayName: string }>).detail;
+        (window as typeof window & { nriPointerEvents?: Array<{ sceneId: string; displayName: string }> }).nriPointerEvents?.push(pointer);
+      });
+    });
+    await gmPage.getByRole('button', { name: 'Pointer' }).click();
+    const gmCanvas = gmPage.locator('.table-canvas canvas');
+    const gmCanvasBounds = await gmCanvas.boundingBox();
+    expect(gmCanvasBounds).toBeTruthy();
+    await gmPage.mouse.move(gmCanvasBounds!.x + gmCanvasBounds!.width * 0.6, gmCanvasBounds!.y + gmCanvasBounds!.height * 0.45);
+    await expect.poll(() => playerPage.evaluate(() => (window as typeof window & { nriPointerEvents?: unknown[] }).nriPointerEvents?.length ?? 0)).toBeGreaterThan(0);
+    const receivedPointer = await playerPage.evaluate(() => (window as typeof window & { nriPointerEvents?: Array<{ sceneId: string; displayName: string }> }).nriPointerEvents?.[0]);
+    expect(receivedPointer).toMatchObject({ sceneId: activeScene.id, displayName: 'E2E Guide' });
+    await gmPage.getByRole('button', { name: 'Stop pointer' }).click();
 
     const playerScenes = await requestJson(playerPage, `/api/campaigns/${activeScene.campaignId}/scenes`);
     expect(playerScenes.status).toBe(200);
