@@ -96,7 +96,7 @@ app.get('/api/ready', async (_request, reply) => {
   catch { return reply.code(503).send({ status: 'not_ready' }); }
 });
 
-app.post('/api/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
+app.post('/api/auth/register', { config: { rateLimit: { max: process.env.NODE_ENV === 'test' ? 20 : 5, timeWindow: '1 hour' } } }, async (request, reply) => {
   const input = parseBody(registerSchema, request.body);
   const email = input.email.trim().toLowerCase();
   const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);

@@ -26,8 +26,19 @@ test('separate GM and player contexts keep drafts and GM objects private', async
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const gmContext = await browser.newContext({ locale: 'en-US' });
   const playerContext = await browser.newContext({ locale: 'en-US' });
+  const observerContext = await browser.newContext({ locale: 'en-US' });
   const gmPage = await gmContext.newPage();
   const playerPage = await playerContext.newPage();
+  const observerPage = await observerContext.newPage();
+  let releaseHistoryHydration = () => {};
+  const historyHydration = new Promise<void>((resolve) => { releaseHistoryHydration = resolve; });
+  for (const page of [playerPage, observerPage]) {
+    await page.route('**/api/campaigns/*/messages', async (route) => {
+      const response = await route.fetch();
+      await historyHydration;
+      await route.fulfill({ response });
+    });
+  }
 
   try {
     await register(gmPage, 'E2E Guide', `guide-${suffix}@example.test`);
@@ -194,6 +205,45 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     const acceptInvitationResponse = await acceptInvitationPromise;
     expect(acceptInvitationResponse.status()).toBe(200);
     await expect(playerPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
+    await expect(playerPage.locator('.live-status')).toHaveText('Live');
+    await observerPage.goto(new URL(`/?invite=${encodeURIComponent(invitation)}`, baseURL).toString());
+    await observerPage.getByRole('button', { name: 'Create account' }).click();
+    await observerPage.getByLabel('Display name').fill('E2E Observer');
+    await observerPage.getByLabel('Email').fill(`observer-${suffix}@example.test`);
+    await observerPage.getByLabel('Password').fill('e2e-test-password-24');
+    const observerInvitePromise = observerPage.waitForResponse((response) => /\/api\/invitations\/[^/]+\/accept$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST');
+    await observerPage.getByRole('button', { name: 'Create account', exact: true }).first().click();
+    expect((await observerInvitePromise).status()).toBe(200);
+    await expect(observerPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
+    await expect(observerPage.locator('.live-status')).toHaveText('Live');
+    await gmPage.reload();
+    await expect(gmPage.getByRole('heading', { name: 'Your campaigns' })).toBeVisible();
+    await gmPage.getByRole('button', { name: new RegExp(campaignTitle) }).click();
+    await expect(gmPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
+    await expect(gmPage.locator('.live-status')).toHaveText('Live');
+
+    const publicMessage = `Shared table message ${suffix}`;
+    await gmPage.getByPlaceholder('Write a message…').fill(publicMessage);
+    await gmPage.getByRole('button', { name: 'Send' }).click();
+    await expect(playerPage.locator('.chat-messages')).toContainText(publicMessage);
+    await expect(observerPage.locator('.chat-messages')).toContainText(publicMessage);
+    releaseHistoryHydration();
+    await expect(playerPage.locator('.chat-messages')).toContainText(publicMessage);
+    await expect(observerPage.locator('.chat-messages')).toContainText(publicMessage);
+
+    const privateMessage = `Private guidance ${suffix}`;
+    await gmPage.getByLabel('Message recipient').selectOption({ label: 'Private · E2E Player' });
+    await gmPage.getByPlaceholder('Write a message…').fill(privateMessage);
+    await gmPage.getByRole('button', { name: 'Send' }).click();
+    await expect(playerPage.locator('.chat-messages')).toContainText(privateMessage);
+    await expect(observerPage.locator('.chat-messages')).not.toContainText(privateMessage);
+    await gmPage.getByLabel('Message recipient').selectOption('');
+
+    const priorPlayerRollCount = await playerPage.locator('.roll-row').count();
+    const priorObserverRollCount = await observerPage.locator('.roll-row').count();
+    await gmPage.getByRole('button', { name: /d20/ }).click();
+    await expect(playerPage.locator('.roll-row')).toHaveCount(priorPlayerRollCount + 1);
+    await expect(observerPage.locator('.roll-row')).toHaveCount(priorObserverRollCount + 1);
     await playerPage.evaluate(() => {
       (window as typeof window & { nriPointerEvents?: Array<{ sceneId: string; displayName: string }> }).nriPointerEvents = [];
       window.addEventListener('nri-shared-pointer', (event) => {
@@ -291,7 +341,8 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     const stillPrivateScenes = await requestJson(playerPage, `/api/campaigns/${draftScene.campaignId}/scenes`);
     expect((stillPrivateScenes.body as Array<{ id: string }>).map((scene) => scene.id)).toEqual([activeScene.id]);
   } finally {
-    await Promise.allSettled([gmContext.close(), playerContext.close()]);
+    releaseHistoryHydration();
+    await Promise.allSettled([gmContext.close(), playerContext.close(), observerContext.close()]);
   }
 });
 

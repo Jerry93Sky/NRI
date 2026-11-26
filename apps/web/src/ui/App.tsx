@@ -15,6 +15,12 @@ type DeletedToken = { id: string; sceneId: string; sceneTitle: string; name: str
 type SceneLayer = { id: string; sceneId: string; name: string; kind: string; sortOrder: number; visibleToPlayers: boolean; locked: boolean; version: number };
 type SceneObject = { id: string; sceneId: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; assetId: string | null; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean; version: number; ownedByMe?: boolean };
 type ChatItem = { id: string; senderId: string; displayName: string; body: string; createdAt?: string; private?: boolean; recipientId?: string | null };
+function mergeChatItems(current: ChatItem[], incoming: ChatItem[]) {
+  const byId = new Map<string, ChatItem>();
+  for (const message of incoming) byId.set(message.id, { ...message, private: Boolean(message.private || message.recipientId) });
+  for (const message of current) byId.set(message.id, message);
+  return [...byId.values()].sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? '')).slice(-100);
+}
 type RollItem = { id?: string; displayName: string; expression: string; rolls: number[]; modifier: number; result: number };
 type InitiativeView = { tracker: { id: string; active: boolean; round: number; version: number; activeIndex?: number; currentEntryId: string | null } | null; entries: Array<{ id: string; tokenId: string | null; label: string; score: number }> };
 type TokenPosition = { tokenId: string; x: number; y: number };
@@ -208,7 +214,7 @@ export function App() {
   useEffect(() => {
     if (!campaign) return;
     void api<Member[]>(`/api/campaigns/${campaign.campaign.id}/members`).then(setMembers).catch((e) => setError(e.message));
-    void api<Array<ChatItem & { recipientId: string | null }>>(`/api/campaigns/${campaign.campaign.id}/messages`).then((list) => setMessages(list.map((message) => ({ ...message, private: Boolean(message.recipientId) })))).catch((e) => setError((e as Error).message));
+    void api<Array<ChatItem & { recipientId: string | null }>>(`/api/campaigns/${campaign.campaign.id}/messages`).then((list) => setMessages((current) => mergeChatItems(current, list))).catch((e) => setError((e as Error).message));
     void api<InitiativeView>(`/api/campaigns/${campaign.campaign.id}/initiative`).then(setInitiative).catch((e) => setError((e as Error).message));
   }, [campaign?.campaign.id]);
 
