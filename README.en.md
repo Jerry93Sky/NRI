@@ -6,10 +6,10 @@ NRI Platform is a system-neutral virtual tabletop for role-playing games. Its co
 
 - **Version:** V0.1.1 — Tabletop Foundation Completion & Playability
 - **Implementation:** IN_PROGRESS
-- **Automated checks:** AUTOMATED_TESTS_PASSED for commit `fd6d047` (GitHub Actions #174)
+- **Automated checks:** AUTOMATED_TESTS_PASSED for commit `976f6d2` (GitHub Actions #178)
 - **Owner acceptance:** IN_PROGRESS — V0.1.1 technical gates remain open
 
-The API and web interface are available locally, and the separate `Amber Crossing: The Lantern Vault` campaign is prepared for manual review. Implemented workflows include GM drafts and an active Player scene, layers and scene objects, grid setup and calibration, tokens with privacy-filtered resources and notes, a campaign image library with folders, group actions, ruler, pointer, and drawing tools. Public/private chat, public/hidden rolls, initiative, reconnect, and versioned token-move conflict handling are supported. The right rail, fullscreen mode, and theme controls have automated browser coverage; Chromium checks layouts at 1366×768, 1920×1080, and 2560×1440. GitHub Actions run #174 passed on commit `fd6d047`, including the full Chromium suite and the new two-browser move-conflict test. These are automated checks, not owner acceptance. Open items include owner review of a full demo session and map calibration, parts of object editing and Undo/Redo, server-restart recovery, broader security review, a coordinated maintenance-window backup/restore, scheduled retention, and real performance measurements. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md) for evidence and limitations.
+The API and web interface are available locally, and the separate `Amber Crossing: The Lantern Vault` campaign is prepared for manual review. Implemented workflows include GM drafts and an active Player scene, layers and scene objects, grid setup and calibration, tokens with privacy-filtered resources and notes, a campaign image library with folders, group actions, ruler, pointer, and drawing tools. Public/private chat, public/hidden rolls, initiative, reconnect, and versioned token-move conflict handling are supported. The right rail, fullscreen mode, and theme controls have automated browser coverage; Chromium checks layouts at 1366×768, 1920×1080, and 2560×1440. GitHub Actions run #178 passed on commit `976f6d2`, including GM/Player recovery after an isolated API restart and persisted campaign state. These are automated checks, not owner acceptance. Open items include owner review of a full demo session and map calibration, parts of object editing and Undo/Redo, broader security review, a coordinated maintenance-window backup/restore, scheduled retention, and real performance measurements. See the [scope](docs/releases/V0.1.1_SCOPE.md) and [V0.1.1 acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md) for evidence and limitations.
 
 ## Implemented
 
@@ -28,7 +28,7 @@ The “Amber Crossing: The Lantern Vault” demo can be prepared with `corepack 
 ## V0.1.1 limitations
 
 - Undo/Redo covers movement only; full history for object and property edits is not implemented. Some shape and text editing gestures still need manual review.
-- The browser race between two authorized token movers and ordinary offline/online reconnect are covered; full server-restart recovery and a broader membership/permission revocation matrix remain open.
+- The browser race between two authorized token movers and GM/Player reconnect after API restart are covered; a broader membership/permission revocation matrix remains open.
 - Local backup/restore and manifest verification passed on isolated databases. A coordinated quiesced maintenance window, scheduled retention, and confirmation of all required restored data remain open.
 - Measurements for three load scenes and six players, including FPS, latency, memory, server load, and hardware texture limits, have not been collected.
 - Owner review of calibration on a mapped scene and a complete demo session remains open. The targeted security review is not independent certification.
