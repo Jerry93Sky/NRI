@@ -46,6 +46,36 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     const { scene: activeScene } = await activeSceneResponse.json() as { scene: { id: string; campaignId: string } };
     await expect(gmPage.getByRole('button', { name: 'Add token' })).toBeVisible();
 
+    const mapDataUrl = await gmPage.evaluate(() => {
+      const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 512;
+      const context = canvas.getContext('2d')!; context.fillStyle = '#d8c8a8'; context.fillRect(0, 0, 512, 512);
+      context.strokeStyle = '#8b7961'; context.lineWidth = 2;
+      for (let position = 0; position <= 512; position += 64) { context.beginPath(); context.moveTo(position, 0); context.lineTo(position, 512); context.stroke(); context.beginPath(); context.moveTo(0, position); context.lineTo(512, position); context.stroke(); }
+      return canvas.toDataURL('image/png');
+    });
+    const mapBuffer = Buffer.from(mapDataUrl.split(',')[1]!, 'base64');
+    await gmPage.getByRole('button', { name: /Upload map/ }).click();
+    const mapUploadResponse = gmPage.waitForResponse((response) => response.url().endsWith(`/api/campaigns/${activeScene.campaignId}/assets`) && response.request().method() === 'POST');
+    await gmPage.locator('input[type="file"]').first().setInputFiles({ name: 'calibration-map.png', mimeType: 'image/png', buffer: mapBuffer });
+    expect((await mapUploadResponse).status()).toBe(201);
+    await gmPage.getByRole('button', { name: 'Grid & size' }).click();
+    await gmPage.getByRole('button', { name: 'Calibrate grid from map' }).click();
+    const calibrationCanvas = gmPage.locator('.table-canvas canvas');
+    const calibrationBounds = await calibrationCanvas.boundingBox();
+    expect(calibrationBounds).toBeTruthy();
+    await gmPage.mouse.click(calibrationBounds!.x + 150, calibrationBounds!.y + 140);
+    await gmPage.mouse.click(calibrationBounds!.x + 270, calibrationBounds!.y + 140);
+    await expect(gmPage.getByRole('heading', { name: 'Calibrate grid from map' })).toBeVisible();
+    await gmPage.getByLabel('Grid cells between points').fill('4');
+    await expect(gmPage.locator('.calibration-preview')).toContainText('Preview cell size:');
+    const calibratedSettingsResponse = gmPage.waitForResponse((response) => response.url().endsWith(`/api/scenes/${activeScene.id}`) && response.request().method() === 'PATCH');
+    await gmPage.getByRole('button', { name: 'Save settings', exact: true }).click();
+    const calibratedSettings = await calibratedSettingsResponse;
+    expect(calibratedSettings.status()).toBe(200);
+    const calibratedScene = (await calibratedSettings.json() as { scene: { gridSize: number } }).scene;
+    expect(calibratedScene.gridSize).toBeGreaterThanOrEqual(8);
+    expect(calibratedScene.gridSize).toBeLessThanOrEqual(256);
+
     const layersResult = await requestJson(gmPage, `/api/scenes/${activeScene.id}/layers`);
     expect(layersResult.status).toBe(200);
     const layers = layersResult.body as Array<{ id: string; kind: string }>;

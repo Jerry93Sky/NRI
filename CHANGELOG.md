@@ -10,7 +10,7 @@ All notable project changes will be recorded here.
 - Added non-empty Vitest suites for server scene access policy and web camera zoom math; removed `--passWithNoTests` from all package test scripts.
 - Lazy-loaded the Pixi tabletop; current measured web entry and canvas chunks are documented in the V0.1.1 acceptance report.
 - Localized scene preparation actions, settings, camera controls, and canvas hints in Russian and English.
-- Added map-based grid calibration with two-point measurement, cell-count sizing, and unsaved cell-size/offset preview; mapped browser acceptance remains pending.
+- Added map-based grid calibration with two-point measurement, cell-count sizing, and unsaved cell-size/offset preview; mapped Playwright coverage now passes; owner manual calibration review remains pending.
 - Added a temporary multi-segment ruler using scene grid scale and units; measurements are not persisted as scene objects. Added R/F/Escape shortcuts for ruler, fit-to-scene, and clearing active canvas tools; shortcuts ignore text and form inputs.
 - Added GM drag-box token selection using map-space token bounds; S activates selection, and Escape clears the temporary tool state.
 - Added four scene layers, versioned layer/object APIs, scene duplication with independent layer/object IDs, and player-safe projections for GM-only content.
@@ -28,6 +28,7 @@ All notable project changes will be recorded here.
 - Remediated moderate i18next GHSA-6jcc-5g8w-32mx and esbuild GHSA-67mh-4wv8-2f99 advisories; full and production dependency audits are clean. Targeted review evidence and remaining review scope are recorded in `docs/security/V0.1.1_REVIEW.md`.
 - Added a localized line-object action. Lines are stored as editable scene objects with point geometry and are covered by the multiplayer API smoke.
 - Added a GM freehand mode with live stroke preview and persisted point geometry on the selected unlocked layer.
+- Added a mapped-calibration Chromium flow that uploads a map, measures two canvas points, previews cell size, and saves grid settings. Owner manual review remains pending.
 - Added GM-controlled Player freehand drawing on active scenes, with private authorship, versioned own-stroke edit/delete rules, and API/Playwright permission coverage.
 - Added localized drawing color and stroke-width controls plus per-object color editing.
 - Added versioned GM token properties for name, fill/frame, cell dimensions, rotation, opacity, display order, lock and name visibility; hidden token transitions emit only a safe removal or player-visible creation.
@@ -38,7 +39,7 @@ All notable project changes will be recorded here.
 - Documented the no-overwrite database/media backup procedure and passed an isolated PostgreSQL/media restore drill for `nri_test`.
 - Added a GM-only categorized campaign image library with button and drag-and-drop multi-file uploads, bounded 320×240 WebP thumbnails, search, name/size sorting, metadata editing, storage totals and map/object/token reference counts. Thumbnail reads inherit original asset authorization; unused-only deletion checks references transactionally and removes derived previews. Token images render on the tabletop and are served to players only for visible tokens in the active scene. Uploads use signature, dimension, and bounded full-decode checks; campaign folders remain open. Unit, isolated smoke, and Playwright coverage verify thumbnail generation, ACL filtering, and dropped PNG preview.
 - Restricted layer creation to custom layers and changed object-to-layer deletion behavior so a non-empty layer cannot cascade-delete its objects.
-- V0.1.1 is still in progress. Typography controls, mapped browser acceptance for calibration and ruler, broader undo, asset folders, additional Playwright flows, broader security review, automated/quiesced backup validation, performance testing, and demo expansion remain open. The shared pointer has server smoke coverage but still needs browser acceptance.
+- V0.1.1 is still in progress. Typography controls, owner manual calibration/ruler review, broader undo, asset folders, additional Playwright flows, broader security review, automated/quiesced backup validation, performance testing, and demo expansion remain open. The shared pointer has server smoke coverage but still needs browser acceptance.
 
 ## Unreleased — V0.1 foundation
 
