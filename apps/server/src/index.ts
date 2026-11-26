@@ -1214,7 +1214,13 @@ io.on('connection', (socket) => {
       if (!role || token.scene.archivedAt || (!['OWNER', 'GM'].includes(role) && !token.scene.isActive)) return callback?.({ error: 'FORBIDDEN' });
       if (!canMoveToken(role, user.id, token.token.ownerUserId, token.token.hidden) || token.token.locked) return callback?.({ error: 'FORBIDDEN' });
       const [updated] = await db.update(tokens).set({ x: input.x, y: input.y, version: token.token.version + 1 }).where(and(eq(tokens.id, input.tokenId), eq(tokens.version, input.expectedVersion))).returning();
-      if (!updated) return callback?.({ error: 'CONFLICT' });
+      if (!updated) {
+        const [current] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(tokens.id, input.tokenId), isNull(tokens.deletedAt))).limit(1);
+        const currentRole = current ? await roleFor(current.scene.campaignId, user.id) : null;
+        const stillAllowed = Boolean(current && currentRole && !current.scene.archivedAt && (currentRole === 'OWNER' || currentRole === 'GM' || current.scene.isActive) && !current.token.locked && canMoveToken(currentRole, user.id, current.token.ownerUserId, current.token.hidden));
+        const latest = stillAllowed && current && currentRole ? publicToken(current.token, currentRole === 'OWNER' || currentRole === 'GM', user.id) : undefined;
+        return callback?.({ error: 'CONFLICT', ...(latest ? { token: latest } : {}) });
+      }
       const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
       callback?.({ ok: true, token: role === 'OWNER' || role === 'GM' ? projection : playerProjection });
       ((updated.hidden || !token.scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:moved', updated.hidden || !token.scene.isActive ? projection : playerProjection);

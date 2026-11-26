@@ -33,6 +33,7 @@ All notable project changes will be recorded here.
 - Added an own-drawing clear action for Players; it deletes only their freehand objects in a database transaction and remains available after drawing permission is revoked.
 - Added persisted right-rail resize/collapse controls, a browser fullscreen toggle, and a locally persisted light/dark theme switch for the tabletop workspace.
 - Tightened tabletop spacing on short desktop viewports and added Chromium layout checks plus screenshots at 1366×768, 1920×1080, and 2560×1440. Campaign asset texture URLs explicitly select Pixi's texture parser.
+- Socket token-move conflicts now return the latest privacy-filtered token state. Multiplayer smoke races two authorized moves and checks the conflict acknowledgement against the winning move and snapshot.
 - Added localized drawing color and stroke-width controls plus per-object color editing.
 - Added versioned GM token properties for name, fill/frame, cell dimensions, rotation, opacity, display order, lock and name visibility; hidden token transitions emit only a safe removal or player-visible creation.
 - Added two generic versioned token resource tracks with label/current/maximum/player-visibility settings, owner-only player adjustments, bounded server updates, and private realtime projections for hidden tracks.

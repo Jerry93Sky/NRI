@@ -13,7 +13,7 @@ The server resolves the opaque HTTP session cookie during the Socket.IO handshak
 | `campaign:join` | campaign UUID string | `{ok, role}` or `{error}`; role is resolved on server |
 | `campaign:leave` | campaign UUID string | no acknowledgement |
 | `scene:pointer` | `{campaignId, sceneId, x, y}` | `{ok}` or `{error}`; current membership and joined campaign room are checked, coordinates must be within scene bounds, Players may point only at the active scene, and per-socket updates are rate-limited to 20/sec |
-| `token:move` | `{tokenId, x, y, expectedVersion}` | `{ok, token}` or `{error}`; ownership/role, active scene, room and optimistic token version checked |
+| `token:move` | `{tokenId, x, y, expectedVersion}` | `{ok, token}`, `{error: CONFLICT, token?}`, or `{error}`; ownership/role, active scene, room and optimistic token version checked. On conflict, `token` is the current privacy-filtered projection when it still exists |
 | `chat:send` | `{campaignId, body, recipientId?}` | `{ok, message}` or `{error}`; recipient membership and Player-to-GM private-message policy checked |
 | `dice:roll` | `{campaignId, expression}` | `{ok, roll}` or `{error}`; server parses and generates dice results |
 
@@ -43,4 +43,4 @@ Players receive only the active, non-archived scene in REST scene lists and toke
 
 ## Concurrency and recovery limits
 
-Mutable scenes and tokens use `expectedVersion`; stale writes return `CONFLICT`. Reconnect requires a new authenticated connection and clients reload campaign and tabletop REST snapshots. There is no durable event log or cursor replay. The multiplayer smoke covers reconnect snapshots and scene lifecycle privacy, but simultaneous competing moves, every hidden-object event edge, and socket revocation across multiple simultaneous connections still require additional coverage.
+Mutable scenes and tokens use `expectedVersion`; stale writes return `CONFLICT`. A stale authorized `token:move` acknowledgement includes the latest privacy-filtered token projection when it still exists, so clients can reconcile without guessing which concurrent move committed. The multiplayer smoke races two authorized moves, checks that exactly one commits, and compares the conflict acknowledgement with the committed snapshot. Reconnect requires a new authenticated connection and clients reload campaign and tabletop REST snapshots. There is no durable event log or cursor replay. Every hidden-object event edge and socket revocation across multiple simultaneous connections still require additional coverage.

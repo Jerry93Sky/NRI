@@ -322,6 +322,12 @@ const concurrentMoves = await Promise.all([
 ]);
 assert.equal(concurrentMoves.filter((result) => result.ok).length, 1, 'exactly one concurrent move commits');
 assert.equal(concurrentMoves.filter((result) => result.error === 'CONFLICT').length, 1, 'the stale concurrent move receives a conflict');
+const winningMove = concurrentMoves.find((result) => result.ok).token;
+const conflictMove = concurrentMoves.find((result) => result.error === 'CONFLICT');
+assert.deepEqual([conflictMove.token.x, conflictMove.token.y, conflictMove.token.version], [winningMove.x, winningMove.y, winningMove.version], 'conflict acknowledgement returns the committed token state');
+const concurrentSnapshot = await request(`/api/scenes/${scene.id}/tokens`, { cookie: owner.cookie });
+const committedConflictToken = concurrentSnapshot.result.find((item) => item.id === conflictToken.id);
+assert.deepEqual([committedConflictToken.x, committedConflictToken.y, committedConflictToken.version], [winningMove.x, winningMove.y, winningMove.version], 'snapshot agrees with the conflict acknowledgement and winning move');
 
 const privateToPlayer = expectEvent(playerClient.socket, 'chat:private');
 const privateNotToObserver = noEvent(observerClient.socket, 'chat:private');
