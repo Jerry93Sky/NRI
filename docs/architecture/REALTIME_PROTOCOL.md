@@ -4,7 +4,7 @@ Socket.IO is used for multiplayer delivery. The current implementation uses name
 
 ## Connection and rooms
 
-The server resolves the opaque HTTP session cookie during the Socket.IO handshake. Missing, expired, or revoked sessions are rejected. `campaign:join` takes a campaign UUID; the server checks current membership, joins `campaign:<id>`, and additionally joins `campaign:<id>:gm` for Owner/GM. `campaign:leave` leaves both rooms. Sensitive commands also check room membership and current role. Membership removal emits `membership:removed` to the affected `user:<id>` room and removes that socket from campaign rooms.
+The server resolves the opaque HTTP session cookie during the Socket.IO handshake. Missing, expired, or revoked sessions are rejected. `campaign:join` takes a campaign UUID; the server checks current membership, joins `campaign:<id>`, and additionally joins `campaign:<id>:gm` for Owner/GM. `campaign:leave` leaves both rooms. Sensitive commands also check room membership and current role. Membership removal emits `membership:removed` to the affected `user:<id>` room and removes all of that user's sockets from campaign rooms; a three-context Chromium test verifies removal and event/write denial across two active Player sessions.
 
 ## Client commands
 
@@ -43,4 +43,4 @@ Players receive only the active, non-archived scene in REST scene lists and toke
 
 ## Concurrency and recovery limits
 
-Mutable scenes and tokens use `expectedVersion`; stale writes return `CONFLICT`. A stale authorized `token:move` acknowledgement includes the latest privacy-filtered token projection when it still exists, so clients can reconcile without guessing which concurrent move committed. The multiplayer smoke races two authorized moves, checks that exactly one commits, and compares the conflict acknowledgement with the committed snapshot. Reconnect requires a new authenticated connection and clients reload campaign and tabletop REST snapshots. There is no durable event log or cursor replay. Every hidden-object event edge and socket revocation across multiple simultaneous connections still require additional coverage.
+Mutable scenes and tokens use `expectedVersion`; stale writes return `CONFLICT`. A stale authorized `token:move` acknowledgement includes the latest privacy-filtered token projection when it still exists, so clients can reconcile without guessing which concurrent move committed. Multiplayer smoke and a two-browser scenario race two authorized moves, check that exactly one commits, and compare the conflict acknowledgement with the committed snapshot. Reconnect requires a new authenticated connection and clients reload campaign and tabletop REST snapshots; a browser test verifies GM/Player session and token-state recovery after restarting the isolated API. There is no durable event log or cursor replay. Hidden-object event permutations and revocation caused by role changes still need additional coverage.
