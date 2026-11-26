@@ -31,6 +31,7 @@ All notable project changes will be recorded here.
 - Added a mapped-calibration Chromium flow that uploads a map, measures two canvas points, previews cell size, and saves grid settings. Owner manual review remains pending.
 - Added GM-controlled Player freehand drawing on active scenes, with private authorship, versioned own-stroke edit/delete rules, and API/Playwright permission coverage.
 - Added an own-drawing clear action for Players; it deletes only their freehand objects in a database transaction and remains available after drawing permission is revoked.
+- Added persisted right-rail resize/collapse controls and a browser fullscreen toggle for the tabletop workspace.
 - Added localized drawing color and stroke-width controls plus per-object color editing.
 - Added versioned GM token properties for name, fill/frame, cell dimensions, rotation, opacity, display order, lock and name visibility; hidden token transitions emit only a safe removal or player-visible creation.
 - Added two generic versioned token resource tracks with label/current/maximum/player-visibility settings, owner-only player adjustments, bounded server updates, and private realtime projections for hidden tracks.

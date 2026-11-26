@@ -45,6 +45,18 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     const activeSceneResponse = await activeResponsePromise;
     const { scene: activeScene } = await activeSceneResponse.json() as { scene: { id: string; campaignId: string } };
     await expect(gmPage.getByRole('button', { name: 'Add token' })).toBeVisible();
+    const panelWidth = gmPage.getByLabel('Panel width');
+    const initialPanelWidth = Number(await panelWidth.inputValue());
+    await panelWidth.press('ArrowRight');
+    await expect(panelWidth).toHaveValue(String(initialPanelWidth + 10));
+    await expect.poll(() => gmPage.evaluate(() => localStorage.getItem('nri:table-rail-width'))).toBe(String(initialPanelWidth + 10));
+    await gmPage.getByRole('button', { name: 'Collapse panel' }).click();
+    await expect(gmPage.getByRole('button', { name: 'Expand panel' })).toBeVisible();
+    await gmPage.getByRole('button', { name: 'Expand panel' }).click();
+    await gmPage.getByRole('button', { name: 'Fullscreen' }).click();
+    await expect.poll(() => gmPage.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+    await gmPage.getByRole('button', { name: 'Exit fullscreen' }).click();
+    await expect.poll(() => gmPage.evaluate(() => document.fullscreenElement === null)).toBe(true);
 
     const mapDataUrl = await gmPage.evaluate(() => {
       const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 512;
