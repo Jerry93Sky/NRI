@@ -6,7 +6,7 @@ async function requestJson(page: Page, path: string, method = 'GET', body?: unkn
     const response = await fetch(path, {
       method,
       credentials: 'include',
-      headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' } }),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     return { status: response.status, body: response.status === 204 ? null : await response.json() };
