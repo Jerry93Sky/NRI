@@ -266,6 +266,16 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await expect(playerPage.locator('.chat-messages')).toContainText(publicMessage);
     await expect(observerPage.locator('.chat-messages')).toContainText(publicMessage);
 
+    await playerContext.setOffline(true);
+    await expect(playerPage.locator('.live-status')).toHaveText('Reconnecting');
+    await playerContext.setOffline(false);
+    await expect(playerPage.locator('.live-status')).toHaveText('Live');
+    const reconnectedMessage = `Reconnect check ${suffix}`;
+    await gmPage.getByPlaceholder('Write a message…').fill(reconnectedMessage);
+    await gmPage.getByRole('button', { name: 'Send' }).click();
+    await expect(playerPage.locator('.chat-messages')).toContainText(reconnectedMessage);
+    await expect(observerPage.locator('.chat-messages')).toContainText(reconnectedMessage);
+
     const privateMessage = `Private guidance ${suffix}`;
     await gmPage.getByLabel('Message recipient').selectOption({ label: 'Private · E2E Player' });
     await gmPage.getByPlaceholder('Write a message…').fill(privateMessage);
