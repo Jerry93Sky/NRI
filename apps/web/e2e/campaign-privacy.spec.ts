@@ -371,6 +371,10 @@ test('GM can drag image files into the campaign asset library', async ({ browser
     await page.getByLabel('A short description').fill('Isolated asset drop acceptance data');
     await page.getByRole('button', { name: /^Create/ }).click();
     await expect(page.getByRole('heading', { name: campaignTitle })).toBeVisible();
+    await page.getByRole('button', { name: 'Add scene' }).first().click();
+    await page.getByLabel('Scene name').fill('Asset table');
+    await page.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Add token' })).toBeEnabled();
     await page.getByRole('button', { name: 'Asset library' }).click();
     await page.getByLabel('Upload as').selectOption('MAP');
 
@@ -392,6 +396,33 @@ test('GM can drag image files into the campaign asset library', async ({ browser
     await expect(page.getByRole('textbox', { name: 'Name' })).toHaveValue('dropped-map.png');
     await expect(page.getByRole('img', { name: 'dropped-map.png' })).toHaveAttribute('src', `/api/assets/${uploadBody.asset.id}?variant=thumbnail`);
     await expect(page.getByRole('link', { name: 'dropped-map.png' })).toHaveAttribute('href', `/api/assets/${uploadBody.asset.id}`);
+    await page.getByLabel('Upload as').selectOption('TOKEN');
+    const tokenUploadPromise = page.waitForResponse((response) => response.url().includes('/api/campaigns/') && response.url().includes('/assets?category=TOKEN') && response.request().method() === 'POST');
+    await page.getByTestId('asset-drop-zone').evaluate((element) => {
+      const canvas = document.createElement('canvas'); canvas.width = 16; canvas.height = 16;
+      const context = canvas.getContext('2d')!; context.fillStyle = '#cf7048'; context.fillRect(0, 0, 16, 16);
+      const transfer = new DataTransfer();
+      canvas.toBlob((blob) => {
+        if (!blob) throw new Error('Could not create token PNG');
+        transfer.items.add(new File([blob], 'dropped-token.png', { type: 'image/png' }));
+        element.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+        element.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      }, 'image/png');
+    });
+    const tokenUpload = await tokenUploadPromise;
+    expect(tokenUpload.status()).toBe(201);
+    const tokenUploadBody = await tokenUpload.json() as { asset: { id: string; name: string } };
+    expect(tokenUploadBody.asset.name).toBe('dropped-token.png');
+    const tokenAssetCard = page.locator('.asset-card').nth(1);
+    await expect(tokenAssetCard).toHaveAttribute('draggable', 'true');
+    const canvasBounds = await page.locator('.table-canvas canvas').boundingBox();
+    expect(canvasBounds).toBeTruthy();
+    const tokenCreatedPromise = page.waitForResponse((response) => response.url().endsWith('/api/tokens') && response.request().method() === 'POST');
+    await tokenAssetCard.dragTo(page.locator('body'), { targetPosition: { x: canvasBounds!.x + canvasBounds!.width * 0.62, y: canvasBounds!.y + canvasBounds!.height * 0.44 } });
+    const tokenCreated = await tokenCreatedPromise;
+    expect(tokenCreated.status()).toBe(201);
+    const createdToken = (await tokenCreated.json() as { token: { imageAssetId: string } }).token;
+    expect(createdToken.imageAssetId).toBe(tokenUploadBody.asset.id);
   } finally {
     await context.close();
   }

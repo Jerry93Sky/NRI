@@ -7,7 +7,7 @@ import { measureSceneDistance, selectTokenIdsInRect, zoomToPointer } from './can
 type Props = {
   tokens: PublicToken[]; objects: Array<{ id: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; assetId: string | null; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean }>; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number; unitsPerCell: number; unitLabel: string;
-  onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; fitLabel: string; rulerActive: boolean; rulerLabel: string; selectionMode: boolean; selectionLabel: string; onSelectTokens: (ids: string[]) => void; pointerActive: boolean; pointerLabel: string; onSharePointer: (x: number, y: number) => void; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
+  onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; onDropTokenAsset: (assetId: string, x: number, y: number) => void; fitLabel: string; rulerActive: boolean; rulerLabel: string; selectionMode: boolean; selectionLabel: string; onSelectTokens: (ids: string[]) => void; pointerActive: boolean; pointerLabel: string; onSharePointer: (x: number, y: number) => void; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
 };
 
@@ -303,6 +303,14 @@ export function TableCanvas(props: Props) {
       if (point.x < 0 || point.y < 0 || point.x > latest.current.sceneWidth || point.y > latest.current.sceneHeight) return;
       lastPointerSent = now; latest.current.onSharePointer(point.x, point.y);
     };
+    const onDropTokenAsset = (event: Event) => {
+      const detail = (event as CustomEvent<{ assetId: string; clientX: number; clientY: number }>).detail;
+      const bounds = host.current?.getBoundingClientRect();
+      if (!detail || !bounds || detail.clientX < bounds.left || detail.clientX > bounds.right || detail.clientY < bounds.top || detail.clientY > bounds.bottom) return;
+      const canvasBounds = app.canvas.getBoundingClientRect();
+      const point = world.toLocal({ x: detail.clientX - canvasBounds.left, y: detail.clientY - canvasBounds.top });
+      if (point.x >= 0 && point.y >= 0 && point.x <= latest.current.sceneWidth && point.y <= latest.current.sceneHeight) latest.current.onDropTokenAsset(detail.assetId, point.x, point.y);
+    };
     const start = async () => {
       await app.init({ resizeTo: host.current!, background: '#222421', backgroundAlpha: 0, antialias: true, resolution: Math.min(window.devicePixelRatio || 1, 2), autoDensity: true });
       initialized = true;
@@ -316,6 +324,7 @@ export function TableCanvas(props: Props) {
       app.canvas.addEventListener('nri-refresh', refresh);
       app.canvas.addEventListener('pointermove', onPointerMove);
       window.addEventListener('nri-shared-pointer', receiveSharedPointer);
+      window.addEventListener('nri-drop-token-asset', onDropTokenAsset);
       window.addEventListener('nri-fit-scene', fit);
       app.canvas.addEventListener('wheel', (event) => {
         event.preventDefault(); const bounds = app.canvas.getBoundingClientRect();
@@ -333,7 +342,7 @@ export function TableCanvas(props: Props) {
       app.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     };
     void start();
-    return () => { cancelled = true; window.removeEventListener('nri-fit-scene', fit); window.removeEventListener('nri-shared-pointer', receiveSharedPointer); clearRemotePointers(); if (initialized && !destroyed) { destroyed = true; app.destroy(true, { children: true }); } };
+    return () => { cancelled = true; window.removeEventListener('nri-fit-scene', fit); window.removeEventListener('nri-shared-pointer', receiveSharedPointer); window.removeEventListener('nri-drop-token-asset', onDropTokenAsset); clearRemotePointers(); if (initialized && !destroyed) { destroyed = true; app.destroy(true, { children: true }); } };
   }, []);
 
   useEffect(() => {
