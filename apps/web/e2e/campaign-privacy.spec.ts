@@ -197,11 +197,23 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     expect((await ownDrawingDelete).status()).toBe(204);
     const afterOwnDrawingDelete = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`);
     expect((afterOwnDrawingDelete.body as Array<{ id: string }>).some((object) => object.id === (ownStroke as { id: string }).id)).toBe(false);
+    const remainingOwnDrawing = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`, 'POST', {
+      layerId: objectsLayer!.id, kind: 'FREEHAND', x: 16, y: 16, width: 20, height: 20, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }],
+    });
+    expect(remainingOwnDrawing.status).toBe(201);
     await gmPage.getByLabel('Allow Players to draw').uncheck();
     const revokedDrawingWrite = await requestJson(playerPage, `/api/scenes/${activeScene.id}/objects`, 'POST', {
       layerId: objectsLayer!.id, kind: 'FREEHAND', x: 10, y: 10, width: 20, height: 20, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }],
     });
     expect(revokedDrawingWrite.status).toBe(403);
+    const clearMine = playerPage.getByRole('button', { name: 'Clear my drawings' });
+    await expect(clearMine).toBeEnabled();
+    playerPage.once('dialog', (dialog) => void dialog.accept());
+    const clearMineResponse = playerPage.waitForResponse((response) => response.url().endsWith(`/api/scenes/${activeScene.id}/my-drawings`) && response.request().method() === 'DELETE');
+    await clearMine.click();
+    const clearMineResult = await clearMineResponse;
+    expect(clearMineResult.status()).toBe(200);
+    expect((await clearMineResult.json()).deletedCount).toBe(1);
     const deniedTokenEdit = await requestJson(playerPage, `/api/tokens/${token.id}`, 'PATCH', {
       expectedVersion: token.version, name: 'Unauthorized edit',
     });

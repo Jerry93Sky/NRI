@@ -458,6 +458,30 @@ app.get('/api/scenes/:sceneId/objects', async (request, reply) => {
   const rows = await db.select({ object: sceneObjects, layer: sceneLayers }).from(sceneObjects).innerJoin(sceneLayers, eq(sceneObjects.layerId, sceneLayers.id)).where(eq(sceneObjects.sceneId, sceneId)).orderBy(asc(sceneObjects.zIndex), asc(sceneObjects.id));
   return rows.filter(({ object, layer }) => role !== 'PLAYER' || (object.visible && canReadSceneLayer(role, scene.isActive, false, layer.visibleToPlayers, layer.kind))).map(({ object }) => sceneObjectProjection(object, role, user.id));
 });
+app.delete('/api/scenes/:sceneId/my-drawings', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { sceneId } = request.params as { sceneId: string };
+  const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+  if (!scene || scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(scene.campaignId, user.id);
+  if (!role) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (role === 'PLAYER' && !scene.isActive) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const removed = await db.transaction(async (tx) => {
+    const owned = await tx.select().from(sceneObjects).where(and(eq(sceneObjects.sceneId, sceneId), eq(sceneObjects.createdBy, user.id), eq(sceneObjects.kind, 'FREEHAND'))).for('update');
+    if (owned.length === 0) return [];
+    const layerRows = await tx.select().from(sceneLayers).where(inArray(sceneLayers.id, owned.map((object) => object.layerId)));
+    const layerById = new Map(layerRows.map((layer) => [layer.id, layer]));
+    const deleted = await tx.delete(sceneObjects).where(and(eq(sceneObjects.sceneId, sceneId), inArray(sceneObjects.id, owned.map((object) => object.id)), eq(sceneObjects.createdBy, user.id))).returning({ id: sceneObjects.id, layerId: sceneObjects.layerId, visible: sceneObjects.visible });
+    if (deleted.length) await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.own_drawings_cleared', targetId: sceneId, detail: String(deleted.length) });
+    return deleted.map((object) => ({ ...object, layer: layerById.get(object.layerId) }));
+  });
+  const room = `campaign:${scene.campaignId}`;
+  for (const object of removed) {
+    if (scene.isActive && object.visible && object.layer?.visibleToPlayers && object.layer.kind !== 'GM') io.to(room).emit('scene:object_deleted', { sceneId, objectId: object.id });
+    else io.to(`${room}:gm`).emit('scene:object_deleted', { sceneId, objectId: object.id });
+  }
+  return { deletedCount: removed.length };
+});
 app.post('/api/scenes/:sceneId/objects', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
   const { sceneId } = request.params as { sceneId: string };

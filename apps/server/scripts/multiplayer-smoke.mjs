@@ -245,6 +245,11 @@ const privateLayerStroke = await fetch(`${base}/api/scenes/${scene.id}/objects`,
 assert.equal(privateLayerStroke.status, 403, 'players cannot draw on the GM layer');
 const playerStrokeDelete = await fetch(`${base}/api/objects/${playerStroke.result.object.id}`, { method: 'DELETE', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: playerStrokeEdit.result.object.version }) });
 assert.equal(playerStrokeDelete.status, 204, 'players can delete their own drawing');
+for (let index = 0; index < 2; index += 1) await request(`/api/scenes/${scene.id}/objects`, { method: 'POST', cookie: player.cookie, body: { layerId: objectsLayer.id, kind: 'FREEHAND', x: 12 + index * 24, y: 16, width: 20, height: 20, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }] } });
+const clearedOwnStrokes = await fetch(`${base}/api/scenes/${scene.id}/my-drawings`, { method: 'DELETE', headers: { cookie: player.cookie } });
+assert.equal(clearedOwnStrokes.status, 200, 'players can clear their drawings in one action');
+assert.equal((await clearedOwnStrokes.json()).deletedCount, 2, 'bulk clear removes only the requesting player’s drawings');
+assert.equal((await request(`/api/scenes/${scene.id}/objects`, { cookie: player.cookie })).result.some((object) => object.ownedByMe && object.kind === 'FREEHAND'), false, 'bulk clear leaves no own strokes on the scene');
 await request(`/api/campaigns/${campaign.id}/player-drawing`, { method: 'PUT', cookie: owner.cookie, body: { enabled: false } });
 const drawingRevokedCreate = await fetch(`${base}/api/scenes/${scene.id}/objects`, { method: 'POST', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ layerId: objectsLayer.id, kind: 'FREEHAND', x: 4, y: 5, width: 20, height: 20, points: [{ x: 0, y: 0 }, { x: 20, y: 20 }] }) });
 assert.equal(drawingRevokedCreate.status, 403, 'revoking permission immediately blocks new player drawings');
