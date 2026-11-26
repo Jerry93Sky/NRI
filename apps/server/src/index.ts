@@ -11,9 +11,9 @@ import { basename, extname, resolve } from 'node:path';
 import argon2 from 'argon2';
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { adjustTokenResourceSchema, assetCategorySchema, campaignDrawingPermissionSchema, canMoveToken, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateAssetSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema } from '@nri/contracts';
+import { adjustTokenResourceSchema, assetCategorySchema, campaignDrawingPermissionSchema, canMoveToken, createAssetFolderSchema, createCampaignSchema, createSceneLayerSchema, createSceneObjectSchema, createSceneSchema, createTokenSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, diceSchema, inviteSchema, loginSchema, moveTokenSchema, parseDiceExpression, registerSchema, updateAssetFolderSchema, updateAssetSchema, updateSceneLayerSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema } from '@nri/contracts';
 import { db, pool } from './db/index.js';
-import { assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
+import { assetFolders, assets, auditEvents, campaigns, diceRolls, initiativeEntries, initiatives, invitations, memberships, messages, sceneLayers, sceneObjects, scenes, sessions, tokens, users } from './db/schema.js';
 import { canListScene, canReadSceneLayer, canReadSceneTokens, type CampaignSceneRole } from './domain/sceneAccess.js';
 import { decodeImage, inspectImage } from './domain/imageMetadata.js';
 import { assetThumbnailKey, makeAssetThumbnail } from './domain/assetThumbnail.js';
@@ -182,6 +182,7 @@ app.post('/api/campaigns/:campaignId/duplicate', async (request, reply) => {
       const sourceSceneRows = await tx.select().from(scenes).where(eq(scenes.campaignId, campaignId)).orderBy(asc(scenes.sortOrder), asc(scenes.id));
       const sourceSceneIds = sourceSceneRows.map((scene) => scene.id);
       const sourceAssetRows = await tx.select().from(assets).where(eq(assets.campaignId, campaignId));
+      const sourceFolderRows = await tx.select().from(assetFolders).where(eq(assetFolders.campaignId, campaignId));
       if (sourceAssetRows.length !== prepared.length || sourceAssetRows.some((asset) => !prepared.some((file) => file.sourceId === asset.id))) throw new Error('Campaign assets changed while the copy was being prepared.');
       const sourceLayerRows = sourceSceneIds.length ? await tx.select().from(sceneLayers).where(inArray(sceneLayers.sceneId, sourceSceneIds)) : [];
       const sourceTokenRows = sourceSceneIds.length ? await tx.select().from(tokens).where(and(inArray(tokens.sceneId, sourceSceneIds), isNull(tokens.deletedAt))) : [];
@@ -196,6 +197,12 @@ app.post('/api/campaigns/:campaignId/duplicate', async (request, reply) => {
       if (!campaign) throw new Error('Campaign copy creation failed.');
       await tx.insert(memberships).values({ campaignId: campaign.id, userId: user.id, role: 'OWNER' });
 
+      const folderIds = new Map<string, string>();
+      for (const sourceFolder of sourceFolderRows) {
+        const [folder] = await tx.insert(assetFolders).values({ campaignId: campaign.id, name: sourceFolder.name }).returning({ id: assetFolders.id });
+        if (!folder) throw new Error('Campaign copy asset folder insert failed.');
+        folderIds.set(sourceFolder.id, folder.id);
+      }
       const assetIds = new Map<string, string>();
       for (const sourceAsset of sourceAssetRows) {
         const file = prepared.find((item) => item.sourceId === sourceAsset.id)!;
@@ -203,6 +210,7 @@ app.post('/api/campaigns/:campaignId/duplicate', async (request, reply) => {
           campaignId: campaign.id,
           name: sourceAsset.name,
           category: sourceAsset.category,
+          folderId: sourceAsset.folderId ? folderIds.get(sourceAsset.folderId) ?? null : null,
           storageKey: file.storageKey,
           mediaType: sourceAsset.mediaType,
           size: sourceAsset.size,
@@ -952,8 +960,9 @@ app.get('/api/campaigns/:campaignId/assets', async (request, reply) => {
   const { campaignId } = request.params as { campaignId: string };
   const role = await roleFor(campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-  const [rows, mapRefs, objectRefs, tokenRefs] = await Promise.all([
+  const [rows, folders, mapRefs, objectRefs, tokenRefs] = await Promise.all([
     db.select().from(assets).where(eq(assets.campaignId, campaignId)).orderBy(asc(assets.name)),
+    db.select().from(assetFolders).where(eq(assetFolders.campaignId, campaignId)).orderBy(asc(assetFolders.name)),
     db.select({ assetId: scenes.backgroundAssetId, uses: sql<number>`count(*)::int` }).from(scenes).where(eq(scenes.campaignId, campaignId)).groupBy(scenes.backgroundAssetId),
     db.select({ assetId: sceneObjects.assetId, uses: sql<number>`count(*)::int` }).from(sceneObjects).innerJoin(scenes, eq(sceneObjects.sceneId, scenes.id)).where(eq(scenes.campaignId, campaignId)).groupBy(sceneObjects.assetId),
     db.select({ assetId: tokens.imageAssetId, uses: sql<number>`count(*)::int` }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(scenes.campaignId, campaignId)).groupBy(tokens.imageAssetId),
@@ -961,7 +970,51 @@ app.get('/api/campaigns/:campaignId/assets', async (request, reply) => {
   const uses = new Map<string, number>();
   for (const ref of [...mapRefs, ...objectRefs, ...tokenRefs]) if (ref.assetId) uses.set(ref.assetId, (uses.get(ref.assetId) ?? 0) + ref.uses);
   const storageBytes = rows.reduce((total, asset) => total + asset.size, 0);
-  return { assets: rows.map((asset) => ({ id: asset.id, name: asset.name, category: asset.category, mediaType: asset.mediaType, size: asset.size, checksum: asset.checksum, usageCount: uses.get(asset.id) ?? 0 })), storageBytes, assetCount: rows.length };
+  return { assets: rows.map((asset) => ({ id: asset.id, name: asset.name, category: asset.category, folderId: asset.folderId, mediaType: asset.mediaType, size: asset.size, checksum: asset.checksum, usageCount: uses.get(asset.id) ?? 0 })), folders, storageBytes, assetCount: rows.length };
+});
+app.post('/api/campaigns/:campaignId/asset-folders', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { campaignId } = request.params as { campaignId: string };
+  const role = await roleFor(campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  const input = parseBody(createAssetFolderSchema, request.body);
+  const [folder] = await db.insert(assetFolders).values({ campaignId, name: input.name }).onConflictDoNothing({ target: [assetFolders.campaignId, assetFolders.name] }).returning();
+  if (!folder) return reply.code(409).send({ error: 'ASSET_FOLDER_EXISTS' });
+  await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'asset_folder.created', targetId: folder.id });
+  return reply.code(201).send({ folder });
+});
+app.patch('/api/asset-folders/:folderId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { folderId } = request.params as { folderId: string };
+  const input = parseBody(updateAssetFolderSchema, request.body);
+  const [folder] = await db.select().from(assetFolders).where(eq(assetFolders.id, folderId)).limit(1);
+  if (!folder) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(folder.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  let updated;
+  try {
+    [updated] = await db.update(assetFolders).set({ name: input.name }).where(and(eq(assetFolders.id, folder.id), eq(assetFolders.campaignId, folder.campaignId))).returning();
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === '23505') return reply.code(409).send({ error: 'ASSET_FOLDER_EXISTS' });
+    throw error;
+  }
+  if (!updated) return reply.code(404).send({ error: 'NOT_FOUND' });
+  await db.insert(auditEvents).values({ campaignId: folder.campaignId, actorId: user.id, action: 'asset_folder.renamed', targetId: folder.id });
+  return { folder: updated };
+});
+app.delete('/api/asset-folders/:folderId', async (request, reply) => {
+  const user = await requireUser(request, reply); if (!user) return;
+  const { folderId } = request.params as { folderId: string };
+  const [folder] = await db.select().from(assetFolders).where(eq(assetFolders.id, folderId)).limit(1);
+  if (!folder) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const role = await roleFor(folder.campaignId, user.id);
+  if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  await db.transaction(async (tx) => {
+    await tx.update(assets).set({ folderId: null }).where(and(eq(assets.campaignId, folder.campaignId), eq(assets.folderId, folder.id)));
+    await tx.delete(assetFolders).where(and(eq(assetFolders.id, folder.id), eq(assetFolders.campaignId, folder.campaignId)));
+    await tx.insert(auditEvents).values({ campaignId: folder.campaignId, actorId: user.id, action: 'asset_folder.deleted', targetId: folder.id });
+  });
+  return reply.code(204).send();
 });
 app.patch('/api/assets/:assetId', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;
@@ -971,10 +1024,14 @@ app.patch('/api/assets/:assetId', async (request, reply) => {
   if (!asset) return reply.code(404).send({ error: 'NOT_FOUND' });
   const role = await roleFor(asset.campaignId, user.id);
   if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
+  if (input.folderId) {
+    const [folder] = await db.select({ id: assetFolders.id }).from(assetFolders).where(and(eq(assetFolders.id, input.folderId), eq(assetFolders.campaignId, asset.campaignId))).limit(1);
+    if (!folder) return reply.code(400).send({ error: 'INVALID_ASSET_FOLDER' });
+  }
   const [updated] = await db.update(assets).set(input).where(eq(assets.id, assetId)).returning();
   if (!updated) return reply.code(404).send({ error: 'NOT_FOUND' });
   await db.insert(auditEvents).values({ campaignId: asset.campaignId, actorId: user.id, action: 'asset.updated', targetId: asset.id });
-  return { asset: { id: updated.id, name: updated.name, category: updated.category, mediaType: updated.mediaType, size: updated.size } };
+  return { asset: { id: updated.id, name: updated.name, category: updated.category, folderId: updated.folderId, mediaType: updated.mediaType, size: updated.size } };
 });
 app.delete('/api/assets/:assetId', async (request, reply) => {
   const user = await requireUser(request, reply); if (!user) return;

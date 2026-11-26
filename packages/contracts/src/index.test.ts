@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, campaignDrawingPermissionSchema, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, diceSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
+import { adjustTokenResourceSchema, assetCategorySchema, canMoveToken, campaignDrawingPermissionSchema, createAssetFolderSchema, createSceneLayerSchema, createSceneObjectSchema, createTokenSchema, diceSchema, duplicateSceneObjectsSchema, duplicateTokenSchema, duplicateTokensSchema, parseDiceExpression, updateAssetSchema, updateSceneObjectSchema, updateTokenGroupSchema, updateTokenSchema, tokenResourcesSchema } from './index.js';
 
 describe('campaign drawing permission contract', () => {
   it('accepts only a boolean permission value', () => {
@@ -97,6 +97,13 @@ describe('asset library contracts', () => {
     expect(assetCategorySchema.parse('TOKEN')).toBe('TOKEN');
     expect(assetCategorySchema.safeParse('EXECUTABLE').success).toBe(false);
     expect(updateAssetSchema.parse({ name: 'Goblin portrait', category: 'PORTRAIT' })).toEqual({ name: 'Goblin portrait', category: 'PORTRAIT' });
+    const folderId = '99c025bf-4a53-4608-8caa-0bdb98ac1e90';
+    expect(createAssetFolderSchema.parse({ name: '  Handouts  ' })).toEqual({ name: 'Handouts' });
+    expect(createAssetFolderSchema.safeParse({ name: ' ' }).success).toBe(false);
+    expect(createAssetFolderSchema.safeParse({ name: 'x'.repeat(49) }).success).toBe(false);
+    expect(updateAssetSchema.parse({ folderId })).toEqual({ folderId });
+    expect(updateAssetSchema.parse({ folderId: null })).toEqual({ folderId: null });
+    expect(updateAssetSchema.safeParse({ folderId: 'not-a-uuid' }).success).toBe(false);
     expect(updateAssetSchema.safeParse({}).success).toBe(false);
   });
 });

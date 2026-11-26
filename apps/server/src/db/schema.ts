@@ -26,9 +26,14 @@ export const invitations = pgTable('campaign_invitations', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(), revokedAt: timestamp('revoked_at', { withTimezone: true }),
   acceptedAt: timestamp('accepted_at', { withTimezone: true }), uses: integer('uses').notNull().default(0), maxUses: integer('max_uses').notNull().default(7),
 }, (t) => [index('invitations_campaign_idx').on(t.campaignId)]);
+export const assetFolders = pgTable('campaign_asset_folders', {
+  id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 48 }).notNull(), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('asset_folders_campaign_name_idx').on(t.campaignId, t.name), index('asset_folders_campaign_idx').on(t.campaignId)]);
 export const assets = pgTable('assets', {
   id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 120 }).notNull().default('Untitled image'), category: varchar('category', { length: 16 }).notNull().default('OTHER'),
+  folderId: uuid('folder_id').references(() => assetFolders.id, { onDelete: 'set null' }),
   storageKey: varchar('storage_key', { length: 80 }).notNull().unique(), mediaType: varchar('media_type', { length: 32 }).notNull(),
   size: integer('size').notNull(), checksum: varchar('checksum', { length: 64 }).notNull(), uploaderId: uuid('uploader_id').notNull().references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

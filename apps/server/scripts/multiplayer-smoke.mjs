@@ -93,6 +93,20 @@ const privateThumbnail = await fetch(`${base}/api/assets/${asset.id}?variant=thu
 const bulkForm = new FormData(); bulkForm.append('files', new Blob([mapBytes], { type: 'image/png' }), 'token-one.png'); bulkForm.append('files', new Blob([mapBytes], { type: 'image/png' }), 'token-two.png');
 const bulkUpload = await fetch(`${base}/api/campaigns/${campaign.id}/assets?category=TOKEN`, { method: 'POST', headers: { cookie: owner.cookie }, body: bulkForm });
 assert.equal(bulkUpload.status, 201, 'GM can upload multiple assets in one request'); const { assets: tokenAssets } = await bulkUpload.json(); assert.equal(tokenAssets.length, 2);
+const folderCreated = await request(`/api/campaigns/${campaign.id}/asset-folders`, { method: 'POST', cookie: owner.cookie, body: { name: 'Reference maps' } });
+assert.equal(folderCreated.status, 201, 'GM can create a campaign asset folder');
+const duplicateFolder = await fetch(`${base}/api/campaigns/${campaign.id}/asset-folders`, { method: 'POST', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Reference maps' }) });
+assert.equal(duplicateFolder.status, 409, 'campaign asset folder names are unique');
+const playerFolderCreate = await fetch(`${base}/api/campaigns/${campaign.id}/asset-folders`, { method: 'POST', headers: { cookie: player.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Player folder' }) });
+assert.equal(playerFolderCreate.status, 403, 'players cannot manage the GM asset folders');
+const otherCampaign = await request('/api/campaigns', { method: 'POST', cookie: owner.cookie, body: { title: `Folder isolation ${randomUUID()}`, description: '' } });
+const foreignFolder = await request(`/api/campaigns/${otherCampaign.result.campaign.id}/asset-folders`, { method: 'POST', cookie: owner.cookie, body: { name: 'Foreign folder' } });
+const folderAssigned = await request(`/api/assets/${asset.id}`, { method: 'PATCH', cookie: owner.cookie, body: { folderId: folderCreated.result.folder.id } });
+assert.equal(folderAssigned.result.asset.folderId, folderCreated.result.folder.id, 'GM can assign an asset to a campaign folder');
+const crossCampaignFolder = await fetch(`${base}/api/assets/${asset.id}`, { method: 'PATCH', headers: { cookie: owner.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ folderId: foreignFolder.result.folder.id }) });
+assert.equal(crossCampaignFolder.status, 400, 'asset folder references cannot cross campaigns');
+const folderRenamed = await request(`/api/asset-folders/${folderCreated.result.folder.id}`, { method: 'PATCH', cookie: owner.cookie, body: { name: 'Maps and plans' } });
+assert.equal(folderRenamed.result.folder.name, 'Maps and plans', 'GM can rename a campaign folder');
 const { result: { scene: sceneWithMap } } = await request(`/api/scenes/${scene.id}/background`, { method: 'PUT', cookie: owner.cookie, body: { assetId: asset.id, expectedVersion: scene.version } });
 assert.equal(sceneWithMap.backgroundAssetId, asset.id, 'scene persists the map asset reference');
 const playerLibrary = await fetch(`${base}/api/campaigns/${campaign.id}/assets`, { headers: { cookie: player.cookie } });
@@ -101,8 +115,12 @@ await request(`/api/assets/${asset.id}`, { method: 'PATCH', cookie: owner.cookie
 const { result: assetLibrary } = await request(`/api/campaigns/${campaign.id}/assets`, { cookie: owner.cookie });
 assert.equal(assetLibrary.assets.find((item) => item.id === asset.id).name, 'Crossroads map');
 assert.equal(assetLibrary.assets.find((item) => item.id === asset.id).category, 'MAP');
+assert.equal(assetLibrary.folders.find((item) => item.id === folderCreated.result.folder.id).name, 'Maps and plans');
+assert.equal(assetLibrary.assets.find((item) => item.id === asset.id).folderId, folderCreated.result.folder.id);
 assert.equal(assetLibrary.assets.find((item) => item.id === asset.id).usageCount, 1, 'library usage counts include scene backgrounds'); assert.equal(assetLibrary.storageBytes, asset.size + tokenAssets.reduce((sum, item) => sum + item.size, 0));
 const inUseAssetDelete = await fetch(`${base}/api/assets/${asset.id}`, { method: 'DELETE', headers: { cookie: owner.cookie } }); assert.equal(inUseAssetDelete.status, 409, 'referenced assets cannot be deleted');
+const folderDeleted = await fetch(`${base}/api/asset-folders/${folderCreated.result.folder.id}`, { method: 'DELETE', headers: { cookie: owner.cookie } }); assert.equal(folderDeleted.status, 204, 'GM can delete a campaign folder without deleting its assets');
+const afterFolderDelete = await request(`/api/campaigns/${campaign.id}/assets`, { cookie: owner.cookie }); assert.equal(afterFolderDelete.result.assets.find((item) => item.id === asset.id).folderId, null, 'folder deletion safely moves its assets to Unfiled');
 const mapRead = await fetch(`${base}/api/assets/${asset.id}`, { headers: { cookie: player.cookie } });
 assert.equal(mapRead.status, 200, 'campaign members can read the scene map');
 assert.equal(mapRead.headers.get('content-type'), 'image/png');
@@ -430,4 +448,4 @@ assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
 } finally { for (const socket of openedSockets) socket.disconnect(); }
-console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, corrupt-image upload rejection, categorized campaign asset multi-upload/search metadata/storage/deletion, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, public and GM-only dice rolls with Player denial, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, Player freehand permissions, ownership/privacy, safe deletion/revocation, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');
+console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, corrupt-image upload rejection, categorized campaign asset multi-upload/search metadata/storage/deletion, campaign asset-folder role/isolation/rename/delete behavior, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, public and GM-only dice rolls with Player denial, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, Player freehand permissions, ownership/privacy, safe deletion/revocation, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

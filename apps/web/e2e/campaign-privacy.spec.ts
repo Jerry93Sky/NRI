@@ -606,9 +606,21 @@ test('GM can drag image files into the campaign asset library', async ({ browser
     expect(uploadResponse.status()).toBe(201);
     const uploadBody = await uploadResponse.json() as { asset: { id: string; name: string } };
     expect(uploadBody.asset.name).toBe('dropped-map.png');
-    await expect(page.getByRole('textbox', { name: 'Name' })).toHaveValue('dropped-map.png');
+    await expect(page.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('dropped-map.png');
     await expect(page.getByRole('img', { name: 'dropped-map.png' })).toHaveAttribute('src', `/api/assets/${uploadBody.asset.id}?variant=thumbnail`);
     await expect(page.getByRole('link', { name: 'dropped-map.png' })).toHaveAttribute('href', `/api/assets/${uploadBody.asset.id}`);
+    await page.getByLabel('New folder name').fill('Session maps');
+    await page.getByRole('button', { name: 'Create folder' }).click();
+    await page.getByLabel('Folder: dropped-map.png').selectOption({ label: 'Session maps' });
+    await page.getByLabel('Folder filter').selectOption({ label: 'Session maps' });
+    await expect(page.locator('.asset-card')).toHaveCount(1);
+    page.once('dialog', (dialog) => dialog.accept('Travel maps'));
+    await page.getByRole('button', { name: 'Rename folder' }).click();
+    await expect(page.getByLabel('Folder filter')).toHaveValue(/.+/);
+    await expect(page.getByLabel('Folder filter').locator('option', { hasText: 'Travel maps' })).toHaveCount(1);
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: 'Delete folder' }).click();
+    await expect(page.getByLabel('Folder: dropped-map.png')).toHaveValue('');
     await page.getByLabel('Upload as').selectOption('TOKEN');
     const tokenUploadPromise = page.waitForResponse((response) => response.url().includes('/api/campaigns/') && response.url().includes('/assets?category=TOKEN') && response.request().method() === 'POST');
     await page.getByTestId('asset-drop-zone').evaluate((element) => {

@@ -53,6 +53,10 @@ test('GM can copy a campaign with independent maps, scenes, tokens and objects',
   }, sourceCampaign.id);
   expect(uploadResponse.status).toBe(201);
   const mapAsset = (uploadResponse.body as { asset: { id: string } }).asset;
+  const folderResponse = await requestJson(page, `/api/campaigns/${sourceCampaign.id}/asset-folders`, 'POST', { name: 'Room maps' });
+  expect(folderResponse.status).toBe(201);
+  const sourceFolder = (folderResponse.body as { folder: { id: string; name: string } }).folder;
+  expect((await requestJson(page, `/api/assets/${mapAsset.id}`, 'PATCH', { folderId: sourceFolder.id })).status).toBe(200);
   const backgroundResponse = await requestJson(page, `/api/scenes/${firstScene.id}/background`, 'PUT', { assetId: mapAsset.id, expectedVersion: firstScene.version });
   expect(backgroundResponse.status).toBe(200);
 
@@ -102,10 +106,14 @@ test('GM can copy a campaign with independent maps, scenes, tokens and objects',
   expect(copiedScenes.find((scene) => scene.title === 'GM draft')).toBeTruthy();
   const copiedMapId = copiedScenes.find((scene) => scene.title === 'Published room')!.backgroundAssetId!;
   expect(copiedMapId).not.toBe(mapAsset.id);
-  const copiedAssets = copiedAssetsResponse.body as { assets: Array<{ id: string; checksum: string }> };
+  const copiedAssets = copiedAssetsResponse.body as { assets: Array<{ id: string; checksum: string; folderId: string | null }>; folders: Array<{ id: string; name: string }> };
   expect(copiedAssets.assets).toHaveLength(1);
   expect(copiedAssets.assets[0]!.id).toBe(copiedMapId);
   expect(copiedAssets.assets[0]!.checksum).toMatch(/^[0-9a-f]{64}$/);
+  expect(copiedAssets.folders).toHaveLength(1);
+  expect(copiedAssets.folders[0]!.name).toBe(sourceFolder.name);
+  expect(copiedAssets.folders[0]!.id).not.toBe(sourceFolder.id);
+  expect(copiedAssets.assets[0]!.folderId).toBe(copiedAssets.folders[0]!.id);
   const copiedImage = await page.evaluate(async (assetId) => {
     const response = await fetch(`/api/assets/${assetId}`, { credentials: 'include' });
     const bytes = await response.arrayBuffer();
