@@ -22,7 +22,7 @@ async function requestJson(page: import('@playwright/test').Page, path: string, 
   }, { path, method, body });
 }
 
-test('separate GM and player contexts keep drafts and GM objects private', async ({ browser, baseURL }) => {
+test('separate GM and player contexts keep drafts and GM objects private', async ({ browser, baseURL }, testInfo) => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const gmContext = await browser.newContext({ locale: 'en-US' });
   const playerContext = await browser.newContext({ locale: 'en-US' });
@@ -45,6 +45,24 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     const activeSceneResponse = await activeResponsePromise;
     const { scene: activeScene } = await activeSceneResponse.json() as { scene: { id: string; campaignId: string } };
     await expect(gmPage.getByRole('button', { name: 'Add token' })).toBeVisible();
+    await expect(gmPage.locator('.table-canvas')).toBeVisible();
+    for (const viewport of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }, { width: 2560, height: 1440 }]) {
+      await gmPage.setViewportSize(viewport);
+      await gmPage.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+      const layout = await gmPage.evaluate(() => ({
+        documentWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+        canvasWidth: document.querySelector('.table-canvas')?.getBoundingClientRect().width ?? 0,
+        canvasHeight: document.querySelector('.table-canvas')?.getBoundingClientRect().height ?? 0,
+        mainWidth: document.querySelector('.table-main')?.getBoundingClientRect().width ?? 0,
+        mainHeight: document.querySelector('.table-main')?.getBoundingClientRect().height ?? 0,
+      }));
+      expect(layout.documentWidth, `horizontal overflow at ${viewport.width}×${viewport.height}`).toBeLessThanOrEqual(layout.viewportWidth);
+      expect(layout.canvasWidth, `table canvas too narrow at ${viewport.width}×${viewport.height}: ${JSON.stringify(layout)}`).toBeGreaterThan(600);
+      expect(layout.canvasHeight, `table canvas too short at ${viewport.width}×${viewport.height}: ${JSON.stringify(layout)}`).toBeGreaterThan(400);
+      await gmPage.screenshot({ path: testInfo.outputPath(`tabletop-${viewport.width}x${viewport.height}.png`) });
+    }
+    await gmPage.setViewportSize({ width: 1280, height: 720 });
     await gmPage.getByRole('button', { name: 'Switch to light theme' }).click();
     await expect(gmPage.locator('.app-shell')).toHaveAttribute('data-theme', 'light');
     await expect.poll(() => gmPage.evaluate(() => localStorage.getItem('nri:theme'))).toBe('light');

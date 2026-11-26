@@ -93,7 +93,7 @@ export function TableCanvas(props: Props) {
             if (!pendingObjectTextures.has(item.assetId)) {
               pendingObjectTextures.add(item.assetId);
               const assetId = item.assetId;
-              void Assets.load(`/api/assets/${assetId}`).then((texture) => {
+              void Assets.load({ src: `/api/assets/${assetId}`, parser: 'texture' }).then((texture) => {
                 objectTextures.set(assetId, texture);
                 pendingObjectTextures.delete(assetId);
                 if (!cancelled && latest.current.objects.some((current) => current.id === item.id && current.assetId === assetId && (current.visible || latest.current.canManage))) refresh();
@@ -143,7 +143,7 @@ export function TableCanvas(props: Props) {
       const sourceUrl = latest.current.backgroundUrl;
       if (!sourceUrl) return;
       try {
-        const texture = await Assets.load(sourceUrl);
+        const texture = await Assets.load({ src: sourceUrl, parser: 'texture' });
         if (cancelled || latest.current.backgroundUrl !== sourceUrl) return;
         const image = new Sprite(texture); image.width = latest.current.sceneWidth; image.height = latest.current.sceneHeight;
         mapLayer.addChild(image);
@@ -165,7 +165,7 @@ export function TableCanvas(props: Props) {
             const portrait = new Sprite(texture); portrait.anchor.set(0.5); portrait.width = width * 0.84; portrait.height = height * 0.84; portrait.mask = mask; node.addChild(portrait, mask);
           } else if (!pendingTokenTextures.has(token.imageAssetId)) {
             pendingTokenTextures.add(token.imageAssetId);
-            void Assets.load(imageUrl).then((loaded) => {
+            void Assets.load({ src: imageUrl, parser: 'texture' }).then((loaded) => {
               tokenTextures.set(token.imageAssetId!, loaded);
               pendingTokenTextures.delete(token.imageAssetId!);
               if (!cancelled && latest.current.tokens.some((current) => current.imageAssetId === token.imageAssetId)) refresh();
