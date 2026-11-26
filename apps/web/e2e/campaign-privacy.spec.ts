@@ -223,6 +223,40 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await expect(gmPage.getByRole('heading', { name: campaignTitle })).toBeVisible();
     await expect(gmPage.locator('.live-status')).toHaveText('Live');
 
+    const playerTokenSnapshot = await requestJson(playerPage, `/api/scenes/${activeScene.id}/tokens`);
+    const playerTokenIds = (playerTokenSnapshot.body as Array<{ id: string }>).map((item) => item.id);
+    expect(playerTokenIds).toContain(token.id);
+    const [movementScene] = (await requestJson(gmPage, `/api/campaigns/${activeScene.campaignId}/scenes`)).body as Array<{ id: string; width: number; height: number; gridSize: number }>;
+    expect(movementScene?.id).toBe(activeScene.id);
+    const movementToken = (await requestJson(gmPage, `/api/scenes/${activeScene.id}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
+    const startingToken = movementToken.find((item) => item.id === token.id);
+    expect(startingToken).toBeTruthy();
+    await gmPage.getByRole('button', { name: 'Clear selection' }).click();
+    const playerCanvas = playerPage.locator('.table-canvas canvas');
+    await expect(playerCanvas).toBeVisible();
+    const playerCanvasBeforeMove = await playerCanvas.screenshot();
+    const movementCanvasBounds = await gmPage.locator('.table-canvas canvas').boundingBox();
+    expect(movementCanvasBounds).toBeTruthy();
+    const fitScale = Math.min(movementCanvasBounds!.width / movementScene!.width, movementCanvasBounds!.height / movementScene!.height) * 0.9;
+    const canvasOriginX = (movementCanvasBounds!.width - movementScene!.width * fitScale) / 2;
+    const canvasOriginY = (movementCanvasBounds!.height - movementScene!.height * fitScale) / 2;
+    const tokenCenter = {
+      x: movementCanvasBounds!.x + canvasOriginX + startingToken!.x * movementScene!.gridSize * fitScale,
+      y: movementCanvasBounds!.y + canvasOriginY + startingToken!.y * movementScene!.gridSize * fitScale,
+    };
+    await gmPage.mouse.move(tokenCenter.x, tokenCenter.y);
+    await gmPage.mouse.down();
+    await gmPage.mouse.move(tokenCenter.x + movementScene!.gridSize * fitScale, tokenCenter.y, { steps: 8 });
+    await gmPage.mouse.up();
+    await expect.poll(async () => {
+      const currentTokens = (await requestJson(gmPage, `/api/scenes/${activeScene.id}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
+      return currentTokens.find((item) => item.id === token.id)?.x;
+    }).not.toBe(startingToken!.x);
+    const movedTokens = (await requestJson(gmPage, `/api/scenes/${activeScene.id}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
+    const movedToken = movedTokens.find((item) => item.id === token.id);
+    expect(movedToken?.y).toBe(startingToken!.y);
+    await expect.poll(async () => !(await playerCanvas.screenshot()).equals(playerCanvasBeforeMove)).toBe(true);
+
     const publicMessage = `Shared table message ${suffix}`;
     await gmPage.getByPlaceholder('Write a message…').fill(publicMessage);
     await gmPage.getByRole('button', { name: 'Send' }).click();

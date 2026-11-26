@@ -182,11 +182,11 @@ export function TableCanvas(props: Props) {
           if (!latest.current.canEdit(token) || token.locked) return;
           event.stopPropagation(); node.cursor = 'grabbing';
           if (latest.current.canManage && latest.current.selectionMode) { node.cursor = 'default'; return; }
-          const start = event.global.clone(); const origin = node.position.clone();
+          const start = world.toLocal(event.global); const origin = node.position.clone();
           const groupTokens = latest.current.canManage && latest.current.selectedTokenIds.includes(token.id) ? latest.current.tokens.filter((item) => latest.current.selectedTokenIds.includes(item.id) && latest.current.canEdit(item) && !item.locked) : [];
           const groupNodes = groupTokens.length > 1 ? [...pieces.children].filter((child) => groupTokens.some((item) => item.id === (child as Container).label)) as Container[] : [];
           const groupOrigins = groupNodes.map((child) => child.position.clone());
-          const move = (moveEvent: typeof event) => { const point = moveEvent.global; const dx = point.x - start.x; const dy = point.y - start.y; node.position.set(origin.x + dx, origin.y + dy); groupNodes.forEach((child, index) => child.position.set(groupOrigins[index]!.x + dx, groupOrigins[index]!.y + dy)); };
+          const move = (moveEvent: typeof event) => { const point = world.toLocal(moveEvent.global); const dx = point.x - start.x; const dy = point.y - start.y; node.position.set(origin.x + dx, origin.y + dy); groupNodes.forEach((child, index) => child.position.set(groupOrigins[index]!.x + dx, groupOrigins[index]!.y + dy)); };
           const up = () => {
             app.stage.off('globalpointermove', move); app.stage.off('pointerup', up); app.stage.off('pointerupoutside', up); node.cursor = 'grab';
             const { gridSize: cellSize, snapToGrid: snap } = latest.current;
