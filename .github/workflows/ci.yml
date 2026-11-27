@@ -174,11 +174,20 @@ jobs:
           DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_retry_upgrade_test
       - name: Check isolated operational logs for synthetic sensitive data
         run: |
+          psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U nri -d postgres \
+            -c "ALTER SYSTEM SET log_min_messages = 'log'" \
+            -c "ALTER SYSTEM SET log_min_error_statement = 'panic'" \
+            -c "ALTER SYSTEM SET log_error_verbosity = 'terse'" \
+            -c "ALTER SYSTEM SET log_parameter_max_length = 0" \
+            -c "ALTER SYSTEM SET log_parameter_max_length_on_error = 0" \
+            -c 'SELECT pg_reload_conf()'
           PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_sec_ops_test
           pnpm db:migrate
           pnpm --filter @nri/server exec node scripts/logging-canary.mjs
         env:
+          PGPASSWORD: ci-only-password
           DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_sec_ops_test
+          NRI_LOG_CANARY_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
       - name: Profile bounded image uploads in isolated Compose
         run: |
           docker compose -f deploy/testing/compose.sec-ops.yml config -q

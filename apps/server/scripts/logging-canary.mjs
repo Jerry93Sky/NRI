@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { rename, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -146,12 +146,25 @@ try {
   await rm(dir, { recursive: true, force: true });
 }
 
-for (const [label, plain] of values) {
-  for (const encoded of new Set([plain, encodeURIComponent(plain), JSON.stringify(plain).slice(1, -1)])) {
-    assert.ok(!log.includes(encoded), `Sensitive value reached application logs: ${label}`);
+function assertNoCanaries(channel, output) {
+  for (const [label, plain] of values) {
+    for (const encoded of new Set([plain, encodeURIComponent(plain), JSON.stringify(plain).slice(1, -1)])) {
+      assert.ok(!output.includes(encoded), `Sensitive value reached ${channel} logs: ${label}`);
+    }
   }
 }
+assertNoCanaries('application', log);
 for (const marker of ['reqId', '/api/invitations/:token/accept', 'statusCode', 'elapsedMs', 'Request failed', 'DATABASE_CONSTRAINT', 'Deleted asset file cleanup failed']) {
   assert.ok(log.includes(marker), `Expected safe log diagnostic: ${marker}`);
 }
-console.log(`PASS checked ${values.size} synthetic values against stdout/stderr; retained request and failure diagnostics`);
+
+const postgresContainer = process.env.NRI_LOG_CANARY_POSTGRES_CONTAINER;
+if (postgresContainer) {
+  assert.match(postgresContainer, /^[a-f0-9]{64}$/);
+  const result = spawnSync('docker', ['logs', postgresContainer], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 10_000 });
+  assert.ok(result.status === 0, 'Could not read the isolated PostgreSQL container logs');
+  const postgresLog = `${result.stdout}\n${result.stderr}`;
+  assertNoCanaries('PostgreSQL', postgresLog);
+  assert.ok(postgresLog.includes('database system is ready to accept connections'), 'Expected safe PostgreSQL startup diagnostic');
+}
+console.log(`PASS checked ${values.size} synthetic values in API${postgresContainer ? ' and PostgreSQL' : ''} stdout/stderr; retained diagnostics`);
