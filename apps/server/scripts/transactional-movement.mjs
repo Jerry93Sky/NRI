@@ -117,6 +117,7 @@ function waitOn(blockers, queryLike, exclude = []) {
 const tokenLock = '%from "tokens"%for no key update%';
 const membershipLock = '%from "campaign_memberships"%for share%';
 const campaignLock = '%from "campaigns"%for share%';
+const campaignWriteLock = '%from "campaigns"%for update%';
 
 async function gated(query, params, contend) {
   const gate = await db.connect();
@@ -325,7 +326,7 @@ try {
     const before = await Promise.all([state(first.id), state(second.id)]);
     const mark = events.length;
     const [, result] = await writerFirst(memberGate, [campaign.id, gm.id], () => changeRole(gm, 'PLAYER'),
-      'update "campaign_memberships"%', () => group(gm, active, [patch(first), patch(second)], 403), membershipLock);
+      '%from "campaign_memberships"%for update%', () => group(gm, active, [patch(first), patch(second)], 403), campaignLock);
     assert.deepEqual(result, { error: 'FORBIDDEN' });
     assert.deepEqual(await Promise.all([state(first.id), state(second.id)]), before);
     await quiet(mark, [first.id, second.id]);
@@ -444,7 +445,7 @@ try {
     const mark = events.length;
     const before = await state(token.id);
     const [, ack] = await writerFirst(memberGate, [campaign.id, player.id], () => remove(player),
-      'delete from "campaign_memberships"%', () => move(playerSocket, token), membershipLock);
+      'delete from "campaign_memberships"%', () => move(playerSocket, token), campaignLock);
     assert.deepEqual(ack, { error: 'FORBIDDEN' });
     await denied(playerSecond, token);
     assert.deepEqual(await state(token.id), before);
@@ -461,7 +462,7 @@ try {
       start(() => move(observer, token));
       const actorPid = await waitOn([pid], tokenLock);
       start(() => remove(other));
-      await waitOn([actorPid], 'delete from "campaign_memberships"%');
+      await waitOn([actorPid], campaignWriteLock);
     });
     assert.equal(ack.ok, true, JSON.stringify(ack));
     const row = await state(token.id);

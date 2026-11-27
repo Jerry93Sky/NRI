@@ -114,6 +114,29 @@ jobs:
           PORT: 3003
           WEB_ORIGIN: http://127.0.0.1:4175
           UPLOAD_DIR: /tmp/nri-private-media
+      - name: Test transactional command authorization and media compensation
+        run: |
+          node apps/server/dist/index.js > /tmp/nri-command-acl-server.log 2>&1 &
+          command_api=$!
+          trap 'kill "$command_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$NRI_API_URL/api/ready"; then
+              pnpm --filter @nri/server test:command-authorization
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-command-acl-server.log
+          exit 1
+        env:
+          NODE_ENV: test
+          PORT: 3004
+          HOST: 127.0.0.1
+          WEB_ORIGIN: http://127.0.0.1:4175
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
+          NRI_API_URL: http://127.0.0.1:3004
+          UPLOAD_DIR: /tmp/nri-command-media
       - name: Start fresh API for browser tests
         run: |
           cd apps/server

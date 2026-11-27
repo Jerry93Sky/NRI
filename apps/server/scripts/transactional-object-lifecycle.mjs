@@ -133,6 +133,8 @@ async function audit(object) {
 
 const memberGate = 'SELECT user_id FROM campaign_memberships WHERE campaign_id = $1 AND user_id = $2 FOR UPDATE';
 const memberRead = '%from "campaign_memberships"%for share%';
+const campaignRead = '%from "campaigns"%for share%';
+const campaignWrite = '%from "campaigns"%for update%';
 const layerGate = 'SELECT id FROM scene_layers WHERE id = $1 FOR UPDATE';
 const layerRead = '%from "scene_layers"%for share%';
 const objectGate = 'SELECT id FROM scene_objects WHERE id = $1 FOR UPDATE';
@@ -409,7 +411,7 @@ try {
     const before = await state(target);
     const mark = events.length;
     const [, result] = await writerFirst(memberGate, [host.id, gm.id], () => role(gm, 'PLAYER'),
-      'update "campaign_memberships"%', () => life(action, [target], { status: 403 }), memberRead);
+      '%from "campaign_memberships"%for update%', () => life(action, [target], { status: 403 }), campaignRead);
     assert.deepEqual(result, { error: 'FORBIDDEN' });
     assert.deepEqual(await state(target), before);
     await quiet(mark, [target.id]);
@@ -590,7 +592,7 @@ try {
     const before = await state(object);
     const mark = events.length;
     const [, reply] = await writerFirst(memberGate, [host.id, observer.id], () => remove(observer),
-      'delete from "campaign_memberships"%', () => life('delete', [object], { actor: observer, status: 403 }), memberRead);
+      'delete from "campaign_memberships"%', () => life('delete', [object], { actor: observer, status: 403 }), campaignRead);
     assert.deepEqual(reply, { error: 'FORBIDDEN' });
     assert.deepEqual(await state(object), before);
     await quiet(mark, [object.id]);
@@ -602,7 +604,7 @@ try {
       start(() => life('delete', [object]));
       const actor = await waitOn([pid], objectWrite);
       start(() => remove(gm));
-      await waitOn([actor], 'delete from "campaign_memberships"%');
+      await waitOn([actor], campaignWrite);
     });
     assert.equal((await state(object)).version, object.version + 1);
     await waitEvent(mark, ownerSocket, 'scene:object_deleted', object.id);

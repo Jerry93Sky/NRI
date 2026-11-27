@@ -17,6 +17,7 @@
     "test:object-lifecycle": "node scripts/transactional-object-lifecycle.mjs",
     "test:realtime": "node scripts/secure-realtime.mjs",
     "test:private-channels": "node scripts/private-channels.mjs",
+    "test:command-authorization": "node scripts/command-authorization.mjs",
     "test": "vitest run"
   },
   "dependencies": {

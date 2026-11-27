@@ -128,6 +128,7 @@ const sessionGate = 'SELECT user_id FROM user_sessions WHERE token_hash = $1 FOR
 const sessionRead = '%from "user_sessions"%for share%';
 const memberGate = 'SELECT user_id FROM campaign_memberships WHERE campaign_id = $1 AND user_id = $2 FOR UPDATE';
 const memberRead = '%from "campaign_memberships"%for share%';
+const campaignRead = '%from "campaigns"%for share%';
 const privateChat = new Set(['chat:private', 'chat:message']);
 const ownerNotes = new Set(['token:owner_note']);
 const initiativeEvents = new Set(['initiative:updated', 'initiative:gm_updated']);
@@ -211,8 +212,8 @@ try {
     await scenario('a PostgreSQL role change ordered ahead of pointer publication suppresses the stale GM packet', async () => {
       await delay(60);
       const mark = events.length;
-      const [, reply] = await writerFirst(memberGate, [cid, gm.id], () => role(gm, 'PLAYER'), '%update "campaign_memberships"%',
-        () => ack(own, 'scene:pointer', { campaignId: cid, sceneId: draftScene.id, x: 33, y: 44 }), memberRead);
+      const [, reply] = await writerFirst(memberGate, [cid, gm.id], () => role(gm, 'PLAYER'), '%from "campaign_memberships"%for update%',
+        () => ack(own, 'scene:pointer', { campaignId: cid, sceneId: draftScene.id, x: 33, y: 44 }), campaignRead);
       assert.deepEqual(reply, { ok: true });
       await delay(120);
       assert.equal(events.slice(mark).some((event) => event.socket === master && event.name === 'scene:pointer'), false);
@@ -246,7 +247,7 @@ try {
 
     await scenario('a superseding scene version committed before publication drops the older scene packet', async () => {
       const mark = events.length;
-      await gated('SELECT id FROM campaigns WHERE id = $1 FOR UPDATE', [cid], async (_pid, start) => {
+      await gated('SELECT user_id FROM campaign_memberships WHERE campaign_id = $1 AND user_id = $2 FOR UPDATE', [cid, player.id], async (_pid, start) => {
         start(() => request('/api/scenes/' + scene.id, 'PATCH', owner, { title: 'Superseded scene update', expectedVersion: scene.version }));
         await until(async () => (await query('SELECT version FROM scenes WHERE id = $1', [scene.id])).rows[0]?.version === scene.version + 1,
           'First scene update did not commit');
@@ -320,7 +321,7 @@ try {
       for (const [sender, target, body] of [[own, player.id, 'Recipient before append'],
         [null, owner.id, 'Sender before append']]) {
         const [, response] = await writerFirst(memberGate, [cid, player.id], () => remove(player), '%delete from "campaign_memberships"%',
-          () => send(sender ?? p, body, target), memberRead);
+          () => send(sender ?? p, body, target), campaignRead);
         assert.deepEqual(response, forbidden);
         assert.equal(await loggedChat(body), undefined);
         assert.deepEqual(await history(player, 404), { error: 'NOT_FOUND' });
