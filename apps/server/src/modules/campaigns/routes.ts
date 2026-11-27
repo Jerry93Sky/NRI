@@ -8,31 +8,57 @@ import { db } from '../../db/index.js';
 import { assetFolders, assets, auditEvents, campaigns, memberships, sceneLayers, sceneObjects, scenes, tokens } from '../../db/schema.js';
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
-import { parseBody, requireUser, roleFor } from '../../security/access.js';
-import { uploadDirectory } from '../../config/runtime.js';
+import { digest, parseBody, requireUser, roleFor } from '../../security/access.js';
+import { cookieName, uploadDirectory } from '../../config/runtime.js';
 import { archiveCampaignSockets } from '../../realtime/campaignRooms.js';
 import { publishDrawingPermission } from '../../realtime/campaignEvents.js';
+import { commandSessionIsActive, lockCampaignActor, lockCommandSession } from '../../security/commandAccess.js';
 
 export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const archived = (request.query as { archived?: string }).archived === 'true';
-    return db.select({ campaign: campaigns, role: memberships.role }).from(memberships).innerJoin(campaigns, eq(memberships.campaignId, campaigns.id)).where(and(eq(memberships.userId, user.id), archived ? isNotNull(campaigns.archivedAt) : isNull(campaigns.archivedAt)));
+    const tokenHash = digest(cookie);
+    const result = await db.transaction(async (tx) => {
+      const session = await lockCommandSession(tx, tokenHash);
+      if (!session) return { error: 'UNAUTHENTICATED' } as const;
+      const memberLocations = await tx.select({ campaignId: memberships.campaignId }).from(memberships).where(eq(memberships.userId, session.userId)).orderBy(asc(memberships.campaignId));
+      const campaignIds = memberLocations.map(({ campaignId }) => campaignId);
+      if (!campaignIds.length) return { campaigns: [] } as const;
+      const campaignRows = await tx.select().from(campaigns).where(inArray(campaigns.id, campaignIds)).orderBy(asc(campaigns.id)).for('share');
+      const memberRows = await tx.select({ campaignId: memberships.campaignId, role: memberships.role }).from(memberships)
+        .where(and(eq(memberships.userId, session.userId), inArray(memberships.campaignId, campaignIds))).orderBy(asc(memberships.campaignId)).for('share');
+      if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
+      const byId = new Map(campaignRows.map((campaign) => [campaign.id, campaign]));
+      return { campaigns: memberRows.flatMap(({ campaignId, role }) => {
+        const campaign = byId.get(campaignId);
+        return campaign && (archived ? campaign.archivedAt !== null : campaign.archivedAt === null) ? [{ campaign, role }] : [];
+      }) } as const;
+    });
+    if ('error' in result) return reply.code(401).send({ error: result.error });
+    return result.campaigns;
   });
   app.post('/api/campaigns', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const input = parseBody(createCampaignSchema, request.body);
     const created = await db.transaction(async (tx) => {
-      const [campaign] = await tx.insert(campaigns).values({ ...input, ownerId: user.id }).returning();
+      const session = await lockCommandSession(tx, digest(cookie));
+      if (!session) return { error: 'UNAUTHENTICATED' } as const;
+      const [campaign] = await tx.insert(campaigns).values({ ...input, ownerId: session.userId }).returning();
       if (!campaign) throw new Error('Campaign creation failed');
-      await tx.insert(memberships).values({ campaignId: campaign.id, userId: user.id, role: 'OWNER' });
-      await tx.insert(auditEvents).values({ campaignId: campaign.id, actorId: user.id, action: 'campaign.created', targetId: campaign.id });
-      return campaign;
+      await tx.insert(memberships).values({ campaignId: campaign.id, userId: session.userId, role: 'OWNER' });
+      await tx.insert(auditEvents).values({ campaignId: campaign.id, actorId: session.userId, action: 'campaign.created', targetId: campaign.id });
+      return { campaign } as const;
     });
-    return reply.code(201).send({ campaign: created });
+    if ('error' in created) return reply.code(401).send({ error: created.error });
+    return reply.code(201).send({ campaign: created.campaign });
   });
   app.post('/api/campaigns/:campaignId/duplicate', async (request, reply) => {
     const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { campaignId } = request.params as { campaignId: string };
     const role = await roleFor(campaignId, user.id);
     if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
@@ -56,11 +82,11 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
       }
 
       const copied = await db.transaction(async (tx) => {
-        const [source] = await tx.select().from(campaigns).where(and(eq(campaigns.id, campaignId), isNull(campaigns.archivedAt))).for('update').limit(1);
+        const actor = await lockCampaignActor(tx, digest(cookie), campaignId, { strength: 'update' });
+        if ('error' in actor) return actor;
+        if (actor.userId !== user.id || (actor.role !== 'OWNER' && actor.role !== 'GM')) return { error: 'FORBIDDEN' as const };
+        const [source] = await tx.select().from(campaigns).where(and(eq(campaigns.id, campaignId), isNull(campaigns.archivedAt))).limit(1);
         if (!source) return { error: 'NOT_FOUND' as const };
-        const [membership] = await tx.select({ role: memberships.role }).from(memberships)
-          .where(and(eq(memberships.campaignId, campaignId), eq(memberships.userId, user.id))).limit(1);
-        if (!membership || !['OWNER', 'GM'].includes(membership.role)) return { error: 'FORBIDDEN' as const };
 
         const sourceSceneRows = await tx.select().from(scenes).where(eq(scenes.campaignId, campaignId)).orderBy(asc(scenes.sortOrder), asc(scenes.id));
         const sourceSceneIds = sourceSceneRows.map((scene) => scene.id);
@@ -98,7 +124,7 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
             mediaType: sourceAsset.mediaType,
             size: sourceAsset.size,
             checksum: sourceAsset.checksum,
-            uploaderId: user.id,
+            uploaderId: actor.userId,
           }).returning({ id: assets.id });
           if (!asset) throw new Error('Campaign copy asset insert failed.');
           assetIds.set(sourceAsset.id, asset.id);
@@ -145,12 +171,12 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
             sceneId: sceneIds.get(sourceSceneId)!,
             layerId: layerIds.get(sourceLayerId)!,
             assetId: assetId ? assetIds.get(assetId) ?? null : null,
-            createdBy: user.id,
+            createdBy: actor.userId,
             version: 1,
           });
         }
 
-        await tx.insert(auditEvents).values({ campaignId: campaign.id, actorId: user.id, action: 'campaign.duplicated', targetId: campaign.id, detail: `Copied from ${campaignId}` });
+        await tx.insert(auditEvents).values({ campaignId: campaign.id, actorId: actor.userId, action: 'campaign.duplicated', targetId: campaign.id, detail: `Copied from ${campaignId}` });
         for (const file of prepared) {
           await copyFile(file.tempPath, file.finalPath, fsConstants.COPYFILE_EXCL);
         }
@@ -170,39 +196,61 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
     }
   });
   app.put('/api/campaigns/:campaignId/player-drawing', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { campaignId } = request.params as { campaignId: string };
     const input = parseBody(campaignDrawingPermissionSchema, request.body);
-    const role = await roleFor(campaignId, user.id);
-    if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
     const updated = await db.transaction(async (tx) => {
+      const actor = await lockCampaignActor(tx, digest(cookie), campaignId, { strength: 'no key update' });
+      if ('error' in actor) return actor;
+      if (actor.role !== 'OWNER' && actor.role !== 'GM') return { error: 'FORBIDDEN' } as const;
       const [result] = await tx.update(campaigns).set({ playersCanDraw: input.enabled }).where(eq(campaigns.id, campaignId)).returning({ id: campaigns.id, playersCanDraw: campaigns.playersCanDraw });
-      if (result) await tx.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'campaign.player_drawing_changed', targetId: campaignId, detail: input.enabled ? 'enabled' : 'disabled' });
-      return result;
+      if (!result) return { error: 'NOT_FOUND' } as const;
+      await tx.insert(auditEvents).values({ campaignId, actorId: actor.userId, action: 'campaign.player_drawing_changed', targetId: campaignId, detail: input.enabled ? 'enabled' : 'disabled' });
+      return { result } as const;
     });
-    if (!updated) return reply.code(404).send({ error: 'NOT_FOUND' });
+    if ('error' in updated) return reply.code(updated.error === 'UNAUTHENTICATED' ? 401 : updated.error === 'NOT_FOUND' ? 404 : 403).send({ error: updated.error });
     void publishDrawingPermission(io, campaignId).catch(() => request.log.error('Drawing permission could not be published'));
-    return { playersCanDraw: updated.playersCanDraw };
+    return { playersCanDraw: updated.result.playersCanDraw };
   });
   app.put('/api/campaigns/:campaignId/archive', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { campaignId } = request.params as { campaignId: string };
-    const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
-    if (!campaign) return reply.code(404).send({ error: 'NOT_FOUND' });
-    if (campaign.ownerId !== user.id) return reply.code(403).send({ error: 'FORBIDDEN' });
-    const [updated] = await db.update(campaigns).set({ archivedAt: new Date() }).where(eq(campaigns.id, campaignId)).returning();
+    const result = await db.transaction(async (tx) => {
+      const actor = await lockCampaignActor(tx, digest(cookie), campaignId, { strength: 'update' });
+      if ('error' in actor) return actor;
+      const [campaign] = await tx.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
+      if (!campaign) return { error: 'NOT_FOUND' } as const;
+      if (campaign.ownerId !== actor.userId || actor.role !== 'OWNER') return { error: 'FORBIDDEN' } as const;
+      if (campaign.archivedAt) return { error: 'CONFLICT' } as const;
+      const [updated] = await tx.update(campaigns).set({ archivedAt: new Date() }).where(and(eq(campaigns.id, campaignId), isNull(campaigns.archivedAt))).returning();
+      if (!updated) return { error: 'CONFLICT' } as const;
+      await tx.insert(auditEvents).values({ campaignId, actorId: actor.userId, action: 'campaign.archived', targetId: campaignId });
+      return { campaign: updated } as const;
+    });
+    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : result.error === 'NOT_FOUND' ? 404 : result.error === 'CONFLICT' ? 409 : 403).send({ error: result.error });
     archiveCampaignSockets(io, campaignId);
-    await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'campaign.archived', targetId: campaignId });
-    return { campaign: updated };
+    return { campaign: result.campaign };
   });
   app.put('/api/campaigns/:campaignId/restore', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { campaignId } = request.params as { campaignId: string };
-    const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
-    if (!campaign) return reply.code(404).send({ error: 'NOT_FOUND' });
-    if (campaign.ownerId !== user.id) return reply.code(403).send({ error: 'FORBIDDEN' });
-    const [updated] = await db.update(campaigns).set({ archivedAt: null }).where(eq(campaigns.id, campaignId)).returning();
-    await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'campaign.restored', targetId: campaignId });
-    return { campaign: updated };
+    const result = await db.transaction(async (tx) => {
+      const session = await lockCommandSession(tx, digest(cookie));
+      if (!session) return { error: 'UNAUTHENTICATED' } as const;
+      const [campaign] = await tx.select().from(campaigns).where(eq(campaigns.id, campaignId)).for('update').limit(1);
+      if (!campaign) return { error: 'NOT_FOUND' } as const;
+      const roles = await tx.select({ role: memberships.role }).from(memberships).where(and(eq(memberships.campaignId, campaignId), eq(memberships.userId, session.userId))).for('share').limit(1);
+      if (campaign.ownerId !== session.userId || roles[0]?.role !== 'OWNER') return { error: 'FORBIDDEN' } as const;
+      if (!campaign.archivedAt) return { error: 'CONFLICT' } as const;
+      const [updated] = await tx.update(campaigns).set({ archivedAt: null }).where(and(eq(campaigns.id, campaignId), isNotNull(campaigns.archivedAt))).returning();
+      if (!updated) return { error: 'CONFLICT' } as const;
+      await tx.insert(auditEvents).values({ campaignId, actorId: session.userId, action: 'campaign.restored', targetId: campaignId });
+      return { campaign: updated } as const;
+    });
+    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : result.error === 'NOT_FOUND' ? 404 : result.error === 'CONFLICT' ? 409 : 403).send({ error: result.error });
+    return { campaign: result.campaign };
   });
 }
