@@ -35,7 +35,7 @@ test('REST create retries after a committed response is dropped and reuses the s
   await page.getByLabel('Campaign name').fill(title);
   await page.getByLabel('A short description').fill('lost response recovery');
   await page.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.getByText(/response was not received/i)).toBeVisible();
+  await expect(page.getByText(/response was lost|ответ не получен/i)).toBeVisible();
   const campaignReplay = page.waitForResponse((response) => response.url().endsWith('/api/campaigns') && response.request().method() === 'POST');
   await page.getByRole('button', { name: /^Create/ }).click();
   expect((await campaignReplay).status()).toBe(200);
@@ -48,7 +48,7 @@ test('REST create retries after a committed response is dropped and reuses the s
   await page.getByRole('button', { name: /Add scene/ }).click();
   await page.getByLabel('Scene name').fill('Retry room');
   await page.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.getByText(/response was not received/i)).toBeVisible();
+  await expect(page.getByText(/response was lost|ответ не получен/i)).toBeVisible();
   const sceneReplay = page.waitForResponse((response) => response.url().endsWith('/api/scenes') && response.request().method() === 'POST');
   await page.getByRole('button', { name: /^Create/ }).click();
   expect((await sceneReplay).status()).toBe(200);
@@ -58,7 +58,7 @@ test('REST create retries after a committed response is dropped and reuses the s
 
   const tokenRequestId = await loseFirstResponse(page, '/api/tokens');
   await page.getByRole('button', { name: /Add token/ }).click();
-  await expect(page.getByText(/response was not received/i)).toBeVisible();
+  await expect(page.getByText(/response was lost|ответ не получен/i)).toBeVisible();
   const tokenReplay = page.waitForResponse((response) => response.url().includes('/api/tokens') && response.status() === 200);
   await page.getByRole('button', { name: /Add token/ }).click();
   await tokenReplay;
