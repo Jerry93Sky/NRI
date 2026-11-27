@@ -1,20 +1,29 @@
 # Product roadmap
 
-Statuses describe plans, not current implementation. V0.1.1 is the active release scope; V0.1 remains unmerged and pending acceptance.
+**Active release: V0.1.1 — IN_PROGRESS.** Continue the existing [stabilization scope](../releases/V0.1.1_SCOPE.md) and its [acceptance gates](../releases/V0.1.1_ACCEPTANCE_REPORT.md). V0.1 is the preceding foundation on the same development line. All later entries are `PLANNED`. Dependencies describe release gates and include no delivery dates. Detailed exit evidence is defined in the [long-term implementation plan](LONG_TERM_IMPLEMENTATION_PLAN.md).
 
-| Version | Focus | Dependencies | Exit criteria | Constraints / architecture |
-|---|---|---|---|---|
-| V0.1 | Foundation & Multiplayer Virtual Tabletop | None | Durable campaigns, auth and scoped roles, scenes, maps, tokens, chat, dice, initiative, reconnect, bilingual UI; automated and manual acceptance recorded | System-neutral modular monolith; server-authoritative; no billing, advanced lighting, or rules automation |
-| V0.1.1 | Tabletop Foundation Completion & Playability | Existing V0.1 branch | Scene lifecycle/privacy, layers/objects, grid calibration, expanded tokens, asset library, tabletop tools, reliability/security checks, Playwright, backup/restore, measured performance, playable demo; owner acceptance recorded. Current work adds image-backed token assets with library-to-table drag-and-drop, library image/text scene objects, an ephemeral role-filtered shared pointer, deletion recovery, atomic group move/property controls, version-checked group-move undo/redo, a temporary scene-unit ruler, and canvas shortcuts; an isolated `nri_test` restore drill has also passed; remaining gaps are tracked in the acceptance report | Continue the existing branch and PR; do not claim incomplete V0.1 foundations as accepted |
-| V0.2 | Tactical Tabletop | V0.1 scene, object, and realtime contracts | Walls and doors; visibility and lighting tested for permissions and performance | Visibility is server-filtered; keep renderer independent from persistence |
-| V0.3 | Character Studio | Stable identity, campaign membership, asset and permission model | Configurable character sheets and ownership in campaigns | Schema-defined fields; no single game system baked into core |
-| V0.4 | Universal Rules Engine | Character Studio; versioned rule packages | Authors can define and safely execute checks and mechanics without arbitrary server code | Sandboxed declarative rules, versioning, migrations, deterministic evaluation |
-| V0.5 | Campaign Studio | Characters and rules package interfaces | Campaign planning, notes, timelines, and GM organization with secret-aware sharing | Reuse campaign access controls and secret projections |
-| V0.6 | Living World Engine | Campaign Studio; time, faction, and entity schemas | Deterministic simulation can be previewed, approved, edited, and reverted by the GM | Separate bounded simulation module; no direct dependency on London; AI not required |
-| V0.7 | Map Studio | Asset and scene format stability | Create and edit maps with import/export and versioned assets | Preserve standalone map import/export; avoid coupling map editing to a game system |
-| V0.8 | Community Alpha | Account, moderation, sharing, and consent foundations | Invite/search/community workflows pass privacy and moderation review | Minimize public profile data; opt-in discovery |
-| V0.9 | Commercial Beta | Operational readiness, support, licensing, and pricing research | Beta support, observability, backup, restore, security review, and billing design complete | No price assumptions in core code; validate service costs and user demand |
-| V1.0 | Commercial Release | Beta exit criteria | Reliability, accessibility, security, legal, support, and product acceptance signed off | Owner approves code license and commercial terms |
-| V1.1+ | Marketplace & Ecosystem | V1.0 trust, licensing, payments, moderation | Creator publishing, purchase, entitlement, and takedown paths accepted | Rights provenance and content safety are required |
+| Release | Goal | Required predecessors | Exit evidence |
+| --- | --- | --- | --- |
+| V0.1 | Foundation and multiplayer VTT | — | [Original scope and validation](V0_1_SCOPE.md) |
+| V0.1.1 | Stabilize playable tabletop | Existing V0.1 branch | Current acceptance report and owner session under existing gates |
+| V0.2 | Tactical Tabletop | V0.1.1 gates | Versioned geometry, movement validation, per-player LOS/fog and lighting. [Existing scope](../releases/V0.2_SCOPE.md) |
+| V0.3 | Character Studio and minimal rules contract | V0.2 release; campaign identity and package subset | Two original built-in fixtures with dissimilar sheets and mechanics, stable pins and field-level privacy |
+| V0.4 | Universal Rules Engine | V0.3 format subset and entity snapshots | Broader safe interpreter and dice families, deterministic replay and verified resource limits |
+| V0.4.1 | Ruleset Library | V0.4 and licensing gates | Validated import/export, version registry, permissions and approved migration/restore |
+| V0.4.2 | Homebrew Studio | V0.4.1 | Visual authoring, dependency-aware overrides, draft tests and explicit publish/upgrade |
+| V0.4.3 | Combat Automation | V0.2 tactical queries, V0.4 Rules, V0.3 Character | Atomic actions, reaction/turn variants, adjustable automation and guarded undo |
+| V0.5 | Campaign Studio | Campaign Core and V0.3 character links | Planning, snapshots, encounters, notes and secret-aware timelines |
+| V0.5.1 | Tactical AI | V0.2 perception, V0.4.3 action API and V0.5 encounter workflows | Reproducible proposed actions, perception limits, visual profiles and immediate GM takeover |
+| V0.6 | World Simulation Core | V0.5 campaign/time workflow and bounded evaluator subset | Optional World Instance, game-time stepping, preview/apply, repeatability and checkpoints |
+| V0.6.1 | NPC Simulation | V0.6 | Individual and aggregate updates with scoped knowledge, memories, goals and relationships |
+| V0.6.2 | Political Simulation | V0.6 and V0.6.1 social inputs | Configurable institutions, succession and diplomacy with deterministic conflict resolution |
+| V0.6.3 | Economic Simulation | V0.6 and optional political inputs | Reconciled stock/flow ledger with abstract and detailed modes |
+| V0.6.4 | World Rules Studio | V0.6 and representative V0.6.1–V0.6.3 laws | Visual authoring and testing of bounded, versioned event rules |
+| V0.6.5 | Narrative Engine | V0.6 causal records and V0.6.4 policies | Reviewable hooks with lineage, audience scoping and controlled publication |
+| V0.7 | Map Studio | V0.2 geometry and stable asset references | Map round-trips, permission-aware variants, versioned scene import |
+| V0.8 | Community Hub | Account, sharing, moderation and rights review | Opt-in discovery, reporting, removal and privacy acceptance |
+| V0.9 | Commercial Beta | Implemented beta scope, operations and commercial rights | Measured capacity, restore drills, support workflows, privacy and security reviews |
+| V1.0 | Commercial Release | V0.9 exit and owner sign-off | Reliability, accessibility, legal and support gates meet agreed targets |
+| V1.1+ | Marketplace and ecosystem | V1.0 and separate commerce/provenance approval | Catalog, publication, entitlements and takedown tested end to end |
 
-Release exit criteria do not mean a feature is complete until evidence is documented. Dependencies are architectural gates, not promises of delivery dates. Prices, if any, remain hypotheses and configurable.
+V0.3 introduces a small built-in package format and the evaluation contract needed for schema-derived sheets. V0.4 extends that contract, V0.4.1 opens the registry to approved imports, and V0.4.2 adds visual authoring. Map Studio follows a later product release even though V0.2 must define reusable geometry. The World Core runs with reference laws before the World Rules Studio UI exists. Political and economic models remain separately optional at runtime.

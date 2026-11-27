@@ -1,6 +1,6 @@
 # NRI Platform
 
-NRI Platform — универсальная виртуальная игровая площадка для настольных ролевых игр. Ядро не зависит от правил конкретной НРИ; ведущий управляет кампанией, сценами, токенами и доступом игроков.
+NRI Platform — системно-независимый виртуальный стол. Ведущий управляет кампаниями, сценами, токенами и доступом игроков. Долгосрочная цель — платформа для создания собственных правил, автоматизации игры и симуляции миров.
 
 ## Статус
 
@@ -48,6 +48,7 @@ corepack pnpm@12.23.0 test
 ## Документация и дорожная карта
 
 - [Видение продукта](docs/product/PRODUCT_VISION.md) · [Дорожная карта](docs/product/ROADMAP.md) · [Объём V0.1](docs/product/V0_1_SCOPE.md)
+- [Долгосрочный план и критерии релизов](docs/product/LONG_TERM_IMPLEMENTATION_PLAN.md) · [Лицензирование пакетов правил](docs/product/RULESET_LICENSING_STRATEGY.md)
 - [Архитектура](docs/architecture/ARCHITECTURE.md) · [Модель данных](docs/architecture/DATA_MODEL.md) · [Протокол реального времени](docs/architecture/REALTIME_PROTOCOL.md)
 - [Резервное копирование и восстановление](docs/operations/BACKUP_RESTORE.md)
 - [Модель угроз](docs/security/THREAT_MODEL.md) · [Коммерческая стратегия](docs/product/COMMERCIAL_STRATEGY.md)

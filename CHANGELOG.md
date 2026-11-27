@@ -2,6 +2,10 @@
 
 All notable project changes will be recorded here.
 
+## Planned architecture and roadmap
+
+- Document versioned rules packages, a minimal format for Character Studio, Homebrew, encounter automation and deterministic world simulation. Add dependency diagrams, licensing gates and release evidence from V0.1.1 through Marketplace. The active V0.1.1 implementation and acceptance scope still apply.
+
 ## Unreleased — V0.1.1
 
 ### Foundation stabilization

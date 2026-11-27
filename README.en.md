@@ -1,6 +1,6 @@
 # NRI Platform
 
-NRI Platform is a system-neutral virtual tabletop for role-playing games. Its core is not tied to a particular ruleset; game masters manage campaigns, scenes, tokens, and player access.
+NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns, scenes, tokens and player access. The long-term goal is a platform for creating custom rules, automating play and simulating worlds.
 
 ## Status
 
@@ -48,6 +48,7 @@ The multiplayer integration test is documented in the [acceptance report](docs/r
 ## Documentation and roadmap
 
 - [Product vision](docs/product/PRODUCT_VISION.md) · [Roadmap](docs/product/ROADMAP.md) · [V0.1 scope](docs/product/V0_1_SCOPE.md)
+- [Long-term plan and release gates](docs/product/LONG_TERM_IMPLEMENTATION_PLAN.md) · [Ruleset licensing strategy](docs/product/RULESET_LICENSING_STRATEGY.md)
 - [Architecture](docs/architecture/ARCHITECTURE.md) · [Data model](docs/architecture/DATA_MODEL.md) · [Realtime protocol](docs/architecture/REALTIME_PROTOCOL.md)
 - [Backup and restore procedure](docs/operations/BACKUP_RESTORE.md)
 - [Threat model](docs/security/THREAT_MODEL.md) · [Commercial strategy](docs/product/COMMERCIAL_STRATEGY.md)
