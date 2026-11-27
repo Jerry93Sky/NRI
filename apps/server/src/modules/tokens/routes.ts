@@ -7,13 +7,13 @@ import { assets, auditEvents, scenes, tokens } from '../../db/schema.js';
 import { canReadSceneTokens, type CampaignSceneRole } from '../../domain/sceneAccess.js';
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
-import { digest, parseBody, requireUser, roleFor } from '../../security/access.js';
+import { digest, parseBody } from '../../security/access.js';
 import { publicToken } from '../../domain/projections.js';
 import { publishTokenState } from '../../realtime/tokenEvents.js';
 import { publishInitiative } from '../../realtime/initiativeEvents.js';
 import { publishMovement } from '../../realtime/movementEvents.js';
 import { cookieName } from '../../config/runtime.js';
-import { commandSessionIsActive, lockCampaign, lockCampaignRoles, lockCommandSession, type Transaction } from '../../security/commandAccess.js';
+import { commandSessionIsActive, lockCampaign, lockCampaignActor, lockCampaignRoles, lockCampaignSceneActor, lockCommandSession, type Transaction } from '../../security/commandAccess.js';
 import { updateTokenGroup } from './movement.js';
 
 const movementErrorStatus = { INVALID: 400, UNAUTHENTICATED: 401, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409 };
@@ -42,6 +42,35 @@ async function lockTokenCommand(tx: Transaction, tokenHash: string, tokenId: str
   return { token, scene, role, roles, userId: session.userId };
 }
 
+type LockedTokenDuplicateContext =
+  | { error: 'UNAUTHENTICATED' | 'NOT_FOUND' | 'FORBIDDEN' }
+  | { destination: typeof scenes.$inferSelect; sources: Map<string, typeof tokens.$inferSelect>; role: CampaignSceneRole; userId: string };
+
+async function lockTokenDuplicateContext(tx: Transaction, tokenHash: string, destinationSceneId: string, tokenIds: string[]): Promise<LockedTokenDuplicateContext> {
+  const session = await lockCommandSession(tx, tokenHash);
+  if (!session) return { error: 'UNAUTHENTICATED' } as const;
+  const [destinationLocation] = await tx.select({ campaignId: scenes.campaignId }).from(scenes).where(eq(scenes.id, destinationSceneId)).limit(1);
+  if (!destinationLocation) return { error: 'NOT_FOUND' } as const;
+  if (!await lockCampaign(tx, destinationLocation.campaignId)) return { error: 'FORBIDDEN' } as const;
+  const role = (await lockCampaignRoles(tx, destinationLocation.campaignId, [session.userId])).get(session.userId);
+  if (!role) return { error: 'FORBIDDEN' } as const;
+  const sourceLocations = tokenIds.length ? await tx.select({ tokenId: tokens.id, sceneId: tokens.sceneId }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id))
+    .where(and(inArray(tokens.id, tokenIds), eq(scenes.campaignId, destinationLocation.campaignId), isNull(tokens.deletedAt), isNull(scenes.archivedAt)))
+    .orderBy(asc(tokens.id)) : [];
+  if (sourceLocations.length !== tokenIds.length) return { error: 'NOT_FOUND' } as const;
+  const sceneIds = [...new Set([destinationSceneId, ...sourceLocations.map(({ sceneId }) => sceneId)])].sort();
+  const lockedScenes = await tx.select().from(scenes).where(and(eq(scenes.campaignId, destinationLocation.campaignId), inArray(scenes.id, sceneIds), isNull(scenes.archivedAt)))
+    .orderBy(asc(scenes.id)).for('share');
+  if (lockedScenes.length !== sceneIds.length) return { error: 'NOT_FOUND' } as const;
+  const destination = lockedScenes.find(({ id }) => id === destinationSceneId);
+  if (!destination) return { error: 'NOT_FOUND' } as const;
+  const sourceRows = tokenIds.length ? await tx.select().from(tokens).where(and(inArray(tokens.id, tokenIds), inArray(tokens.sceneId, sceneIds), isNull(tokens.deletedAt)))
+    .orderBy(asc(tokens.id)).for('share') : [];
+  if (sourceRows.length !== tokenIds.length) return { error: 'NOT_FOUND' } as const;
+  if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
+  return { destination, sources: new Map(sourceRows.map((token) => [token.id, token])), role, userId: session.userId } as const;
+}
+
 export function registerTokenRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/scenes/:sceneId/tokens', async (request, reply) => {
     const cookie = request.cookies[cookieName];
@@ -65,46 +94,47 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
     return result.projection;
   });
   app.post('/api/tokens', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const input = parseBody(createTokenSchema, request.body);
-    const [scene] = await db.select().from(scenes).where(eq(scenes.id, input.sceneId)).limit(1);
-    if (!scene) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(scene.campaignId, user.id);
-    if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    if (scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    if (input.imageAssetId) {
-      const [asset] = await db.select({ id: assets.id }).from(assets).where(and(eq(assets.id, input.imageAssetId), eq(assets.campaignId, scene.campaignId), eq(assets.category, 'TOKEN'))).limit(1);
-      if (!asset) return reply.code(400).send({ error: 'INVALID_ASSET' });
-    }
-    const [token] = await db.insert(tokens).values(input).returning();
-    if (!token) throw new Error('Token creation failed');
+    const result = await db.transaction(async (tx) => {
+      const context = await lockCampaignSceneActor(tx, digest(cookie), input.sceneId, { sceneStrength: 'update' });
+      if ('error' in context) return context;
+      if (context.role !== 'OWNER' && context.role !== 'GM') return { error: 'FORBIDDEN' } as const;
+      if (input.imageAssetId) {
+        const [asset] = await tx.select({ id: assets.id }).from(assets).where(and(eq(assets.id, input.imageAssetId), eq(assets.campaignId, context.scene.campaignId), eq(assets.category, 'TOKEN'))).for('share').limit(1);
+        if (!asset) return { error: 'INVALID_ASSET' } as const;
+      }
+      const [token] = await tx.insert(tokens).values(input).returning();
+      if (!token) throw new Error('Token creation failed');
+      await tx.insert(auditEvents).values({ campaignId: context.scene.campaignId, actorId: context.userId, action: 'token.created', targetId: token.id });
+      return { token, scene: context.scene } as const;
+    });
+    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : result.error === 'INVALID_ASSET' ? 400 : result.error === 'NOT_FOUND' ? 404 : 403).send({ error: result.error });
+    const { token, scene } = result;
     const projection = publicToken(token, true);
     void publishTokenState(io, scene.campaignId, scene.id, [{ ...token, publication: 'create' }])
       .catch(() => request.log.error('Committed token creation could not be published'));
     return reply.code(201).send({ token: projection });
   });
   app.post('/api/tokens/:tokenId/duplicate', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { tokenId } = request.params as { tokenId: string };
     const input = parseBody(duplicateTokenSchema, request.body);
     const result = await db.transaction(async (tx) => {
-      const [location] = await tx.select({ campaignId: scenes.campaignId }).from(scenes).where(eq(scenes.id, input.sceneId)).limit(1);
-      if (!location) return { error: 'NOT_FOUND' as const };
-      if (!await lockCampaign(tx, location.campaignId)) return { error: 'FORBIDDEN' as const };
-      const role = (await lockCampaignRoles(tx, location.campaignId, [user.id])).get(user.id);
-      if (role !== 'OWNER' && role !== 'GM') return { error: 'FORBIDDEN' as const };
-      const [destination] = await tx.select().from(scenes).where(and(eq(scenes.id, input.sceneId), isNull(scenes.archivedAt))).limit(1);
-      if (!destination) return { error: 'NOT_FOUND' as const };
-      const [source] = await tx.select({ token: tokens }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id))
-        .where(and(eq(tokens.id, tokenId), eq(scenes.campaignId, destination.campaignId), isNull(tokens.deletedAt), isNull(scenes.archivedAt)))
-        .for('share', { of: tokens }).limit(1);
+      const context = await lockTokenDuplicateContext(tx, digest(cookie), input.sceneId, [tokenId]);
+      if ('error' in context) return context;
+      if (context.role !== 'OWNER' && context.role !== 'GM') return { error: 'FORBIDDEN' as const };
+      const destination = context.destination;
+      const source = context.sources.get(tokenId);
       if (!source) return { error: 'NOT_FOUND' as const };
-      if (source.token.version !== input.expectedVersion) return { error: 'CONFLICT' as const };
-      const { id: _sourceId, sceneId: _sourceSceneId, version: _sourceVersion, deletedAt: _deletedAt, ownerUserId: _ownerUserId, ownerNote: _ownerNote, ...copied } = source.token;
+      if (source.version !== input.expectedVersion) return { error: 'CONFLICT' as const };
+      const { id: _sourceId, sceneId: _sourceSceneId, version: _sourceVersion, deletedAt: _deletedAt, ownerUserId: _ownerUserId, ownerNote: _ownerNote, ...copied } = source;
       const [token] = await tx.insert(tokens).values({
         ...copied,
         sceneId: destination.id,
-        name: `${source.token.name} copy`.slice(0, 48),
+        name: `${source.name} copy`.slice(0, 48),
         x: input.x,
         y: input.y,
         ownerUserId: null,
@@ -113,32 +143,26 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
         deletedAt: null,
       }).returning();
       if (!token) throw new Error('Token duplication failed');
-      await tx.insert(auditEvents).values({ campaignId: destination.campaignId, actorId: user.id, action: 'token.duplicated', targetId: token.id, detail: `source:${source.token.id}` });
+      await tx.insert(auditEvents).values({ campaignId: destination.campaignId, actorId: context.userId, action: 'token.duplicated', targetId: token.id, detail: `source:${source.id}` });
       return { token, campaignId: destination.campaignId, isActive: destination.isActive };
     });
-    if ('error' in result) return reply.code(result.error === 'FORBIDDEN' ? 403 : result.error === 'CONFLICT' ? 409 : 404).send({ error: result.error });
+    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : result.error === 'FORBIDDEN' ? 403 : result.error === 'CONFLICT' ? 409 : 404).send({ error: result.error });
     void publishTokenState(io, result.campaignId, result.token.sceneId, [{ ...result.token, publication: 'create' }])
       .catch(() => request.log.error('Committed token copy could not be published'));
     return reply.code(201).send({ token: publicToken(result.token, true) });
   });
   app.post('/api/scenes/:sceneId/tokens/duplicate', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { sceneId } = request.params as { sceneId: string };
     const input = parseBody(duplicateTokensSchema, request.body);
     if (input.sceneId !== sceneId) return reply.code(400).send({ error: 'SCENE_MISMATCH' });
     const result = await db.transaction(async (tx) => {
-      const [location] = await tx.select({ campaignId: scenes.campaignId }).from(scenes).where(eq(scenes.id, sceneId)).limit(1);
-      if (!location) return { error: 'NOT_FOUND' as const };
-      if (!await lockCampaign(tx, location.campaignId)) return { error: 'FORBIDDEN' as const };
-      const role = (await lockCampaignRoles(tx, location.campaignId, [user.id])).get(user.id);
-      if (role !== 'OWNER' && role !== 'GM') return { error: 'FORBIDDEN' as const };
-      const [destination] = await tx.select().from(scenes).where(and(eq(scenes.id, sceneId), isNull(scenes.archivedAt))).limit(1);
-      if (!destination) return { error: 'NOT_FOUND' as const };
-      const sourceRows = await tx.select({ token: tokens }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id))
-        .where(and(inArray(tokens.id, input.tokens.map((item) => item.tokenId)), eq(scenes.campaignId, destination.campaignId), isNull(tokens.deletedAt), isNull(scenes.archivedAt)))
-        .orderBy(asc(tokens.id)).for('share', { of: tokens });
-      if (sourceRows.length !== input.tokens.length) return { error: 'NOT_FOUND' as const };
-      const sources = new Map(sourceRows.map(({ token }) => [token.id, token]));
+      const context = await lockTokenDuplicateContext(tx, digest(cookie), sceneId, input.tokens.map(({ tokenId }) => tokenId));
+      if ('error' in context) return context;
+      if (context.role !== 'OWNER' && context.role !== 'GM') return { error: 'FORBIDDEN' as const };
+      const destination = context.destination;
+      const sources = context.sources;
       if (input.tokens.some((item) => sources.get(item.tokenId)?.version !== item.expectedVersion)) return { error: 'CONFLICT' as const };
       const duplicates = input.tokens.map((item) => {
         const source = sources.get(item.tokenId)!;
@@ -146,21 +170,30 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
         return { ...copied, id: randomUUID(), sceneId: destination.id, name: `${source.name} copy`.slice(0, 48), x: item.x, y: item.y, ownerUserId: null, ownerNote: '', version: 1, deletedAt: null };
       });
       const created = await tx.insert(tokens).values(duplicates).returning();
-      await tx.insert(auditEvents).values(created.map((token, index) => ({ campaignId: destination.campaignId, actorId: user.id, action: 'token.duplicated', targetId: token.id, detail: `source:${input.tokens[index]!.tokenId}` })));
+      await tx.insert(auditEvents).values(created.map((token, index) => ({ campaignId: destination.campaignId, actorId: context.userId, action: 'token.duplicated', targetId: token.id, detail: `source:${input.tokens[index]!.tokenId}` })));
       const byId = new Map(created.map((token) => [token.id, token]));
       return { tokens: duplicates.map(({ id }) => byId.get(id)!), campaignId: destination.campaignId, isActive: destination.isActive };
     });
-    if ('error' in result) return reply.code(result.error === 'FORBIDDEN' ? 403 : result.error === 'CONFLICT' ? 409 : 404).send({ error: result.error });
+    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : result.error === 'FORBIDDEN' ? 403 : result.error === 'CONFLICT' ? 409 : 404).send({ error: result.error });
     void publishTokenState(io, result.campaignId, sceneId, result.tokens.map((token) => ({ ...token, publication: 'create' })))
       .catch(() => request.log.error('Committed token copies could not be published'));
     return reply.code(201).send({ tokens: result.tokens.map((token) => publicToken(token, true)) });
   });
   app.get('/api/campaigns/:campaignId/token-trash', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { campaignId } = request.params as { campaignId: string };
-    const role = await roleFor(campaignId, user.id);
-    if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    return db.select({ id: tokens.id, sceneId: tokens.sceneId, sceneTitle: scenes.title, name: tokens.name, version: tokens.version, deletedAt: tokens.deletedAt, sceneArchivedAt: scenes.archivedAt }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(scenes.campaignId, campaignId), sql`${tokens.deletedAt} IS NOT NULL`)).orderBy(desc(tokens.deletedAt));
+    const result = await db.transaction(async (tx) => {
+      const actor = await lockCampaignActor(tx, digest(cookie), campaignId);
+      if ('error' in actor) return actor;
+      if (actor.role !== 'OWNER' && actor.role !== 'GM') return { error: 'FORBIDDEN' } as const;
+      const rows = await tx.select({ id: tokens.id, sceneId: tokens.sceneId, sceneTitle: scenes.title, name: tokens.name, version: tokens.version, deletedAt: tokens.deletedAt, sceneArchivedAt: scenes.archivedAt })
+        .from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(scenes.campaignId, campaignId), sql`${tokens.deletedAt} IS NOT NULL`)).orderBy(desc(tokens.deletedAt));
+      if (!await commandSessionIsActive(tx, digest(cookie))) return { error: 'UNAUTHENTICATED' } as const;
+      return { rows } as const;
+    });
+    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : 403).send({ error: result.error });
+    return result.rows;
   });
   for (const action of ['delete', 'restore'] as const) {
     const register = action === 'delete' ? app.delete.bind(app) : app.post.bind(app);
