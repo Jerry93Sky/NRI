@@ -2,6 +2,8 @@
 
 NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns, scenes, tokens and player access. The long-term goal is a platform for creating custom rules, automating play and simulating worlds.
 
+**EVERDOOR** is the approved product name and **Every door, a new adventure** the tagline; NRI Platform remains the temporary technical project name. The brand direction and user journey are `PLANNED` in the [EVERDOOR brand vision](docs/design/EVERDOOR_BRAND_VISION.md); the current interface is unchanged.
+
 ## Status
 
 **V0.1.1 — IN_PROGRESS.** See the [V0.1.1 report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md) for the stabilization checkpoint. Work continues in [Draft PR #1](https://github.com/Jerry93Sky/NRI/pull/1).
@@ -20,7 +22,7 @@ NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns
 
 ## V0.1.1 limitations
 
-- A complete human session and owner acceptance are pending. Transactional authorization for remaining writer commands and lost acknowledgement scenarios remain separate work.
+- A complete human session and owner acceptance are pending. CMD-ACL is checking the remaining transactional commands in the [authorization matrix](docs/security/COMMAND_AUTHORIZATION_MATRIX.md); lost acknowledgement handling remains a separate task.
 - Large scenes remain slow in the software renderer. Hardware runs, long-duration memory checks and detailed profiling remain open.
 - The [V0.2 Tactical Tabletop implementation plan](docs/releases/V0.2_IMPLEMENTATION_PLAN.md) describes work after the current release gates.
 

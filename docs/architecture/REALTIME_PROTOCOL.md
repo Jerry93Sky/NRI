@@ -1,5 +1,9 @@
 # Realtime protocol (implemented)
 
+## Command ACK and transaction semantics
+
+For CMD-ACL REST writers, state and audit commit before the existing publisher is invoked. A failed state/audit transaction produces no success publication. Socket.IO is still best effort: an ACK or packet can be lost after commit, and already queued bytes cannot be recalled. The finite lost-response scope is in the [V0.1.1 closure plan](../releases/V0.1.1_CLOSURE_PLAN.md#конечный-scope-rt-retry). CMD-ACL introduces no global request-ID protocol.
+
 Socket.IO is used for multiplayer delivery. The current implementation uses named event payloads and acknowledgement callbacks; it does **not** implement a protocol-version envelope, command IDs, event cursors, replay, or general idempotency. This document describes the wire behavior that exists today.
 
 ## Connection and rooms

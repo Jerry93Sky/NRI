@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — V0.1.1 CMD-ACL (in progress)
+
+- Move token, scene, campaign, membership/invitation and asset command authorization and required audit writes into lock-compatible PostgreSQL transactions; retain existing movement and realtime publisher paths.
+- Add [endpoint authorization matrix](docs/security/COMMAND_AUTHORIZATION_MATRIX.md), finite deferred RT-RETRY scope, and approved EVERDOOR brand direction (`PLANNED`).
+- Add 20 dedicated PostgreSQL authorization, race, rollback, media privacy, filesystem-compensation and local profiling scenarios. Full browser/CI acceptance remains pending.
+
 All notable project changes will be recorded here.
 
 ## Planned architecture and roadmap

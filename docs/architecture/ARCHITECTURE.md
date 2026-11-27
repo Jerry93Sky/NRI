@@ -1,5 +1,9 @@
 # Architecture
 
+## CMD-ACL transaction boundary (V0.1.1, in progress)
+
+The remaining command families use this ordering rule: session → campaign → membership rows → scene/folder/resource rows → dependent records, with sorted IDs for batches. Mutation and required audit share one PostgreSQL transaction; existing realtime publishers run after commit. Token duplicate locks all involved scenes in sorted ID order before token rows. Asset upload stages bounded files outside database locks, then rechecks access before its metadata/audit commit and file-renaming compensation. Protected original and thumbnail reads authorize before opening/reading bytes and use private no-store responses. The complete endpoint map and limitations are in [COMMAND_AUTHORIZATION_MATRIX.md](../security/COMMAND_AUTHORIZATION_MATRIX.md). Filesystem and PostgreSQL are not one atomic system; crash cleanup remains a documented operational limitation.
+
 ## V0.1 shape
 
 The pnpm TypeScript workspace contains a React/Vite frontend, a Fastify application and shared Zod contracts. PostgreSQL owns durable state. Drizzle ORM and Drizzle Kit migrations manage the schema. Socket.IO carries realtime events. Uploaded media uses the local filesystem directory configured by `UPLOAD_DIR`.

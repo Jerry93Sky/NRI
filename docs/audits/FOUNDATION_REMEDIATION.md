@@ -1,5 +1,11 @@
 # Исправления фундамента V0.1.1
 
+## CMD-ACL package — current implementation evidence
+
+At the task baseline `5e800355d038ce390249f3d97f1801dfbda25f2e`, token, scene, campaign, membership/invitation and asset routes had authorization checks or audit boundaries outside the state transaction. The implementation now locks current session and campaign membership before scoped scene/resource rows, commits state with required audit, and publishes only after commit. Token duplicate locks source/destination scenes in sorted ID order before token rows. Asset upload stages files without holding database locks, rechecks role at commit time, compensates staged/final files on injected failures, and documents process-crash windows. Original and thumbnail reads open/read only after current entitlement checks.
+
+The new isolated PostgreSQL entry point `apps/server/scripts/command-authorization.mjs` passed 20 scenarios on `nri_command_test`, including real blockers, campaign audit rollback, invitation expiry/creator-demotion, asset upload role/archive races, concurrent version conflicts, seven file stage/SQL/rename injections, post-commit publication, hidden/cross-campaign media denial, and a five-sample local profile. The movement (23), object lifecycle (28), secure realtime (20) and private channel (21) PostgreSQL suites passed after the latest changes; multiplayer smoke passed. The full local browser run passed 8/9, with Windows API restart recovery failing because the spawned server did not become ready. Full supported-runner browser/CI evidence remains required before CMD-ACL status can leave `IN_PROGRESS`. See the [endpoint matrix](../security/COMMAND_AUTHORIZATION_MATRIX.md) and [profile](../performance/CMD_ACL_PROFILE.md).
+
 Исходная точка `01860649c6864f5aa4198d3359204f6051cba7fb`. Дефекты и риски перечислены в [FOUNDATION_AUDIT.md](FOUNDATION_AUDIT.md).
 
 | ID | Статус | Результат и доказательство |
