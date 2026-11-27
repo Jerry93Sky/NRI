@@ -40,7 +40,8 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
       if (fingerprint && pendingRequestIds.get(fingerprint) === headers.get('idempotency-key')) pendingRequestIds.delete(fingerprint);
       throw new Error(result?.error ?? 'REQUEST_FAILED');
     }
-    if (fingerprint && pendingRequestIds.get(fingerprint) === headers.get('idempotency-key')) pendingRequestIds.delete(fingerprint);
+    // A 207 upload has committed some files. Keep the batch key for an explicit retry.
+    if (response.status !== 207 && fingerprint && pendingRequestIds.get(fingerprint) === headers.get('idempotency-key')) pendingRequestIds.delete(fingerprint);
     if (path.startsWith('/api/auth/') && requestOptions.method === 'POST') clearRecoverableRequests();
     return result as T;
   } catch (error) {

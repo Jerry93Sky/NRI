@@ -176,7 +176,6 @@ jobs:
         run: |
           cd apps/server
           node dist/index.js > /tmp/nri-browser-server.log 2>&1 &
-          echo "NRI_BROWSER_API_PID=$!" >> "$GITHUB_ENV"
           for attempt in {1..30}; do
             if curl --fail --silent http://127.0.0.1:3001/api/ready; then exit 0; fi
             sleep 1
@@ -199,7 +198,7 @@ jobs:
           API_PROXY_TARGET: http://127.0.0.1:3001
           NRI_E2E_PREVIEW: "true"
       - name: Run browser integration and privacy scenarios
-        run: pnpm --filter @nri/web e2e
+        run: pnpm --filter @nri/web e2e --grep-invert 'GM and Player sessions recover persisted campaign state after API restart'
         env:
           CI: true
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:4175
@@ -207,6 +206,29 @@ jobs:
           NODE_ENV: test
           HOST: 127.0.0.1
           PORT: 3001
+          WEB_ORIGIN: http://127.0.0.1:4175
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+      - name: Verify browser recovery after API restart on a fresh process
+        run: |
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-restart.log 2>&1 &
+          export NRI_BROWSER_API_PID=$!
+          trap 'kill "$NRI_BROWSER_API_PID" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$API_PROXY_TARGET/api/ready"; then
+              pnpm --filter @nri/web e2e zz-server-restart
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-browser-restart.log
+          exit 1
+        env:
+          CI: true
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:4175
+          API_PROXY_TARGET: http://127.0.0.1:3006
+          NODE_ENV: test
+          HOST: 127.0.0.1
+          PORT: 3006
           WEB_ORIGIN: http://127.0.0.1:4175
           DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
           SESSION_SECRET: ci-secret-is-not-for-deployment

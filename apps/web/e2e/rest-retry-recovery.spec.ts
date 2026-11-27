@@ -98,21 +98,35 @@ test('REST create, copy and upload recover committed results after lost response
   await page.getByLabel('Upload as').selectOption('MAP');
   const uploadPath = `/api/campaigns/${campaign.id}/assets`;
   const uploadAttempt = await loseFirstResponse(page, uploadPath);
-  const dropFile = () => page.getByTestId('asset-drop-zone').evaluate(async (element) => {
+  const dropFile = (partial = false) => page.getByTestId('asset-drop-zone').evaluate(async (element, partialUpload) => {
     const canvas = document.createElement('canvas');
     canvas.width = 2; canvas.height = 2;
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('Could not create test PNG');
     const transfer = new DataTransfer();
-    transfer.items.add(new File([blob], 'retry-map.png', { type: 'image/png', lastModified: 1 }));
+    transfer.items.add(new File([blob], partialUpload ? 'partial-map.png' : 'retry-map.png', { type: 'image/png', lastModified: 1 }));
+    if (partialUpload) transfer.items.add(new File(['invalid image'], 'invalid.png', { type: 'image/png', lastModified: 1 }));
     element.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
-  });
+  }, partial);
   await dropFile();
   await expect(page.getByRole('alert')).toContainText('The response was lost');
   const uploadReplay = page.waitForResponse((response) => new URL(response.url()).pathname === uploadPath && response.request().method() === 'POST');
   await dropFile();
   await expectReplay(uploadAttempt, await uploadReplay, 'assets', 201);
   await expect(page.locator('.asset-card')).toHaveCount(1);
+
+  async function submitPartial() {
+    const response = page.waitForResponse((response) => new URL(response.url()).pathname === uploadPath && response.request().method() === 'POST');
+    await dropFile(true);
+    const result = await response;
+    expect(result.status()).toBe(207);
+    await expect(page.getByRole('alert')).toContainText('Repeat the upload with the same files');
+    return { key: result.request().headers()['idempotency-key'], id: (await result.json()).assets[0].id };
+  }
+  const partial = await submitPartial();
+  expect(partial.key).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(await submitPartial()).toEqual(partial);
+  await expect(page.locator('.asset-card')).toHaveCount(2);
 });
 
 async function checkCopy(page: Page, path: string, buttonName: string, entity: string) {
@@ -174,6 +188,7 @@ test('lost chat and dice ACKs reuse their original command IDs on explicit retry
   const rollIds: string[] = [];
   const dropped = new Set<string>();
   const suppressed = new Set<string>();
+  const dropNext = new Set(['chat:send', 'dice:roll']);
   await page.routeWebSocket((url) => url.pathname === '/socket.io/', (wire) => {
     const upstream = wire.connectToServer();
     wire.onMessage((packet) => {
@@ -183,7 +198,7 @@ test('lost chat and dice ACKs reuse their original command IDs on explicit retry
           const [name, payload] = JSON.parse(match[2]!) as [string, { clientMessageId?: string; requestId?: string }];
           const ids = name === 'chat:send' ? chatIds : name === 'dice:roll' ? rollIds : undefined;
           if (ids) {
-            if (!ids.length) dropped.add(match[1]!);
+            if (dropNext.delete(name)) dropped.add(match[1]!);
             ids.push(payload.clientMessageId ?? payload.requestId ?? '');
           }
         }
@@ -220,5 +235,102 @@ test('lost chat and dice ACKs reuse their original command IDs on explicit retry
     expect(ids).toHaveLength(2);
     expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/i);
     expect(ids[1]).toBe(ids[0]);
+  }
+
+  const nextCampaign = await page.request.post('/api/campaigns', { data: { title: 'Other retry campaign', description: '' } });
+  expect(nextCampaign.status()).toBe(201);
+  // Reload the campaign list before setting up the pending switch.
+  await page.reload();
+  await page.getByRole('button', { name: /Retry ACK campaign/ }).click();
+  await expect(page.locator('.live-status')).toHaveText('Live');
+  dropNext.add('chat:send');
+  await input.fill('Leave this chat pending');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect.poll(() => chatIds.length).toBe(3);
+  await page.locator('.back-link').click();
+  await page.getByRole('button', { name: /Other retry campaign/ }).click();
+  await expect(page.getByRole('heading', { name: 'Other retry campaign' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry safely' })).toHaveCount(0);
+  await expect(input).toHaveValue('');
+  await expect(page.locator('.chat-message').filter({ hasText: 'Leave this chat pending' })).toHaveCount(0);
+});
+
+test('demotion and removal prevent recovery from revealing formerly authorized results', async ({ page, browser, baseURL }) => {
+  const gm = await browser.newContext({ baseURL, locale: 'en-US' });
+  try {
+    const gmPage = await gm.newPage();
+    let rollAckId: string | undefined;
+    const hiddenRequests: string[] = [];
+    await gmPage.routeWebSocket((url) => url.pathname === '/socket.io/', (wire) => {
+      const upstream = wire.connectToServer();
+      wire.onMessage((packet) => {
+        const match = typeof packet === 'string' ? /^42(\d+)(\["dice:roll",.*)$/s.exec(packet) : null;
+        if (match) {
+          const [, payload] = JSON.parse(match[2]!) as [string, { requestId: string; hidden: boolean }];
+          if (payload.hidden) {
+            if (!hiddenRequests.length) rollAckId = match[1];
+            hiddenRequests.push(payload.requestId);
+          }
+        }
+        upstream.send(packet);
+      });
+      upstream.onMessage((packet) => {
+        if (rollAckId && typeof packet === 'string' && packet.startsWith(`43${rollAckId}[`)) return;
+        wire.send(packet);
+      });
+    });
+    await register(page, `retry-owner-${crypto.randomUUID()}@example.test`);
+    await register(gmPage, `retry-gm-${crypto.randomUUID()}@example.test`);
+    const create = await page.request.post('/api/campaigns', { data: { title: 'Recovery permissions', description: '' } });
+    expect(create.status()).toBe(201);
+    const { campaign } = await create.json();
+    const addScene = await page.request.post('/api/scenes', { data: { campaignId: campaign.id, title: 'Permission room' } });
+    expect(addScene.status()).toBe(201);
+    const { scene } = await addScene.json();
+    const invite = await page.request.post('/api/invitations', { data: { campaignId: campaign.id } });
+    expect(invite.status()).toBe(201);
+    expect((await gmPage.request.post(`/api/invitations/${(await invite.json()).invitation}/accept`)).status()).toBe(200);
+    const { user } = await (await gmPage.request.get('/api/auth/me')).json();
+    const member = `/api/campaigns/${campaign.id}/members/${user.id}`;
+    const role = async (next: 'GM' | 'PLAYER') => {
+      expect((await page.request.post(`${member}/role`, { data: { role: next } })).status()).toBe(200);
+    };
+    await role('GM');
+    await gmPage.reload();
+    await gmPage.getByRole('button', { name: /Recovery permissions/ }).click();
+    await expect(gmPage.locator('.live-status')).toHaveText('Live');
+    await gmPage.getByRole('checkbox', { name: /Private roll/ }).check();
+    await gmPage.getByRole('button', { name: /d20 Roll/ }).click();
+    const retryRoll = gmPage.getByRole('button', { name: /d20 Retry/ });
+    await expect(retryRoll).toBeEnabled();
+    await expect(gmPage.locator('.roll-row')).toHaveCount(1);
+    await role('PLAYER');
+    await expect(gmPage.locator('.role-badge')).toHaveText('PLAYER');
+    await expect(gmPage.locator('.roll-row')).toHaveCount(0);
+    await retryRoll.click();
+    await expect(gmPage.getByRole('alert')).toContainText('FORBIDDEN');
+    expect(hiddenRequests).toHaveLength(2);
+    expect(hiddenRequests[1]).toBe(hiddenRequests[0]);
+    await expect(gmPage.locator('.roll-row')).toHaveCount(0);
+
+    await role('GM');
+    await expect(gmPage.locator('.role-badge')).toHaveText('GM');
+    const droppedToken = await loseFirstResponse(gmPage, '/api/tokens');
+    const createToken = gmPage.waitForRequest((request) => request.url().endsWith('/api/tokens') && request.method() === 'POST');
+    await gmPage.getByRole('button', { name: /Add token/ }).click();
+    const submitted = await createToken;
+    await expect(gmPage.getByRole('alert')).toContainText('The response was lost');
+    expect(droppedToken.dropped[0]?.status()).toBe(201);
+    expect(submitted.postDataJSON().sceneId).toBe(scene.id);
+    expect((await page.request.delete(member)).status()).toBe(204);
+    await expect(gmPage.getByRole('heading', { name: 'Your campaigns' })).toBeVisible();
+    await expect(gmPage.getByRole('button', { name: /Add token/ })).toHaveCount(0);
+    const denied = await gmPage.request.post('/api/tokens', {
+      headers: { 'idempotency-key': droppedToken.requestIds[0]! }, data: submitted.postDataJSON(),
+    });
+    expect(denied.status()).toBe(403);
+    expect(await denied.json()).toEqual({ error: 'FORBIDDEN' });
+  } finally {
+    await gm.close();
   }
 });

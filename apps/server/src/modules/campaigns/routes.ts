@@ -126,6 +126,7 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
         }).returning();
         if (!campaign) throw new Error('Campaign copy creation failed.');
         await tx.insert(memberships).values({ campaignId: campaign.id, userId: user.id, role: 'OWNER' });
+        if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [campaign.id]);
 
         const folderIds = new Map<string, string>();
         for (const sourceFolder of sourceFolderRows) {
@@ -198,7 +199,6 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
         }
 
         await tx.insert(auditEvents).values({ campaignId: campaign.id, actorId: actor.userId, action: 'campaign.duplicated', targetId: campaign.id, detail: `Copied from ${campaignId}` });
-        if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [campaign.id]);
         for (const file of prepared) {
           await copyFile(file.tempPath, file.finalPath, fsConstants.COPYFILE_EXCL);
         }

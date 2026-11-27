@@ -5,6 +5,7 @@
 - Add 90-day REST receipts and optional `Idempotency-Key` for token, object, scene and campaign create/copy, and asset upload. Store result IDs and check current access on replay.
 - Show an unknown outcome on the campaign list and tabletop, and preserve the original request when scene activation or a realtime token update follows a committed write.
 - Add PostgreSQL tests for concurrent replays, role changes, expiration and file rollback. Extend browser coverage for lost responses, resource snapshots, and token replay after API restart.
+- Keep the batch key after a partial upload and refresh the asset list from the server. Use a receipt for the file upload stage of the scene background action.
 - Record owner-approved Campaign Lobby and GM Screen requirements as `PLANNED`, separate proposed architecture, and align the brand, roadmap, product vision and audio/atlas notes. No UI or later feature implementation is included.
 
 ## Unreleased — V0.1.1 RT-RETRY (in progress)

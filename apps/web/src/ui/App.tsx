@@ -634,13 +634,15 @@ export function App() {
   async function uploadBackground(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; event.target.value = '';
     if (!file || !campaign || !scene) return;
+    setError('');
     const form = new FormData(); form.set('file', file);
     try {
-      const upload = await fetch(`/api/campaigns/${campaign.campaign.id}/assets`, { method: 'POST', credentials: 'include', body: form });
-      const uploaded = await upload.json(); if (!upload.ok) throw new Error(uploaded.error ?? 'UPLOAD_FAILED');
+      const uploaded = await api<{ asset: CampaignAsset }>(`/api/campaigns/${campaign.campaign.id}/assets`, { method: 'POST', body: form, recoverable: 'scene' });
+      if (!commandHistory.isCurrent()) return;
       const updated = await api<{ scene: Scene }>(`/api/scenes/${scene.id}/background`, { method: 'PUT', body: JSON.stringify({ assetId: uploaded.asset.id, expectedVersion: scene.version }) });
+      if (!commandHistory.isCurrent()) return;
       setScene(updated.scene); setScenes((items) => items.map((item) => item.id === scene.id ? updated.scene : item)); setNotice('Map uploaded');
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) { if (commandHistory.isCurrent()) setError((e as Error).message); }
   }
   async function openAssetLibrary() {
     if (!campaign) return;
@@ -650,13 +652,19 @@ export function App() {
   async function uploadAssetFiles(files: File[]) {
     if (!files.length || !campaign) return;
     setError('');
+    const assetPath = `/api/campaigns/${campaign.campaign.id}/assets`;
     const form = new FormData(); for (const file of files) form.append('files', file);
     try {
-      const result = await api<{ assets: CampaignAsset[]; failures?: Array<{ filename: string; error: string }> }>(`/api/campaigns/${campaign.campaign.id}/assets?category=${assetUploadCategory}`, { method: 'POST', body: form, recoverable: true });
-      setAssets((items) => [...result.assets.map((item: CampaignAsset) => ({ ...item, folderId: null, usageCount: 0 })), ...items]); setAssetStorageBytes((bytes) => bytes + result.assets.reduce((total: number, item: CampaignAsset) => total + item.size, 0));
-      if (result.failures?.length) setError(`${result.failures.length} ${t('assetUploadFailed')}`);
+      const result = await api<{ assets: CampaignAsset[]; failures?: Array<{ filename: string; error: string }> }>(`${assetPath}?category=${assetUploadCategory}`, { method: 'POST', body: form, recoverable: true });
+      const library = await api<{ assets: CampaignAsset[]; folders: AssetFolder[]; storageBytes: number }>(assetPath);
+      if (!isCurrentScope()) return;
+      setAssets(library.assets); setAssetFolders(library.folders); setAssetStorageBytes(library.storageBytes);
+      if (result.failures?.length) {
+        const retry = i18n.language === 'ru' ? 'Повторите загрузку с теми же файлами в том же порядке.' : 'Repeat the upload with the same files in the same order.';
+        setError(`${result.failures.length} ${t('assetUploadFailed')}. ${retry}`);
+      }
       else setNotice(t('assetsUploaded', { count: result.assets.length }));
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) { if (isCurrentScope()) setError((e as Error).message); }
   }
   function uploadAssets(event: React.ChangeEvent<HTMLInputElement>) {
     const files = [...(event.target.files ?? [])]; event.target.value = '';

@@ -133,7 +133,8 @@ try {
   const assetPath = `/api/campaigns/${campaignId}/assets?category=TOKEN`;
   await verifyReplay({ actor: owner, path: assetPath, makeBody: () => upload(png), select: (row) => row.assets.map(({ id }) => id),
     action: 'asset.uploaded', replayStatus: 201, rounds: 5 });
-  await verifyReplay({ actor: owner, path: `/api/campaigns/${campaignId}/duplicate`, select: (row) => [row.campaign.id], action: 'campaign.duplicated', rounds: 5 });
+  const campaignCopyPath = `/api/campaigns/${campaignId}/duplicate`;
+  await verifyReplay({ actor: owner, path: campaignCopyPath, select: (row) => [row.campaign.id], action: 'campaign.duplicated', rounds: 5 });
 
   const assetKey = randomUUID();
   const assetSend = (expected, bytes = png, headers) => request(assetPath, { actor: owner, key: assetKey, body: upload(bytes), expected, headers });
@@ -150,6 +151,39 @@ try {
   assert.ok(filesAfter.every((file) => !file.endsWith('.pending')));
   await assertAudits([asset.id], 'asset.uploaded');
   console.log(`PASS asset file compensation/content conflict, rollback+retry ${rollbackAndRetryMs.toFixed(2)}ms (n=1), fixture ${png.byteLength} bytes`);
+
+  const batchKey = randomUUID();
+  const batch = (secondFile) => {
+    const form = upload(png, 'first.png');
+    form.append('file', new Blob([secondFile], { type: 'image/png' }), 'second.png');
+    return form;
+  };
+  const partial = (await request(assetPath, { actor: owner, key: batchKey, body: batch(Buffer.from('invalid image')), expected: 207 })).result;
+  assert.equal(partial.assets.length, 1);
+  assert.equal(partial.failures.length, 1);
+  const recovered = (await request(assetPath, { actor: owner, key: batchKey, body: batch(otherPng), expected: 201 })).result;
+  assert.equal(recovered.assets.length, 2);
+  assert.equal(recovered.assets[0].id, partial.assets[0].id);
+  await assertAudits(recovered.assets.map(({ id }) => id), 'asset.uploaded');
+  console.log('PASS partial upload keeps the committed slot and fills the failed slot');
+
+  const campaignCopyKey = randomUUID();
+  const filesBeforeCopy = new Set(await readdir(uploadDir));
+  await db.query(`CREATE FUNCTION nri_retry_fail_copy_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW.action = 'campaign.duplicated' THEN RAISE EXCEPTION 'isolated campaign-copy fault'; END IF; RETURN NEW; END $$`);
+  try {
+    await db.query('CREATE TRIGGER nri_retry_fail_copy_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION nri_retry_fail_copy_audit()');
+    await request(campaignCopyPath, { actor: owner, key: campaignCopyKey, expected: 500 });
+    assert.deepEqual(new Set(await readdir(uploadDir)), filesBeforeCopy);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM rest_operation_receipts WHERE request_id=$1', [campaignCopyKey])).rows[0].n, 0);
+  } finally {
+    await db.query('DROP TRIGGER IF EXISTS nri_retry_fail_copy_audit ON audit_events');
+    await db.query('DROP FUNCTION nri_retry_fail_copy_audit()');
+  }
+  const campaignCopy = (await request(campaignCopyPath, { actor: owner, key: campaignCopyKey, expected: 201 })).result.campaign.id;
+  assert.equal((await request(campaignCopyPath, { actor: owner, key: campaignCopyKey })).result.campaign.id, campaignCopy);
+  await assertAudits([campaignCopy], 'campaign.duplicated');
+  console.log('PASS campaign copy SQL rollback releases the key and cleans staging before retry');
 
   const campaignKey = randomUUID();
   const scopedCampaign = (actor, body, expected) => request('/api/campaigns', { actor, key: campaignKey, body, expected });

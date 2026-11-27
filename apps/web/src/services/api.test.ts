@@ -54,4 +54,20 @@ describe('recoverable REST requests', () => {
     await expect(submit()).rejects.toThrow('OUTCOME_UNKNOWN');
     expect(ids[1]).toBe(ids[0]);
   });
+
+  it('keeps a partially successful batch key until the same upload completes', async () => {
+    const ids: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      ids.push(new Headers(init?.headers).get('idempotency-key') ?? '');
+      return new Response(JSON.stringify({ assets: [{ id: 'original' }] }), { status: ids.length === 1 ? 207 : 201 });
+    }));
+    const body = new FormData();
+    body.append('file', new File(['file'], 'fixture.png', { lastModified: 1, type: 'image/png' }));
+    const submit = () => api('/api/campaigns/campaign/assets', { method: 'POST', body, recoverable: true });
+    await submit();
+    await submit();
+    await submit();
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
 });
