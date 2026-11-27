@@ -16,6 +16,7 @@
     "test:movement": "node scripts/transactional-movement.mjs",
     "test:object-lifecycle": "node scripts/transactional-object-lifecycle.mjs",
     "test:realtime": "node scripts/secure-realtime.mjs",
+    "test:private-channels": "node scripts/private-channels.mjs",
     "test": "vitest run"
   },
   "dependencies": {

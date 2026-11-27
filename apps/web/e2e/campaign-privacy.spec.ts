@@ -31,6 +31,27 @@ test('separate GM and player contexts keep drafts and GM objects private', async
   const gmPage = await gmContext.newPage();
   const playerPage = await playerContext.newPage();
   const observerPage = await observerContext.newPage();
+  const frames = new Map<string, Map<string, string>>();
+  const wires = new Map<string, import('@playwright/test').WebSocketRoute>();
+  for (const [key, page] of [['player', playerPage], ['observer', observerPage]] as const) {
+    const latest = new Map<string, string>();
+    frames.set(key, latest);
+    await page.routeWebSocket((url) => url.pathname === '/socket.io/', (wire) => {
+      wires.set(key, wire);
+      wire.connectToServer().onMessage((packet) => {
+        if (typeof packet === 'string' && packet.startsWith('42[')) {
+          const [name] = JSON.parse(packet.slice(2)) as [string];
+          if (['chat:private', 'dice:result', 'initiative:gm_updated', 'token:owner_note'].includes(name)) latest.set(name, packet);
+        }
+        wire.send(packet);
+      });
+    });
+  }
+  function replay(key: string, event: string) {
+    const packet = frames.get(key)?.get(event);
+    expect(packet, `Expected a real ${event} frame for ${key}`).toBeDefined();
+    wires.get(key)!.send(packet!);
+  }
   let releaseHistoryHydration = () => {};
   const historyHydration = new Promise<void>((resolve) => { releaseHistoryHydration = resolve; });
   for (const page of [playerPage, observerPage]) {
@@ -298,6 +319,7 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await gmPage.getByRole('button', { name: 'Send' }).click();
     await expect(playerPage.locator('.chat-messages')).toContainText(privateMessage);
     await expect(observerPage.locator('.chat-messages')).not.toContainText(privateMessage);
+    replay('player', 'chat:private');
     await gmPage.getByLabel('Message recipient').selectOption('');
 
     const priorPlayerRollCount = await playerPage.locator('.roll-row').count();
@@ -310,6 +332,7 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await gmPage.getByRole('button', { name: /d20/ }).click();
     await expect(gmPage.locator('.roll-row')).toHaveCount(priorGmRollCount + 1);
     await expect(gmPage.locator('.roll-row').first()).toContainText('Private roll · GMs only');
+    await expect(playerPage.locator('.chat-message').filter({ hasText: privateMessage })).toHaveCount(1);
     await expect(playerPage.locator('.roll-row')).toHaveCount(priorPlayerRollCount + 1);
     await expect(observerPage.locator('.roll-row')).toHaveCount(priorObserverRollCount + 1);
     await gmPage.getByLabel('Private roll · GMs only').uncheck();
@@ -339,7 +362,63 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     await expect(playerPage.locator('.initiative-list .initiative-row').filter({ hasText: hiddenInitiativeLabel })).toHaveCount(0);
     await expect(playerPage.locator('.initiative-list .initiative-row.active')).toHaveCount(0);
     await expect(observerPage.locator('.initiative-list .initiative-row')).toHaveCount(visibleEntries.length);
-    await gmPage.getByRole('button', { name: /Next turn/ }).click();
+    const { user: observerUser } = (await requestJson(observerPage, '/api/auth/me')).body as { user: { id: string } };
+    const { user: playerUser } = (await requestJson(playerPage, '/api/auth/me')).body as { user: { id: string } };
+    const observerRole = `/api/campaigns/${activeScene.campaignId}/members/${observerUser.id}/role`;
+    expect((await requestJson(gmPage, observerRole, 'POST', { role: 'GM' })).status).toBe(200);
+    await expect(observerPage.locator('.role-badge')).toHaveText('GM');
+    await expect(observerPage.locator('.live-status')).toHaveText('Live');
+    await expect(observerPage.locator('.initiative-row').filter({ hasText: hiddenInitiativeLabel })).toHaveCount(1);
+    await gmPage.getByLabel('Private roll · GMs only').check();
+    await gmPage.getByRole('button', { name: /d20/ }).click();
+    await expect(observerPage.locator('.roll-row').filter({ hasText: 'Private roll · GMs only' })).toHaveCount(1);
+    await gmPage.getByLabel('Private roll · GMs only').uncheck();
+
+    const initiativePath = `/api/campaigns/${activeScene.campaignId}/initiative`;
+    let releaseDelayed = () => {};
+    const delayResponse = new Promise<void>((resolve) => { releaseDelayed = resolve; });
+    let captureResponse = (_value: unknown) => {};
+    const capturedResponse = new Promise<unknown>((resolve) => { captureResponse = resolve; });
+    await observerPage.route(`**${initiativePath}`, async (route) => {
+      const response = await route.fetch();
+      captureResponse(await response.json());
+      await delayResponse;
+      await route.fulfill({ response });
+    }, { times: 1 });
+    try {
+      // A real update triggers both projections and a privileged snapshot while the socket is still GM.
+      await gmPage.getByRole('button', { name: /Next turn/ }).click();
+      expect(JSON.stringify(await capturedResponse)).toContain(hiddenInitiativeLabel);
+      await expect.poll(() => frames.get('observer')?.get('initiative:gm_updated')).toContain(hiddenInitiativeLabel);
+      expect((await requestJson(gmPage, observerRole, 'POST', { role: 'PLAYER' })).status).toBe(200);
+      await expect(observerPage.locator('.role-badge')).toHaveText('PLAYER');
+      await expect(observerPage.locator('.live-status')).toHaveText('Live');
+      await expect(observerPage.locator('.initiative-row')).toHaveCount(visibleEntries.length);
+      const delayed = observerPage.waitForResponse(async (response) =>
+        response.url().endsWith(initiativePath) && response.ok() && JSON.stringify(await response.json()).includes(hiddenInitiativeLabel));
+      releaseDelayed();
+      await delayed;
+      replay('observer', 'initiative:gm_updated');
+      replay('observer', 'dice:result');
+      await expect(observerPage.locator('.initiative-row').filter({ hasText: hiddenInitiativeLabel })).toHaveCount(0);
+      await expect(observerPage.locator('.roll-row').filter({ hasText: 'Private roll · GMs only' })).toHaveCount(0);
+    } finally { releaseDelayed(); }
+
+    const tokenPath = `/api/tokens/${token.id}`;
+    const ownerNote = `Current owner note ${suffix}`;
+    const assigned = await requestJson(gmPage, `${tokenPath}/owner`, 'POST', { ownerUserId: playerUser.id });
+    expect(assigned.status).toBe(200);
+    const { token: assignedToken } = assigned.body as { token: { version: number } };
+    const noteEdit = await requestJson(gmPage, tokenPath, 'PATCH', { expectedVersion: assignedToken.version, ownerNote });
+    expect(noteEdit.status).toBe(200);
+    await expect(playerPage.locator('.token-owner-notes')).toContainText(ownerNote);
+    await expect(observerPage.locator('.token-owner-notes')).toHaveCount(0);
+    const transferred = await requestJson(gmPage, `${tokenPath}/owner`, 'POST', { ownerUserId: observerUser.id });
+    expect(transferred.status).toBe(200);
+    await expect(observerPage.locator('.token-owner-notes')).toContainText(ownerNote);
+    await expect(playerPage.locator('.token-owner-notes')).toHaveCount(0);
+    replay('player', 'token:owner_note');
+    await expect(playerPage.locator('.token-owner-notes')).toHaveCount(0);
     await expect(playerPage.locator('.initiative-list .initiative-row.active')).toHaveCount(1);
     await gmPage.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(playerPage.getByText('Initiative is not active.')).toBeVisible();
@@ -444,6 +523,7 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     expect((stillPrivateScenes.body as Array<{ id: string }>).map((scene) => scene.id)).toEqual([activeScene.id]);
   } finally {
     releaseHistoryHydration();
+    await Promise.all([playerPage.unrouteAll({ behavior: 'wait' }), observerPage.unrouteAll({ behavior: 'wait' })]);
     await Promise.allSettled([gmContext.close(), playerContext.close(), observerContext.close()]);
   }
 });

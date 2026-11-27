@@ -94,6 +94,26 @@ jobs:
         run: pnpm --filter @nri/server test:realtime
         env:
           NRI_API_URL: http://127.0.0.1:3000
+      - name: Test private channel permissions and delivery
+        run: |
+          node apps/server/dist/index.js > /tmp/nri-private-server.log 2>&1 &
+          private_api=$!
+          trap 'kill "$private_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$NRI_API_URL/api/ready"; then
+              pnpm --filter @nri/server test:private-channels
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-private-server.log
+          exit 1
+        env:
+          NRI_API_URL: http://127.0.0.1:3003
+          HOST: 127.0.0.1
+          PORT: 3003
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-private-media
       - name: Start fresh API for browser tests
         run: |
           cd apps/server

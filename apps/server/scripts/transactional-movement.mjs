@@ -169,8 +169,18 @@ try {
   const { result: invite } = await request('/api/invitations', 'POST', owner, { campaignId: campaign.id }, 201);
   for (const actor of [gm, player, other]) await request(`/api/invitations/${invite.invitation}/accept`, 'POST', actor);
   const memberPath = (actor) => `/api/campaigns/${campaign.id}/members/${actor.id}`;
-  const changeRole = (actor, role) => request(`${memberPath(actor)}/role`, 'POST', owner, { role });
-  const remove = (actor) => request(memberPath(actor), 'DELETE', owner, undefined, 204);
+  let gmRole;
+  const changeRole = async (actor, role) => {
+    const result = await request(`${memberPath(actor)}/role`, 'POST', owner, { role });
+    if (actor === gm) gmRole = role;
+    return result;
+  };
+  const removed = new Set();
+  const remove = async (actor) => {
+    const result = await request(memberPath(actor), 'DELETE', owner, undefined, 204);
+    removed.add(actor.id);
+    return result;
+  };
   await changeRole(gm, 'GM');
 
   const gmSocket = await connect(gm, campaign.id, 'GM');
@@ -180,14 +190,38 @@ try {
   const observer = await connect(other, campaign.id, 'PLAYER');
   const ownerSocket = await connect(owner, campaign.id, 'OWNER');
 
+  function publicSockets() {
+    return [ownerSocket, gmSocket, gmSecond, ...(removed.has(player.id) ? [] : [playerSocket, playerSecond]),
+      ...(removed.has(other.id) ? [] : [observer])];
+  }
+
+  async function waitForSetup(mark, event, token, privateScene = false) {
+    const listeners = privateScene || token.hidden
+      ? [ownerSocket, ...(gmRole === 'GM' ? [gmSocket, gmSecond] : [])] : publicSockets();
+    await Promise.all(listeners.map((socket) => until(() => events.slice(mark).some((packet) =>
+      packet.socket === socket && packet.name === event && packet.data.id === token.id && packet.data.version === token.version),
+    `${event} was not received for setup token ${token.id} at revision ${token.version}`)));
+    return token;
+  }
+
   async function makeToken(name, scene = active, hidden = false) {
-    return (await request('/api/tokens', 'POST', owner, { sceneId: scene.id, name, x: 2, y: 3, hidden }, 201)).result.token;
+    const mark = events.length;
+    const token = (await request('/api/tokens', 'POST', owner, { sceneId: scene.id, name, x: 2, y: 3, hidden }, 201)).result.token;
+    return scene.id === foreignScene.id ? token : waitForSetup(mark, 'token:created', token, scene.id !== active.id);
   }
   async function assign(token, actor) {
     return (await request(`/api/tokens/${token.id}/owner`, 'POST', owner, { ownerUserId: actor?.id ?? null })).result.token;
   }
   async function edit(token, fields) {
     return (await request(`/api/tokens/${token.id}`, 'PATCH', owner, { expectedVersion: token.version, ...fields })).result.token;
+  }
+  async function setupAssignment(token, actor) {
+    const mark = events.length;
+    return waitForSetup(mark, 'token:updated', await assign(token, actor), token.sceneId !== active.id);
+  }
+  async function setupEdit(token, fields) {
+    const mark = events.length;
+    return waitForSetup(mark, 'token:updated', await edit(token, fields));
   }
   async function denied(socket, token, error = 'FORBIDDEN', expectedVersion = token.version) {
     const before = await state(token.id);
@@ -208,8 +242,8 @@ try {
     return ack.token;
   }
 
-  let playerToken = await assign(await makeToken('Owned'), player);
-  playerToken = await edit(playerToken, {
+  let playerToken = await setupAssignment(await makeToken('Owned'), player);
+  playerToken = await setupEdit(playerToken, {
     gmNote: 'GM-only fixture note', ownerNote: 'Owner-only fixture note',
     resources: [
       { label: 'Private resource', current: 2, maximum: 5, visible: false },
@@ -217,10 +251,10 @@ try {
     ],
   });
   const unclaimed = await makeToken('Unclaimed');
-  const locked = await edit(await makeToken('Locked'), { locked: true });
-  const hidden = await assign(await makeToken('Hidden', active, true), player);
+  const locked = await setupEdit(await makeToken('Locked'), { locked: true });
+  const hidden = await setupAssignment(await makeToken('Hidden', active, true), player);
   const foreign = await makeToken('Foreign', foreignScene);
-  const unpublished = await assign(await makeToken('Draft token', draft), player);
+  const unpublished = await setupAssignment(await makeToken('Draft token', draft), player);
 
   await scenario('GM can move an unclaimed token and persist a single audit record', async () => {
     await moved(gmSocket, observer, unclaimed, 27, 40);
@@ -298,7 +332,7 @@ try {
   });
 
   await scenario('owner reassignment queued first invalidates the former owner’s move', async () => {
-    const token = await assign(await makeToken('Reassigned'), player);
+    const token = await setupAssignment(await makeToken('Reassigned'), player);
     const mark = events.length;
     const [updated, ack] = await writerFirst(tokenGate, [token.id], () => assign(token, other), tokenLock,
       () => move(playerSocket, token), tokenLock);
@@ -309,7 +343,7 @@ try {
   });
 
   await scenario('archiving a scene first suppresses concurrent movement', async () => {
-    const token = await assign(await makeToken('Archived concurrently'), player);
+    const token = await setupAssignment(await makeToken('Archived concurrently'), player);
     const mark = events.length;
     const before = await state(token.id);
     const [response, ack] = await writerFirst(campaignGate, [campaign.id],
@@ -324,9 +358,9 @@ try {
   });
 
   await scenario('locking a token first prevents a concurrent move', async () => {
-    const token = await assign(await makeToken('Locked concurrently'), player);
+    const token = await setupAssignment(await makeToken('Locked concurrently'), player);
     const mark = events.length;
-    const [updated, ack] = await writerFirst(tokenGate, [token.id], () => edit(token, { locked: true }), 'update "tokens"%',
+    const [updated, ack] = await writerFirst(tokenGate, [token.id], () => edit(token, { locked: true }), tokenLock,
       () => move(playerSocket, token), tokenLock);
     assert.deepEqual(ack, { error: 'FORBIDDEN' });
     const row = await state(token.id);
@@ -370,6 +404,7 @@ try {
       const event = await waitForEvent(mark, observer, 'token:updated', token.id);
       assert.equal(event.version, row.version);
       assert.equal(Object.hasOwn(event, 'gmNote'), false);
+      await Promise.all(publicSockets().map((socket) => waitForEvent(mark, socket, 'token:updated', token.id)));
     }
     const stale = await move(gmSocket, { ...first, id: first.id.toUpperCase() });
     assert.equal(stale.error, 'CONFLICT');
@@ -405,7 +440,7 @@ try {
   });
 
   await scenario('membership removal queued first rejects movement on every active connection', async () => {
-    const token = await assign(await makeToken('Removal queued first'), player);
+    const token = await setupAssignment(await makeToken('Removal queued first'), player);
     const mark = events.length;
     const before = await state(token.id);
     const [, ack] = await writerFirst(memberGate, [campaign.id, player.id], () => remove(player),
@@ -420,7 +455,7 @@ try {
   });
 
   await scenario('move holding membership commits before concurrent removal and subsequent moves fail', async () => {
-    const token = await assign(await makeToken('Move queued first'), other);
+    const token = await setupAssignment(await makeToken('Move queued first'), other);
     const mark = events.length;
     const [ack] = await gated(tokenGate, [token.id], async (pid, start) => {
       start(() => move(observer, token));

@@ -5,9 +5,9 @@ import { sceneObjectProjection } from '../dist/domain/projections.js';
 const repetitions = 20;
 const precision = (number) => Number(number.toFixed(3));
 const rank = (samples, quantile) => [...samples].sort((a, b) => a - b)[Math.ceil(quantile * samples.length) - 1];
-const percentiles = (values) => values.length ? { p50: precision(rank(values, 0.50)), p95: precision(rank(values, 0.95)) } : null;
+export const percentiles = (values) => values.length ? { p50: precision(rank(values, 0.50)), p95: precision(rank(values, 0.95)) } : null;
 
-async function settle(db) {
+export async function settle(db) {
   for (let attempt = 0; attempt < 80; attempt++) {
     const { rows: [row] } = await db.query(`SELECT NOT EXISTS (
       SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
@@ -19,7 +19,7 @@ async function settle(db) {
   assert.fail('Publisher did not finish the profiling transaction');
 }
 
-async function snapshot(db) {
+export async function snapshot(db) {
   return (await db.query(`SELECT query, calls FROM pg_stat_statements
     WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
     AND query NOT LIKE '%pg_stat_statements%' AND query NOT LIKE '%pg_stat_activity%'`)).rows;
