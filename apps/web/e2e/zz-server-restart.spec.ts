@@ -64,6 +64,18 @@ test('GM and Player sessions recover persisted campaign state after API restart'
     const tokenResponse = await gmPage.request.post(`${baseURL}/api/tokens`, tokenRequest);
     expect(tokenResponse.status()).toBe(201);
     const tokenId = (await tokenResponse.json()).token.id;
+    const sourceResponse = await gmPage.request.post(`${baseURL}/api/tokens`, { data: { sceneId, name: 'Temporary copy source', x: 1, y: 1 } });
+    expect(sourceResponse.status()).toBe(201);
+    const { token: sourceToken } = await sourceResponse.json();
+    const copyPath = `${baseURL}/api/tokens/${sourceToken.id}/duplicate`;
+    const copyRequest = { headers: { 'idempotency-key': crypto.randomUUID() },
+      data: { sceneId, expectedVersion: sourceToken.version, x: 5, y: 6 } };
+    const copy = await gmPage.request.post(copyPath, copyRequest);
+    expect(copy.status()).toBe(201);
+    const { token: copiedToken } = await copy.json();
+    expect((await gmPage.request.delete(`${baseURL}/api/tokens/${sourceToken.id}`, {
+      data: { expectedVersion: sourceToken.version },
+    })).status()).toBe(204);
     const inviteResponse = await requestJson(gmPage, '/api/invitations', 'POST', { campaignId });
     expect(inviteResponse.status).toBe(201);
     const invite = (inviteResponse.body as { invitation: string }).invitation;
@@ -112,6 +124,9 @@ test('GM and Player sessions recover persisted campaign state after API restart'
     const replay = await gmPage.request.post(`${baseURL}/api/tokens`, tokenRequest);
     expect(replay.status()).toBe(200);
     expect((await replay.json()).token.id).toBe(tokenId);
+    const recoveredCopy = await gmPage.request.post(copyPath, copyRequest);
+    expect(recoveredCopy.status()).toBe(200);
+    expect((await recoveredCopy.json()).token.id).toBe(copiedToken.id);
     const gmTokens = (await requestJson(gmPage, `/api/scenes/${sceneId}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
     const playerTokens = (await requestJson(playerPage, `/api/scenes/${sceneId}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
     expect(gmTokens).toContainEqual(expect.objectContaining({ id: tokenId, x: 7, y: 11 }));

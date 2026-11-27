@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { readdir, rename } from 'node:fs/promises';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import pg from 'pg';
@@ -183,6 +186,17 @@ try {
   const campaignCopy = (await request(campaignCopyPath, { actor: owner, key: campaignCopyKey, expected: 201 })).result.campaign.id;
   assert.equal((await request(campaignCopyPath, { actor: owner, key: campaignCopyKey })).result.campaign.id, campaignCopy);
   await assertAudits([campaignCopy], 'campaign.duplicated');
+  const { rows: [assetRow] } = await db.query('SELECT storage_key FROM assets WHERE id=$1', [asset.id]);
+  const original = join(uploadDir, assetRow.storage_key);
+  const parked = original + '.retry-test';
+  await rename(original, parked);
+  try {
+    const beforeReplay = new Set(await readdir(uploadDir));
+    assert.equal((await request(campaignCopyPath, { actor: owner, key: campaignCopyKey })).result.campaign.id, campaignCopy);
+    assert.deepEqual(new Set(await readdir(uploadDir)), beforeReplay);
+    await assertAudits([campaignCopy], 'campaign.duplicated');
+  } finally { await rename(parked, original); }
+  console.log('PASS completed campaign copy replays without source file I/O');
   console.log('PASS campaign copy SQL rollback releases the key and cleans staging before retry');
 
   const campaignKey = randomUUID();
@@ -202,6 +216,33 @@ try {
   await request(`${member}/role`, { actor: owner, body: { role: 'GM' } });
   const collaboratorToken = (await scopedToken(collaborator, revokedKey, 201)).result.token.id;
   assert.notEqual((await scopedToken(owner, revokedKey, 201)).result.token.id, collaboratorToken);
+
+  const copySource = (await request(tokenPath, { actor: owner, body: { ...tokenBody, name: 'Source scheduled for deletion' }, expected: 201 })).result.token;
+  const recoveryKey = randomUUID();
+  const singlePath = `/api/tokens/${copySource.id}/duplicate`;
+  const singleBody = { ...copyBody, expectedVersion: copySource.version };
+  const sendCopy = (expected, body = singleBody, key = recoveryKey) => request(singlePath, { actor: collaborator, key, expected, body });
+  const copy = (await sendCopy(201)).result.token;
+  const groupPath = `/api/scenes/${sceneId}/tokens/duplicate`;
+  const groupBody = { sceneId, tokens: [copySource, tokensForCopy[1]].map((token) => ({ tokenId: token.id, expectedVersion: token.version, x: 9, y: 10 })) };
+  const groupKey = randomUUID();
+  const sendGroup = (expected) => request(groupPath, { actor: collaborator, key: groupKey, expected, body: groupBody });
+  const group = (await sendGroup(201)).result.tokens;
+  const { result: { token: editedSource } } = await request(`/api/tokens/${copySource.id}`, {
+    actor: owner, method: 'PATCH', body: { expectedVersion: copySource.version, name: 'Edited source' },
+  });
+  assert.equal((await sendCopy(200)).result.token.id, copy.id);
+  assert.equal((await sendCopy(409, { ...singleBody, x: singleBody.x + 1 })).result.error, 'CONFLICT');
+  await request(`/api/tokens/${copySource.id}`, { actor: owner, method: 'DELETE', body: { expectedVersion: editedSource.version }, expected: 204 });
+  assert.equal((await sendCopy(200)).result.token.id, copy.id);
+  assert.deepEqual((await sendGroup(200)).result.tokens.map(({ id }) => id), group.map(({ id }) => id));
+  await sendCopy(404, singleBody, randomUUID());
+  await request(`/api/tokens/${group[0].id}`, { actor: owner, method: 'PATCH', body: { expectedVersion: group[0].version, hidden: true } });
+  assert.equal((await sendGroup(409)).result.error, 'RESULT_UNAVAILABLE');
+  await request(`/api/tokens/${copy.id}`, { actor: owner, method: 'DELETE', body: { expectedVersion: copy.version }, expected: 204 });
+  assert.equal((await sendCopy(409)).result.error, 'RESULT_UNAVAILABLE');
+  await assertAudits([copy.id, ...group.map(({ id }) => id)], 'token.duplicated');
+  console.log('PASS single and group token copy recovery after source edit/deletion, hidden or removed results and digest conflict');
   const { result: { token: healthToken } } = await request(`/api/tokens/${source.id}`, { actor: owner, method: 'PATCH',
     body: { expectedVersion: source.version, resources: [{ label: 'HP', maximum: 20, current: 15, visible: true },
       { label: 'Focus', maximum: 0, current: 0, visible: false }] } });
@@ -214,8 +255,21 @@ try {
   console.log('PASS competing resource adjustments from two accounts apply one version');
   await request(`${member}/role`, { actor: owner, body: { role: 'PLAYER' } });
   await scopedToken(collaborator, revokedKey, 403);
+  await sendCopy(403);
+  await sendGroup(403);
   await request(member, { method: 'DELETE', actor: owner, expected: 204 });
   await scopedToken(collaborator, revokedKey, 403);
+  await sendCopy(403);
+
+  const archivedSource = (await request(scenePath, { actor: owner, body: { ...sceneBody, title: 'Archive source fixture' }, expected: 201 })).result.scene;
+  const sceneCopyPath = `/api/scenes/${archivedSource.id}/duplicate`;
+  const sceneCopyKey = randomUUID();
+  const originalSceneCopy = (await request(sceneCopyPath, { actor: owner, key: sceneCopyKey, expected: 201 })).result.scene;
+  await request(`/api/scenes/${archivedSource.id}/archive`, { actor: owner, method: 'PUT', body: { expectedVersion: archivedSource.version } });
+  assert.equal((await request(sceneCopyPath, { actor: owner, key: sceneCopyKey })).result.scene.id, originalSceneCopy.id);
+  await request(sceneCopyPath, { actor: owner, key: randomUUID(), expected: 404 });
+  await assertAudits([originalSceneCopy.id], 'scene.duplicated');
+  console.log('PASS scene copy recovers after archive without allowing a new copy');
 
   const activeScene = (await db.query('SELECT id FROM scenes WHERE campaign_id=$1 AND is_active', [campaignId])).rows[0].id;
   const socket = io(api.origin, { autoConnect: false, reconnection: false, transports: ['websocket'], extraHeaders: { cookie: owner.cookie } });
@@ -237,6 +291,49 @@ try {
   await db.query("UPDATE rest_operation_receipts SET created_at=now()-interval '91 days', expires_at=now() WHERE actor_id=$1 AND request_id=$2", [owner.id, tokenKey]);
   assert.notEqual((await scopedToken(owner, tokenKey, 201, activeTokenBody)).result.token.id, created.id);
   console.log('PASS actor and campaign scopes, payload conflict, demotion and revocation, single publish, deleted result, expiration');
+
+  const prune = () => promisify(execFile)(process.execPath, ['scripts/prune-operation-receipts.mjs'], {
+    env: { ...process.env, DATABASE_URL: database.href }, timeout: 10_000,
+  });
+  const pruneKeys = [randomUUID(), randomUUID(), randomUUID()];
+  const pruneTokens = await Promise.all(pruneKeys.map(async (key) => (await scopedToken(owner, key, 201, activeTokenBody)).result.token.id));
+  const idsFor = async () => (await db.query('SELECT request_id FROM rest_operation_receipts WHERE request_id=ANY($1::uuid[]) ORDER BY request_id', [pruneKeys])).rows.map(({ request_id }) => request_id);
+  const gameCount = async () => (await db.query(`SELECT
+    (SELECT count(*)::int FROM chat_messages) AS chat,
+    (SELECT count(*)::int FROM dice_rolls) AS dice,
+    (SELECT count(*)::int FROM tokens WHERE id=ANY($1::uuid[])) AS tokens`, [pruneTokens])).rows[0];
+  const gameBefore = await gameCount();
+  await db.query("UPDATE rest_operation_receipts SET created_at=now()-interval '91 days', expires_at=now()-interval '1 day' WHERE request_id=ANY($1::uuid[])", [pruneKeys.slice(1)]);
+  const blocker = await db.connect();
+  try {
+    await blocker.query('BEGIN');
+    await blocker.query('SELECT id FROM rest_operation_receipts WHERE request_id=ANY($1::uuid[]) FOR UPDATE', [pruneKeys.slice(0, 2)]);
+    const concurrentReplay = scopedToken(owner, pruneKeys[0], 200, activeTokenBody);
+    try {
+      await prune();
+      assert.deepEqual(await idsFor(), pruneKeys.slice(0, 2).sort());
+    } finally {
+      await blocker.query('ROLLBACK');
+      assert.equal((await concurrentReplay).result.token.id, pruneTokens[0]);
+    }
+  } finally { blocker.release(); }
+  await prune();
+  assert.deepEqual(await idsFor(), [pruneKeys[0]]);
+  assert.equal((await prune()).stdout.trim(), 'Removed 0 expired REST operation receipts.');
+  assert.deepEqual(await gameCount(), gameBefore);
+  console.log('PASS pruning skips locked rows, preserves live replay and game data, and is safe to rerun');
+
+  const objectKey = randomUUID();
+  const objectCopyPath = `${objectPath}/duplicate`;
+  const copyObjects = (expected) => request(objectCopyPath, { actor: owner, key: objectKey, body: { layerId: layer.id, objects: objectSources }, expected });
+  const copiedObjects = (await copyObjects(201)).result.objects;
+  const deleteObjects = (objects) => request(`/api/scenes/${sceneId}/object-lifecycle`, { actor: owner, method: 'PATCH', body: { action: 'delete', objects } });
+  await deleteObjects(objectSources.map(({ objectId, expectedVersion }) => ({ objectId, expectedVersion })));
+  assert.deepEqual((await copyObjects(200)).result.objects.map(({ id }) => id), copiedObjects.map(({ id }) => id));
+  await deleteObjects([{ objectId: copiedObjects[0].id, expectedVersion: copiedObjects[0].version }]);
+  assert.equal((await copyObjects(409)).result.error, 'RESULT_UNAVAILABLE');
+  await assertAudits(copiedObjects.map(({ id }) => id), 'scene.object_duplicated');
+  console.log('PASS object copy recovers after source deletion and rejects an incomplete result');
 } finally {
   for (const socket of sockets) socket.disconnect();
   await db.end();

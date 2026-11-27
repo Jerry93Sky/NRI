@@ -65,7 +65,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     const requestId = operationRequestId(request.headers['idempotency-key']);
     if (requestId === 'invalid') return reply.code(400).send({ error: 'INVALID_REQUEST_ID' });
     const duplicate = await db.transaction(async (tx) => {
-      const context = await lockCampaignSceneActor(tx, digest(cookie), sceneId, { sceneStrength: 'update' });
+      const context = await lockCampaignSceneActor(tx, digest(cookie), sceneId, { sceneStrength: 'update', includeArchived: Boolean(requestId) });
       if ('error' in context) return context;
       if (context.role !== 'OWNER' && context.role !== 'GM') return { error: 'FORBIDDEN' } as const;
       const source = context.scene;
@@ -75,6 +75,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
         const [scene] = await tx.select().from(scenes).where(and(eq(scenes.id, receipt.resultIds[0]!), eq(scenes.campaignId, source.campaignId), isNull(scenes.archivedAt))).limit(1);
         return scene ? { scene, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' } as const;
       }
+      if (source.archivedAt) return { error: 'NOT_FOUND' as const };
       const [last] = await tx.select({ sortOrder: scenes.sortOrder }).from(scenes).where(eq(scenes.campaignId, source.campaignId)).orderBy(desc(scenes.sortOrder), desc(scenes.id)).limit(1);
       const { id: _id, archivedAt: _archivedAt, version: _version, isActive: _isActive, published: _published, sortOrder: _sortOrder, ...copy } = source;
       const [scene] = await tx.insert(scenes).values({ ...copy, title: `${source.title} (copy)`.slice(0, 80), sortOrder: (last?.sortOrder ?? -1) + 1, isActive: false, published: false, archivedAt: null, version: 1 }).returning();

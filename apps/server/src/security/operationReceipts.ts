@@ -19,7 +19,7 @@ export type ReceiptResult =
   | { kind: 'conflict' }
   | { kind: 'invalid' };
 
-type ReceiptRow = { payload_digest: string; result_ids: string[]; expires_at: Date | string };
+type ReceiptRow = { payload_digest: string; result_ids: string[]; expired: boolean };
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -55,7 +55,7 @@ export async function lockOperationReceipt(
   const identity = `${scope.actorId}:${scope.campaignId ?? 'user'}:${scope.operationType}:${scope.requestId}`;
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${identity}, 0))`);
   const found = await tx.execute(sql`
-    select payload_digest, result_ids, expires_at
+    select payload_digest, result_ids, expires_at <= clock_timestamp() as expired
     from rest_operation_receipts
     where actor_id = ${scope.actorId}::uuid
       and campaign_id is not distinct from ${scope.campaignId}::uuid
@@ -66,7 +66,7 @@ export async function lockOperationReceipt(
   const rows = (found as unknown as { rows: ReceiptRow[] }).rows;
   const existing = rows[0];
   if (existing) {
-    if (new Date(existing.expires_at).getTime() <= Date.now()) {
+    if (existing.expired) {
       await tx.execute(sql`delete from rest_operation_receipts where actor_id = ${scope.actorId}::uuid and campaign_id is not distinct from ${scope.campaignId}::uuid and operation_type = ${scope.operationType} and request_id = ${scope.requestId}::uuid`);
     } else {
       return existing.payload_digest === payloadDigest

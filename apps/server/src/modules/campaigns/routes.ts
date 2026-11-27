@@ -12,8 +12,15 @@ import { digest, parseBody, requireUser, roleFor } from '../../security/access.j
 import { cookieName, uploadDirectory } from '../../config/runtime.js';
 import { archiveCampaignSockets } from '../../realtime/campaignRooms.js';
 import { publishDrawingPermission } from '../../realtime/campaignEvents.js';
-import { commandSessionIsActive, lockCampaignActor, lockCommandSession } from '../../security/commandAccess.js';
+import { commandSessionIsActive, lockCampaignActor, lockCommandSession, type Transaction } from '../../security/commandAccess.js';
 import { lockOperationReceipt, operationRequestId, saveOperationReceipt } from '../../security/operationReceipts.js';
+
+async function readCampaignCopy(tx: Transaction, actorId: string, resultId: string) {
+  const [existing] = await tx.select().from(campaigns)
+    .innerJoin(memberships, and(eq(memberships.campaignId, campaigns.id), eq(memberships.userId, actorId), eq(memberships.role, 'OWNER')))
+    .where(and(eq(campaigns.id, resultId), eq(campaigns.ownerId, actorId), isNull(campaigns.archivedAt))).limit(1);
+  return existing ? { campaign: existing.campaigns, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' as const };
+}
 
 export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns', async (request, reply) => {
@@ -77,6 +84,24 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
     const role = await roleFor(campaignId, user.id);
     if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
 
+    const tokenHash = digest(cookie);
+    if (requestId) {
+      // Completed copies only need authorization and their result. File I/O stays outside this transaction.
+      const recovered = await db.transaction(async (tx) => {
+        const actor = await lockCampaignActor(tx, tokenHash, campaignId);
+        if ('error' in actor) return actor;
+        if (actor.userId !== user.id || (actor.role !== 'OWNER' && actor.role !== 'GM')) return { error: 'FORBIDDEN' as const };
+        const receipt = await lockOperationReceipt(tx, { actorId: actor.userId, campaignId, operationType: 'campaign.duplicate', requestId }, { campaignId });
+        if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' as const };
+        if (receipt.kind === 'conflict') return { error: 'CONFLICT' as const };
+        if (receipt.kind === 'replay') return readCampaignCopy(tx, actor.userId, receipt.resultIds[0]!);
+        return null;
+      });
+      if (recovered && 'error' in recovered) return reply.code(recovered.error === 'UNAUTHENTICATED' ? 401 : recovered.error === 'FORBIDDEN' ? 403 :
+        recovered.error === 'NOT_FOUND' ? 404 : 409).send({ error: recovered.error });
+      if (recovered) return reply.code(200).send({ campaign: recovered.campaign });
+    }
+
     const sourceAssets = await db.select().from(assets).where(eq(assets.campaignId, campaignId));
     const sourceBytes = sourceAssets.reduce((total, asset) => total + asset.size, 0);
     if (sourceAssets.length > 250 || sourceBytes > 256 * 1024 * 1024) return reply.code(413).send({ error: 'CAMPAIGN_COPY_TOO_LARGE' });
@@ -96,18 +121,14 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
       }
 
       const copyWithSnapshot = () => db.transaction(async (tx) => {
-        const actor = await lockCampaignActor(tx, digest(cookie), campaignId, { strength: 'update' });
+        const actor = await lockCampaignActor(tx, tokenHash, campaignId, { strength: 'update' });
         if ('error' in actor) return actor;
         if (actor.userId !== user.id || (actor.role !== 'OWNER' && actor.role !== 'GM')) return { error: 'FORBIDDEN' as const };
         const [source] = await tx.select().from(campaigns).where(and(eq(campaigns.id, campaignId), isNull(campaigns.archivedAt))).limit(1);
         if (!source) return { error: 'NOT_FOUND' as const };
         const receipt = requestId ? await lockOperationReceipt(tx, { actorId: actor.userId, campaignId, operationType: 'campaign.duplicate', requestId }, { campaignId }) : null;
         if (receipt?.kind === 'conflict') return { error: 'CONFLICT' as const };
-        if (receipt?.kind === 'replay') {
-          const [existing] = await tx.select().from(campaigns).innerJoin(memberships, and(eq(memberships.campaignId, campaigns.id), eq(memberships.userId, actor.userId), eq(memberships.role, 'OWNER')))
-            .where(and(eq(campaigns.id, receipt.resultIds[0]!), eq(campaigns.ownerId, actor.userId), isNull(campaigns.archivedAt))).limit(1);
-          return existing ? { campaign: existing.campaigns, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' as const };
-        }
+        if (receipt?.kind === 'replay') return readCampaignCopy(tx, actor.userId, receipt.resultIds[0]!);
 
         const sourceSceneRows = await tx.select().from(scenes).where(eq(scenes.campaignId, campaignId)).orderBy(asc(scenes.sortOrder), asc(scenes.id));
         const sourceSceneIds = sourceSceneRows.map((scene) => scene.id);
