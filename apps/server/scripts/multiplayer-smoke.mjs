@@ -461,7 +461,10 @@ const rolePath = `/api/campaigns/${campaign.id}/members/${player.user.id}/role`;
 const promotedFirst = expectEvent(playerClient.socket, 'membership:changed');
 const promotedSecond = expectEvent(sameSessionTab.socket, 'membership:changed');
 await request(rolePath, { method: 'POST', cookie: owner.cookie, body: { role: 'GM' } });
-assert.deepEqual((await Promise.all([promotedFirst, promotedSecond])).map((event) => event.role), ['GM', 'GM']);
+assert.deepEqual(await Promise.all([promotedFirst, promotedSecond]), [
+  { campaignId: campaign.id, userId: player.user.id }, { campaignId: campaign.id, userId: player.user.id },
+]);
+assert.equal((await request(`/api/campaigns/${campaign.id}/members`, { cookie: owner.cookie })).result.find(({ userId }) => userId === player.user.id).role, 'GM');
 const gmDelivery = expectEvent(sameSessionTab.socket, 'dice:result');
 assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.id, expression: '1d20', hidden: true })).ok, true);
 assert.equal((await gmDelivery).hidden, true);

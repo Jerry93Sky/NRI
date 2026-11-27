@@ -14,7 +14,7 @@ const timeout = 6500;
 const sockets = [];
 const events = [];
 const eventsOfInterest = new Set(['chat:private', 'chat:message', 'dice:result', 'initiative:updated', 'initiative:gm_updated',
-  'token:owner_note', 'token:created', 'token:updated', 'token:hidden']);
+  'token:owner_note', 'token:created', 'token:updated', 'token:hidden', 'scene:pointer', 'scene:updated', 'scene:activated']);
 let passed = 0;
 const query = (sql, params) => db.query(sql, params);
 
@@ -144,7 +144,8 @@ try {
   const foreign = await makeCampaign('Separate campaign');
   const cid = campaign.id;
   const path = '/api/campaigns/' + cid;
-  const scene = (await request('/api/scenes', 'POST', owner, { campaignId: cid, title: 'Live' }, 201)).result.scene;
+  let scene = (await request('/api/scenes', 'POST', owner, { campaignId: cid, title: 'Live' }, 201)).result.scene;
+  let draftScene;
   const memberPath = (actor) => path + '/members/' + actor.id;
   const join = async (actor, campaignId = cid) => {
     const { result } = await request('/api/invitations', 'POST', owner, { campaignId }, 201);
@@ -162,7 +163,8 @@ try {
   const roll = (socket, expression, hidden = true, campaignId = cid) => ack(socket, 'dice:roll', { campaignId, expression, hidden });
   if (process.argv.includes('--profile')) {
     const { runProfile } = await import('./private-channels-profile.mjs');
-    await runProfile({ query, owner, player, own, cid, connect, send, roll });
+    const playerWire = await connect(player, cid, 'PLAYER');
+    await runProfile({ query, owner, player, own, playerWire, scene, cid, connect, send, roll });
   } else {
     let master = await connect(gm, cid, 'GM');
     const masterTab = await connect(gm, cid, 'GM');
@@ -183,6 +185,100 @@ try {
       p = await connect(player, cid, 'PLAYER');
       pTab = await connect(player, cid, 'PLAYER');
     };
+
+    await scenario('active pointers reach the current campaign audience and drafts stay manager-only', async () => {
+      const draft = (await request('/api/scenes', 'POST', owner, { campaignId: cid, title: 'Private draft' }, 201)).result.scene;
+      draftScene = draft;
+      const mark = events.length;
+      assert.deepEqual(await ack(own, 'scene:pointer', { campaignId: cid, sceneId: scene.id, x: 12, y: 24 }), { ok: true });
+      assert.deepEqual(await ack(own, 'scene:pointer', { campaignId: cid, sceneId: scene.id, x: 13, y: 24 }), { error: 'RATE_LIMITED' });
+      await until(() => events.slice(mark).find((event) => event.socket === p && event.name === 'scene:pointer')?.data, 'Active pointer did not reach player');
+      assert.equal(events.slice(mark).some((event) => event.socket === foreignWire && event.name === 'scene:pointer'), false);
+      await delay(60);
+      const draftMark = events.length;
+      assert.deepEqual(await ack(own, 'scene:pointer', { campaignId: cid, sceneId: draft.id, x: 12, y: 24 }), { ok: true });
+      await until(() => events.slice(draftMark).find((event) => event.socket === master && event.name === 'scene:pointer')?.data, 'Draft pointer did not reach GM');
+      await delay(120);
+      assert.equal(events.slice(draftMark).some((event) => [p, pTab, observerWire].includes(event.socket) && event.name === 'scene:pointer'), false);
+      assert.deepEqual(await ack(p, 'scene:pointer', { campaignId: cid, sceneId: draft.id, x: 12, y: 24 }), forbidden);
+      assert.deepEqual(await ack(own, 'scene:pointer', { campaignId: foreign.id, sceneId: scene.id, x: 12, y: 24 }), forbidden);
+      assert.deepEqual(await ack(own, 'scene:pointer', { campaignId: cid, sceneId: scene.id, x: 9000, y: 24 }), { error: 'INVALID' });
+      await remove(player);
+      assert.deepEqual(await ack(p, 'scene:pointer', { campaignId: cid, sceneId: scene.id, x: 16, y: 20 }), forbidden);
+      await rejoinPlayer();
+    });
+
+    await scenario('a PostgreSQL role change ordered ahead of pointer publication suppresses the stale GM packet', async () => {
+      await delay(60);
+      const mark = events.length;
+      const [, reply] = await writerFirst(memberGate, [cid, gm.id], () => role(gm, 'PLAYER'), '%update "campaign_memberships"%',
+        () => ack(own, 'scene:pointer', { campaignId: cid, sceneId: draftScene.id, x: 33, y: 44 }), memberRead);
+      assert.deepEqual(reply, { ok: true });
+      await delay(120);
+      assert.equal(events.slice(mark).some((event) => event.socket === master && event.name === 'scene:pointer'), false);
+      await role(gm, 'GM');
+    });
+
+    await scenario('scene update sends only the current active projection to authorized campaign members', async () => {
+      const mark = events.length;
+      const updated = (await request('/api/scenes/' + scene.id, 'PATCH', owner, { title: 'Live current', expectedVersion: scene.version })).result.scene;
+      scene = updated;
+      const packet = await until(() => events.slice(mark).find((event) => event.socket === p && event.name === 'scene:updated')?.data, 'Scene update did not reach player');
+      assert.equal(packet.scene.id, scene.id);
+      assert.equal(packet.scene.title, 'Live current');
+      assert.equal(packet.scene.version, updated.version);
+      assert.equal(events.slice(mark).some((event) => event.socket === foreignWire && event.name === 'scene:updated'), false);
+    });
+
+    await scenario('a PostgreSQL member deletion ordered before scene publication excludes the stale socket', async () => {
+      const mark = events.length;
+      await gated(memberGate, [cid, player.id], async (pid, start, gate) => {
+        start(() => request('/api/scenes/' + scene.id, 'PATCH', owner, { title: 'Current after removal', expectedVersion: scene.version }));
+        await waitOn([pid], memberRead);
+        await gate.query('DELETE FROM campaign_memberships WHERE campaign_id = $1 AND user_id = $2', [cid, player.id]);
+      });
+      const [{ version }] = (await query('SELECT version FROM scenes WHERE id = $1', [scene.id])).rows;
+      scene = { ...scene, version };
+      await delay(120);
+      assert.equal(events.slice(mark).some((event) => [p, pTab].includes(event.socket) && event.name === 'scene:updated'), false);
+      await rejoinPlayer();
+    });
+
+    await scenario('a superseding scene version committed before publication drops the older scene packet', async () => {
+      const mark = events.length;
+      await gated('SELECT id FROM campaigns WHERE id = $1 FOR UPDATE', [cid], async (_pid, start) => {
+        start(() => request('/api/scenes/' + scene.id, 'PATCH', owner, { title: 'Superseded scene update', expectedVersion: scene.version }));
+        await until(async () => (await query('SELECT version FROM scenes WHERE id = $1', [scene.id])).rows[0]?.version === scene.version + 1,
+          'First scene update did not commit');
+        start(() => request('/api/scenes/' + scene.id, 'PATCH', owner, { title: 'Newest scene update', expectedVersion: scene.version + 1 }));
+        await until(async () => (await query('SELECT version FROM scenes WHERE id = $1', [scene.id])).rows[0]?.version === scene.version + 2,
+          'Second scene update did not supersede the first');
+      });
+      const [{ version, title }] = (await query('SELECT version, title FROM scenes WHERE id = $1', [scene.id])).rows;
+      scene = { ...scene, version, title };
+      const packet = await until(() => events.slice(mark).find((event) => event.name === 'scene:updated' && event.data.scene.id === scene.id)?.data,
+        'Newest scene invalidation was not published');
+      assert.equal(packet.scene.version, scene.version);
+      assert.equal(packet.scene.title, 'Newest scene update');
+      await delay(120);
+      assert.deepEqual([...new Set(events.slice(mark).filter((event) => event.name === 'scene:updated' && event.data.scene.id === scene.id)
+        .map((event) => event.data.scene.version))], [scene.version]);
+    });
+
+    await scenario('activation events carry only the current scene pointer and stale manager roles cannot publish drafts', async () => {
+      const draft = (await request('/api/scenes', 'POST', owner, { campaignId: cid, title: 'Next scene' }, 201)).result.scene;
+      const mark = events.length;
+      const active = (await request('/api/scenes/' + draft.id + '/activate', 'PUT', owner, { expectedVersion: draft.version })).result.scene;
+      const packet = await until(() => events.slice(mark).find((event) => event.socket === p && event.name === 'scene:activated')?.data, 'Activation event did not reach player');
+      assert.deepEqual(Object.keys(packet).sort(), ['campaignId', 'sceneId']);
+      assert.equal(packet.sceneId, active.id);
+      const currentScene = (await request(path + '/scenes', 'GET', owner)).result.find(({ id }) => id === scene.id);
+      scene = (await request('/api/scenes/' + scene.id + '/activate', 'PUT', owner, { expectedVersion: currentScene.version })).result.scene;
+      await role(gm, 'PLAYER');
+      await delay(60);
+      assert.deepEqual(await ack(master, 'scene:pointer', { campaignId: cid, sceneId: draft.id, x: 12, y: 24 }), forbidden);
+      await role(gm, 'GM');
+    });
 
     // PostgreSQL confirms the write is visible to a separate connection before the audience query is released.
     async function afterCommit(blocker, command, committed, change) {
@@ -507,6 +603,8 @@ try {
       assert.equal(snapshot.tracker.active, false);
       assert.equal(snapshot.tracker.currentEntryId, null);
       assert.equal((await trackerDb()).scene_id, null);
+      await delay(60);
+      assert.deepEqual(await ack(own, 'scene:pointer', { campaignId: cid, sceneId: scene.id, x: 16, y: 20 }), forbidden);
       assert.equal(events.slice(mark).some(({ name, data }) => initiativeEvents.has(name) && data.tracker.version === old + 1), false);
       const fresh = await login(player);
       await connect(fresh, cid, 'PLAYER');

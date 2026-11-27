@@ -56,6 +56,12 @@ test('membership removal revokes every open Player socket and stops campaign eve
   let gmSocket: Socket | undefined;
   let playerSocket: Socket | undefined;
   let secondPlayerSocket: Socket | undefined;
+  let holdRemovalReconciliation = false;
+  let releaseRemovalReconciliation = () => {};
+  let notifyRemovalReconciliation: () => void = () => {};
+  let blockedRemovalReconciliations = 0;
+  const removalReconciliationBlocked = new Promise<void>((resolve) => { notifyRemovalReconciliation = resolve; });
+  const removalReconciliationRelease = new Promise<void>((resolve) => { releaseRemovalReconciliation = resolve; });
   try {
     await register(gmPage, 'Revocation Guide', `revoke-gm-${suffix}@example.test`);
     await expect(gmPage.getByRole('heading', { name: 'Your campaigns' })).toBeVisible();
@@ -83,6 +89,16 @@ test('membership removal revokes every open Player socket and stops campaign eve
     playerSocket = await connectSocket(playerPage, webBase);
     secondPlayerSocket = await connectSocket(secondPlayerPage, webBase);
     await Promise.all([joinCampaign(gmSocket, campaignId), joinCampaign(playerSocket, campaignId), joinCampaign(secondPlayerSocket, campaignId)]);
+    for (const page of [playerPage, secondPlayerPage]) {
+      await page.route('**/api/campaigns', async (route) => {
+        if (holdRemovalReconciliation && route.request().method() === 'GET') {
+          blockedRemovalReconciliations++;
+          if (blockedRemovalReconciliations >= 2) notifyRemovalReconciliation();
+          await removalReconciliationRelease;
+        }
+        await route.continue();
+      });
+    }
     const playerEvents: Array<{ body: string }> = [];
     const secondPlayerEvents: Array<{ body: string }> = [];
     const removals: Array<{ campaignId: string; userId: string }> = [];
@@ -97,7 +113,10 @@ test('membership removal revokes every open Player socket and stops campaign eve
     await expect.poll(() => playerEvents.some((event) => event.body === beforeRemoval)).toBe(true);
     await expect.poll(() => secondPlayerEvents.some((event) => event.body === beforeRemoval)).toBe(true);
 
+    holdRemovalReconciliation = true;
     expect((await requestJson(gmPage, `/api/campaigns/${campaignId}/members/${player.user.id}`, 'DELETE')).status).toBe(204);
+    await removalReconciliationBlocked;
+    await expect.poll(() => blockedRemovalReconciliations).toBeGreaterThanOrEqual(2);
     await expect.poll(() => removals.length).toBe(1);
     await expect.poll(() => secondRemovals.length).toBe(1);
     expect(removals[0]).toEqual({ campaignId, userId: player.user.id });
@@ -110,6 +129,18 @@ test('membership removal revokes every open Player socket and stops campaign eve
     expect(secondPlayerEvents.some((event) => event.body === afterRemoval)).toBe(false);
     expect(await sendChat(playerSocket, campaignId, 'This message must be denied')).toMatchObject({ error: 'FORBIDDEN' });
     expect(await sendChat(secondPlayerSocket, campaignId, 'This message must also be denied')).toMatchObject({ error: 'FORBIDDEN' });
+
+    const rejoinInvite = await requestJson(gmPage, '/api/invitations', 'POST', { campaignId });
+    expect(rejoinInvite.status).toBe(201);
+    expect((await requestJson(playerPage, `/api/invitations/${(rejoinInvite.body as { invitation: string }).invitation}/accept`, 'POST')).status).toBe(200);
+    holdRemovalReconciliation = false;
+    releaseRemovalReconciliation();
+    await expect(playerPage.getByRole('heading', { name: `Revocation ${suffix}` })).toBeVisible();
+    await expect(secondPlayerPage.getByRole('heading', { name: `Revocation ${suffix}` })).toBeVisible();
+    const afterRejoin = `After rejoin ${suffix}`;
+    expect((await sendChat(gmSocket, campaignId, afterRejoin)).ok).toBe(true);
+    await expect.poll(() => playerPage.locator('body').innerText()).toContain(afterRejoin);
+    await expect.poll(() => secondPlayerPage.locator('body').innerText()).toContain(afterRejoin);
   } finally {
     gmSocket?.disconnect();
     playerSocket?.disconnect();

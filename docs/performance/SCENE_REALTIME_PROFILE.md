@@ -42,3 +42,17 @@ Twenty samples, 500 projection loops per sample after warm-up, using the product
 | 50 | 14.915 / 26.312 | 28.445 / 37.101 |
 
 Wire volume and fanout grow with eligible object–socket pairs. The outlying eight-socket one-object P95 occurred in this 20-operation run. These local samples leave WAN latency, sustained load, large freehand payloads, cold caches and congested sessions open. A follow-up profile should measure snapshot traffic and high fanout with large strokes before changing delivery batching.
+
+## Ephemeral pointer profile
+
+The RT-ACL pointer path was measured separately after moving sender and recipient checks into one `withSceneAudience` transaction. One, four and eight Owner sender sockets posted while a Player receiver recorded eligible packets. Each sender waited for the ACK before its next update and then paced at 55 ms, approximating the existing 20/s per-socket cap. The run lasted about three seconds per configuration. P50/P95 values use nearest rank; receive time is measured from each sender's call to the Player's packet. SQL counts come from `pg_stat_statements`; they include additional chat/dice SQL in the eight-sender mixed run. CPU is process CPU percent over the sample window. RSS records API process values at the two endpoints, not peak memory.
+
+| Senders | Attempts / accepted / published per second | Dropped by pointer throttle | SQL / transaction-boundary statements per accepted event | ACK P50/P95 ms | Receive P50/P95 ms | API CPU | API RSS before → after MiB |
+| ---: | ---: | ---: | ---: | --- | --- | ---: | --- |
+| 1 | 10.63 / 10.63 / 10.63 | 0 | 4.00 / 2.00 | 10.338 / 14.429 | 5.555 / 9.314 | 0.49% | 190.0 → 195.5 |
+| 4 | 43.59 / 43.59 / 43.59 | 0 | 4.00 / 2.00 | 14.500 / 24.333 | 6.766 / 10.935 | 11.19% | 195.5 → 196.4 |
+| 8 | 75.88 / 75.88 / 75.88 | 0 | 4.44 / 2.22* | 18.765 / 60.553 | 11.581 / 30.732 | 23.16% | 196.4 → 104.0 |
+
+\* Eight-sender run included public chat and dice commands about every 0.5 seconds. Their ACKs in that run were chat 24.755/71.975 ms and dice 15.427/22.254 ms P50/P95. The preceding eight-socket idle-pointer profile's standalone chat ACK was 15.068/18.619 ms and dice was 16.836/32.656 ms. Samples are small, loopback-only and noisy; they do not show a stable performance improvement or a regression for dice. Chat P95 rose in this mixed sample. The drop in endpoint RSS is consistent with allocator/GC behavior and is not a peak-memory measurement. The application does not expose PostgreSQL pool waiters, so queue depth was unavailable. Generator CPU was 0.00%, 2.43% and 3.71%; generator RSS was 69.9, 64.8 and 67.4 MiB respectively.
+
+The accepted pointer rate was about 9.5–10.9 per sender/second in this serial-ACK loop, below the allowed 20/s; no pointer throttle drops occurred. The path performs four SQL statements and one PostgreSQL transaction per accepted pointer, versus the former nested two-transaction authorization shape; no prior pointer timing sample was recorded, so a latency delta against that shape cannot be claimed. Local results do not establish WAN or production capacity. Reproduce on the isolated PostgreSQL service with `NRI_PRIVATE_PERF=1` and `.data/foundation-audit/run-private.ps1 -Label rtacl-profile -Suite private-profile`.
