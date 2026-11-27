@@ -496,5 +496,17 @@ const activeSession = connect(rotatedLogin.cookie);
 await activeSession.connected;
 assert.equal((await join(activeSession.socket, campaign.id)).ok, true);
 console.info('PASS: logout and rotation disconnect the relevant active sockets and preserve independent logins.');
+
+for (let i = 0; i < 102; i++) {
+  assert.equal((await ack(ownerClient.socket, 'chat:send', { campaignId: campaign.id, body: `History window ${i}` })).ok, true);
+}
+const ownerPrivate = await ack(ownerClient.socket, 'chat:send', { campaignId: campaign.id, body: 'Latest private message', recipientId: player.user.id });
+assert.equal(ownerPrivate.ok, true);
+const { result: latestChat } = await request(`/api/campaigns/${campaign.id}/messages`, { cookie: rotatedLogin.cookie });
+assert.equal(latestChat.length, 100);
+assert.equal(latestChat[0].body, 'History window 3');
+assert.equal(latestChat.at(-2).body, 'History window 101');
+assert.equal(latestChat.at(-1).body, 'Latest private message');
+console.info('PASS: reconnect chat history contains the latest 100 authorized messages in chronological order.');
 } finally { for (const socket of openedSockets) socket.disconnect(); }
 console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, corrupt-image upload rejection, categorized campaign asset multi-upload/search metadata/storage/deletion, campaign asset-folder role/isolation/rename/delete behavior, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, public and GM-only dice rolls with Player denial, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, Player freehand permissions, ownership/privacy, safe deletion/revocation, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

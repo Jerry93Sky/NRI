@@ -11,11 +11,13 @@ import { parseBody, roleFor } from '../security/access.js';
 import { publicToken } from '../domain/projections.js';
 import { authenticateRealtime } from './session.js';
 import { campaignMemberRoom, leaveCampaign } from './campaignRooms.js';
+import { guardCommands } from './commandGuard.js';
 
 export function registerRealtime(server: FastifyInstance['server']) {
   const io = new Server(server, { serveClient: false, maxHttpBufferSize: 64 * 1024, cors: { origin: webOrigins, credentials: true }, allowRequest: (request, callback) => { const origin = request.headers.origin; callback(null, !origin || webOrigins.includes(origin)); } });
   authenticateRealtime(io);
   io.on('connection', (socket) => {
+    guardCommands(socket);
     const user = socket.data.user as { id: string; displayName: string };
     let lastPointerAt = 0;
     const joins = new Map<string, symbol>();
