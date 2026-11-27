@@ -7,6 +7,7 @@ import { auditEvents, campaigns, invitations, memberships, users } from '../../d
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
 import { digest, parseBody, requireUser, roleFor } from '../../security/access.js';
+import { campaignMemberRoom } from '../../realtime/campaignRooms.js';
 
 export function registerMembershipRoutes(app: FastifyInstance, io: Server) {
   app.post('/api/invitations', async (request, reply) => {
@@ -62,12 +63,17 @@ export function registerMembershipRoutes(app: FastifyInstance, io: Server) {
     const [campaign] = await db.select({ ownerId: campaigns.ownerId }).from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
     if (!campaign) return reply.code(404).send({ error: 'NOT_FOUND' });
     if (campaign.ownerId !== user.id || memberId === campaign.ownerId) return reply.code(403).send({ error: 'FORBIDDEN' });
-    const [updated] = await db.update(memberships).set({ role: input.role }).where(and(eq(memberships.campaignId, campaignId), eq(memberships.userId, memberId))).returning();
+    const updated = await db.transaction(async (tx) => {
+      const [membership] = await tx.update(memberships).set({ role: input.role }).where(and(eq(memberships.campaignId, campaignId), eq(memberships.userId, memberId))).returning();
+      if (membership) await tx.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'membership.role_changed', targetId: memberId });
+      return membership;
+    });
     if (!updated) return reply.code(404).send({ error: 'NOT_FOUND' });
-    await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'membership.role_changed', targetId: memberId });
-    io.in(`user:${memberId}`).socketsLeave(`campaign:${campaignId}:gm`);
-    if (input.role === 'GM') io.in(`user:${memberId}`).socketsJoin(`campaign:${campaignId}:gm`);
-    io.in(`campaign:${campaignId}`).emit('membership:changed', { userId: memberId, role: input.role });
+    const room = `campaign:${campaignId}`;
+    const member = io.in(campaignMemberRoom(campaignId, memberId));
+    if (input.role === 'GM') member.socketsJoin(`${room}:gm`);
+    else member.socketsLeave(`${room}:gm`);
+    io.in(room).emit('membership:changed', { campaignId, userId: memberId, role: input.role });
     return { membership: updated };
   });
   app.delete('/api/campaigns/:campaignId/members/:memberId', async (request, reply) => {
@@ -76,12 +82,17 @@ export function registerMembershipRoutes(app: FastifyInstance, io: Server) {
     const [campaign] = await db.select({ ownerId: campaigns.ownerId }).from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
     if (!campaign) return reply.code(404).send({ error: 'NOT_FOUND' });
     if (campaign.ownerId !== user.id || memberId === campaign.ownerId) return reply.code(403).send({ error: 'FORBIDDEN' });
-    const [removed] = await db.delete(memberships).where(and(eq(memberships.campaignId, campaignId), eq(memberships.userId, memberId))).returning();
+    const removed = await db.transaction(async (tx) => {
+      const [membership] = await tx.delete(memberships).where(and(eq(memberships.campaignId, campaignId), eq(memberships.userId, memberId))).returning();
+      if (membership) await tx.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'membership.removed', targetId: memberId });
+      return membership;
+    });
     if (!removed) return reply.code(404).send({ error: 'NOT_FOUND' });
     io.in(`user:${memberId}`).emit('membership:removed', { userId: memberId, campaignId });
     io.in(`user:${memberId}`).socketsLeave(`campaign:${campaignId}`);
     io.in(`user:${memberId}`).socketsLeave(`campaign:${campaignId}:gm`);
-    await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'membership.removed', targetId: memberId });
+    const memberRoom = campaignMemberRoom(campaignId, memberId);
+    io.in(memberRoom).socketsLeave(memberRoom);
     return reply.code(204).send();
   });
 }

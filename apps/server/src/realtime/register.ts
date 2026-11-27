@@ -10,6 +10,7 @@ import { webOrigins } from '../config/runtime.js';
 import { parseBody, roleFor } from '../security/access.js';
 import { publicToken } from '../domain/projections.js';
 import { authenticateRealtime } from './session.js';
+import { campaignMemberRoom, leaveCampaign } from './campaignRooms.js';
 
 export function registerRealtime(server: FastifyInstance['server']) {
   const io = new Server(server, { serveClient: false, maxHttpBufferSize: 64 * 1024, cors: { origin: webOrigins, credentials: true }, allowRequest: (request, callback) => { const origin = request.headers.origin; callback(null, !origin || webOrigins.includes(origin)); } });
@@ -17,20 +18,35 @@ export function registerRealtime(server: FastifyInstance['server']) {
   io.on('connection', (socket) => {
     const user = socket.data.user as { id: string; displayName: string };
     let lastPointerAt = 0;
+    const joins = new Map<string, symbol>();
     socket.on('campaign:join', async (campaignId: string, callback?: (result: unknown) => void) => {
       if (typeof campaignId !== 'string' || !z.uuid().safeParse(campaignId).success) return callback?.({ error: 'INVALID' });
-      const role = await roleFor(campaignId, user.id);
-      if (!role) return callback?.({ error: 'FORBIDDEN' });
-      const room = `campaign:${campaignId}`;
-      await socket.join(room);
-      if (role === 'OWNER' || role === 'GM') await socket.join(`${room}:gm`);
-      callback?.({ ok: true, role });
-      socket.to(room).emit('presence:joined', { userId: user.id, displayName: user.displayName });
+      const attempt = Symbol();
+      joins.set(campaignId, attempt);
+      try {
+        const role = await roleFor(campaignId, user.id);
+        if (joins.get(campaignId) !== attempt || !socket.connected) return callback?.({ error: 'JOIN_CANCELLED' });
+        if (!role) {
+          leaveCampaign(socket, campaignId, user.id);
+          return callback?.({ error: 'FORBIDDEN' });
+        }
+        const room = `campaign:${campaignId}`;
+        const rooms = [room, campaignMemberRoom(campaignId, user.id)];
+        if (role === 'PLAYER') void socket.leave(`${room}:gm`);
+        else rooms.push(`${room}:gm`);
+        void socket.join(rooms);
+        callback?.({ ok: true, role });
+        socket.to(room).emit('presence:joined', { userId: user.id, displayName: user.displayName });
+      } catch {
+        callback?.({ error: 'INTERNAL_ERROR' });
+      } finally {
+        if (joins.get(campaignId) === attempt) joins.delete(campaignId);
+      }
     });
-    socket.on('campaign:leave', async (campaignId: string) => {
+    socket.on('campaign:leave', (campaignId: string) => {
       if (typeof campaignId !== 'string' || !z.uuid().safeParse(campaignId).success) return;
-      await socket.leave(`campaign:${campaignId}`);
-      await socket.leave(`campaign:${campaignId}:gm`);
+      joins.delete(campaignId);
+      leaveCampaign(socket, campaignId, user.id);
     });
     socket.on('scene:pointer', async (raw: unknown, callback?: (result: unknown) => void) => {
       try {

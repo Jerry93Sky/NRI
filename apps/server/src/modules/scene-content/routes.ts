@@ -185,7 +185,7 @@ export function registerSceneContentRoutes(app: FastifyInstance, io: Server) {
     }
     const room = `campaign:${result.campaignId}`;
     for (const object of result.objects) {
-      if (result.isActive && result.layerVisible && result.layerKind !== 'GM' && object.visible) io.to(room).emit('scene:object_created', { object });
+      if (result.isActive && result.layerVisible && result.layerKind !== 'GM' && object.visible) io.to(room).emit('scene:object_created', { object: sceneObjectProjection(object, 'PLAYER') });
       else io.to(`${room}:gm`).emit('scene:object_created', { object });
     }
     return reply.code(201).send({ objects: result.objects });

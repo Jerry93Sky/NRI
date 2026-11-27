@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
 import { parseBody, requireUser, roleFor } from '../../security/access.js';
 import { publicToken } from '../../domain/projections.js';
+import { campaignMemberRoom } from '../../realtime/campaignRooms.js';
 
 export function registerTokenRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/scenes/:sceneId/tokens', async (request, reply) => {
@@ -197,9 +198,11 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
     if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
     await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.updated', targetId: tokenId });
     const room = `campaign:${row.scene.campaignId}`; const wasVisible = !row.token.hidden && row.scene.isActive; const isVisible = !updated.hidden && row.scene.isActive; const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
-    if (!updated.hidden && row.scene.isActive && updated.ownerUserId && updated.ownerNote !== row.token.ownerNote) io.to(`user:${updated.ownerUserId}`).emit('token:owner_note', { id: updated.id, ownerUserId: updated.ownerUserId, ownerNote: updated.ownerNote, version: updated.version });
     if (wasVisible && !isVisible) io.to(room).emit('token:hidden', { id: updated.id, sceneId: updated.sceneId });
     else if (isVisible) io.to(room).emit(wasVisible ? 'token:updated' : 'token:created', playerProjection);
+    if (isVisible && updated.ownerUserId && (!wasVisible || updated.ownerNote !== row.token.ownerNote)) {
+      io.to(campaignMemberRoom(row.scene.campaignId, updated.ownerUserId)).emit('token:owner_note', { id: updated.id, ownerUserId: updated.ownerUserId, ownerNote: updated.ownerNote, version: updated.version });
+    }
     io.to(`${room}:gm`).emit('token:updated', projection);
     return { token: projection };
   });
@@ -236,9 +239,11 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
     const [updated] = await db.update(tokens).set({ ownerUserId: input.ownerUserId, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, row.token.version))).returning();
     if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
     await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.owner_changed', targetId: tokenId });
-    if (!updated.hidden && row.scene.isActive) for (const memberId of new Set([row.token.ownerUserId, updated.ownerUserId].filter((id): id is string => Boolean(id)))) io.to(`user:${memberId}`).emit('token:owner_note', { id: updated.id, ownerUserId: updated.ownerUserId, ownerNote: updated.ownerNote, version: updated.version });
     const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
     ((updated.hidden || !row.scene.isActive) ? io.to(`campaign:${row.scene.campaignId}:gm`) : io.to(`campaign:${row.scene.campaignId}`)).emit('token:updated', updated.hidden || !row.scene.isActive ? projection : playerProjection);
+    if (!updated.hidden && row.scene.isActive && updated.ownerUserId) {
+      io.to(campaignMemberRoom(row.scene.campaignId, updated.ownerUserId)).emit('token:owner_note', { id: updated.id, ownerUserId: updated.ownerUserId, ownerNote: updated.ownerNote, version: updated.version });
+    }
     return { token: projection };
   });
 }

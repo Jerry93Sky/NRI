@@ -213,8 +213,8 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
           thumbnail = await readFile(thumbnailPath);
         }
       }
-      return reply.type('image/webp').header('x-content-type-options', 'nosniff').header('cache-control', 'private, max-age=3600').send(thumbnail);
+      return reply.type('image/webp').header('x-content-type-options', 'nosniff').header('cache-control', 'private, no-store').send(thumbnail);
     }
-    return reply.type(asset.mediaType).header('x-content-type-options', 'nosniff').header('cache-control', 'private, max-age=3600').send(createReadStream(resolve(uploadDirectory, asset.storageKey)));
+    return reply.type(asset.mediaType).header('x-content-type-options', 'nosniff').header('cache-control', 'private, no-store').send(createReadStream(resolve(uploadDirectory, asset.storageKey)));
   });
 }

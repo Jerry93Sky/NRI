@@ -15,16 +15,23 @@ import { registerAssetRoutes } from './modules/assets/routes.js';
 import { registerTokenRoutes } from './modules/tokens/routes.js';
 
 export async function createApp() {
-  const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] }, bodyLimit: 64 * 1024 });
+  const app = Fastify({
+    logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] },
+    disableRequestLogging: true,
+    bodyLimit: 64 * 1024,
+  });
   await app.register(cookie);
   await app.register(rateLimit, { global: true, max: process.env.NODE_ENV === 'test' ? 500 : 120, timeWindow: '1 minute' });
   await app.register(import('@fastify/multipart'), { limits: { files: 12, fileSize: 12 * 1024 * 1024, fields: 0, parts: 12 } });
   if (!isProduction && sessionSecret.length < 24) app.log.warn('Set a unique SESSION_SECRET in .env before local use.');
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
-    if (status >= 500) app.log.error({ err: error }, 'Request failed');
+    if (status >= 500) request.log.error({ route: request.routeOptions.url, type: error instanceof Error ? error.name : 'unknown' }, 'Request failed');
     const code = status >= 500 ? 'INTERNAL_ERROR' : status === 429 ? 'RATE_LIMITED' : (error as { code?: string }).code ?? 'INVALID';
     reply.code(status).send({ error: code });
+  });
+  app.addHook('onResponse', async (request, reply) => {
+    request.log.info({ method: request.method, route: request.routeOptions.url, statusCode: reply.statusCode, elapsedMs: reply.elapsedTime }, 'Request completed');
   });
   app.addHook('onRequest', async (request, reply) => {
     const origin = request.headers.origin;

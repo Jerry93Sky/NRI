@@ -10,6 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
 import { parseBody, requireUser, roleFor } from '../../security/access.js';
 import { uploadDirectory } from '../../config/runtime.js';
+import { archiveCampaignSockets } from '../../realtime/campaignRooms.js';
 
 export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns', async (request, reply) => {
@@ -189,6 +190,7 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
     if (!campaign) return reply.code(404).send({ error: 'NOT_FOUND' });
     if (campaign.ownerId !== user.id) return reply.code(403).send({ error: 'FORBIDDEN' });
     const [updated] = await db.update(campaigns).set({ archivedAt: new Date() }).where(eq(campaigns.id, campaignId)).returning();
+    archiveCampaignSockets(io, campaignId);
     await db.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'campaign.archived', targetId: campaignId });
     return { campaign: updated };
   });
