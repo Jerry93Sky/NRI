@@ -139,7 +139,7 @@ jobs:
           UPLOAD_DIR: /tmp/nri-command-media
       - name: Test RT-RETRY on an isolated PostgreSQL database
         run: |
-          createdb -h 127.0.0.1 -U nri nri_retry_test
+          PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_retry_test
           DATABASE_URL=postgres://nri:ci-only-password@127.0.0.1:5432/nri_retry_test pnpm db:migrate
           node apps/server/dist/index.js > /tmp/nri-retry-server.log 2>&1 &
           retry_api=$!
