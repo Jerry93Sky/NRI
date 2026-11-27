@@ -13,6 +13,7 @@
     "db:seed": "tsx src/seed.ts",
     "db:seed:playable-amber": "tsx src/seedPlayableAmber.ts",
     "smoke": "node scripts/multiplayer-smoke.mjs",
+    "test:movement": "node scripts/transactional-movement.mjs",
     "test": "vitest run"
   },
   "dependencies": {
