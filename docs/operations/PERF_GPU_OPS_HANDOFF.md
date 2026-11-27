@@ -4,12 +4,14 @@
 
 | Check | Procedure and required evidence | Dependency |
 | --- | --- | --- |
-| PERF-GPU | Run profiles A/B/C with real maps and textures for 30–60 minutes on a dedicated GPU and two client devices. Capture frame times, texture release on scene changes, resident memory and WebGL context loss recovery | Owner selects real devices and representative maps |
+| PERF-GPU | Run profiles A/B/C with real maps and textures for 30–60 minutes on a dedicated GPU and two client devices. Record frame time P50/P95, renderer and GPU memory where observable, texture release on scene changes, and WebGL context loss recovery | Owner selects real devices and representative maps |
 | OPS-DEPLOY | Verify closed HTTPS deployment, certificate and access rules, session/cookie and proxy settings, health checks, operational logs and memory limits | Owner selects infrastructure and private domain or network |
 | OPS-RESTORE | Restore a disposable PostgreSQL backup and asset manifest into separate storage. Compare database counts, file hashes and protected reads from GM and player views | Target host, backup credentials, storage and recovery target agreed |
 | OPS-RECOVERY | In a test environment rehearse database outage, network drop, API restart and reconnect. Capture process tree, readiness, port owner, exit codes, Socket.IO state and Windows diagnostics | Target network and an isolated Windows/Ubuntu setup |
 | Retention and files | Verify logs and backups have an agreed expiry, schedule receipt pruning daily, and check orphan and staging files against the database and a quiesced window | Target host and deployment credentials |
 | QA-OWNER | Two participants complete a real tabletop walkthrough using both GM and Player roles and record any usability and permission failures | Owner plus a player, real sessions and hardware |
+
+On 2026-11-28 the Windows Playwright restart probe stopped the original listener and started a child process. The child printed environment initialization but port 35596 did not become ready within the 45-second budget. Local trace and screenshots were retained. Ubuntu CI #208 passed the same recovery scenario. Compare the Windows child process tree, inherited environment, listener ownership and startup phases in the target run. The cause and target outage results are still open.
 
 ## Daily REST receipt pruning
 

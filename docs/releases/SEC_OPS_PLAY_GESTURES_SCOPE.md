@@ -1,6 +1,6 @@
 # Next finite package: SEC-OPS + PLAY-GESTURES
 
-**Status: PLANNED for the next technical pass.** This is preparation only; no implementation or status change for these release gates is claimed. Keep the exact V0.1.1 acceptance criteria in the [closure plan](V0.1.1_CLOSURE_PLAN.md).
+This document records the preparation checklist for the SEC-OPS and PLAY-GESTURES pass. Current results and remaining environment checks are recorded in the [acceptance report](V0.1.1_ACCEPTANCE_REPORT.md) and [closure plan](V0.1.1_CLOSURE_PLAN.md).
 
 ## SEC-OPS evidence package
 

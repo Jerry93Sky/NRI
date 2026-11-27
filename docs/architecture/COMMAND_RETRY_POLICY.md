@@ -1,6 +1,6 @@
 # Command retry and safe recovery policy
 
-**Status: IN_PROGRESS.** A transaction can commit before an HTTP response or Socket.IO ACK reaches the client. The implementation supports replay for the commands below. See the [acceptance report](../releases/V0.1.1_ACCEPTANCE_REPORT.md) for executed checks and open coverage.
+**Status: AUTOMATED_TESTS_PASSED.** A transaction can commit before an HTTP response or Socket.IO ACK reaches the client. The implementation supports replay for the commands below. See the [acceptance report](../releases/V0.1.1_ACCEPTANCE_REPORT.md) for executed checks and open coverage.
 
 ## Current operation inventory
 
