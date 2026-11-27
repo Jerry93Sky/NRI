@@ -60,9 +60,10 @@ test('GM and Player sessions recover persisted campaign state after API restart'
     const sceneResponse = await requestJson(gmPage, '/api/scenes', 'POST', { campaignId, title: 'Persistent scene' });
     expect(sceneResponse.status).toBe(201);
     const sceneId = (sceneResponse.body as { scene: { id: string } }).scene.id;
-    const tokenResponse = await requestJson(gmPage, '/api/tokens', 'POST', { sceneId, name: 'Persistent token', x: 7, y: 11, color: '#c8794a' });
-    expect(tokenResponse.status).toBe(201);
-    const tokenId = (tokenResponse.body as { token: { id: string } }).token.id;
+    const tokenRequest = { headers: { 'idempotency-key': crypto.randomUUID() }, data: { sceneId, name: 'Persistent token', x: 7, y: 11, color: '#c8794a' } };
+    const tokenResponse = await gmPage.request.post(`${baseURL}/api/tokens`, tokenRequest);
+    expect(tokenResponse.status()).toBe(201);
+    const tokenId = (await tokenResponse.json()).token.id;
     const inviteResponse = await requestJson(gmPage, '/api/invitations', 'POST', { campaignId });
     expect(inviteResponse.status).toBe(201);
     const invite = (inviteResponse.body as { invitation: string }).invitation;
@@ -108,6 +109,9 @@ test('GM and Player sessions recover persisted campaign state after API restart'
 
     expect((await requestJson(gmPage, '/api/auth/me')).status).toBe(200);
     expect((await requestJson(playerPage, '/api/auth/me')).status).toBe(200);
+    const replay = await gmPage.request.post(`${baseURL}/api/tokens`, tokenRequest);
+    expect(replay.status()).toBe(200);
+    expect((await replay.json()).token.id).toBe(tokenId);
     const gmTokens = (await requestJson(gmPage, `/api/scenes/${sceneId}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
     const playerTokens = (await requestJson(playerPage, `/api/scenes/${sceneId}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
     expect(gmTokens).toContainEqual(expect.objectContaining({ id: tokenId, x: 7, y: 11 }));

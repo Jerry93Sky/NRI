@@ -25,4 +25,33 @@ describe('recoverable REST requests', () => {
     expect(ids[1]).toBe(ids[0]);
     expect(ids[2]).not.toBe(ids[0]);
   });
+
+  it('preserves campaign-level requests on scene changes and discards pending scene keys', async () => {
+    const ids: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      ids.push(new Headers(init?.headers).get('idempotency-key') ?? '');
+      throw new TypeError('connection lost');
+    }));
+    const scene = () => api('/api/tokens', { method: 'POST', recoverable: 'scene' });
+    const campaign = () => api('/api/scenes', { method: 'POST', recoverable: true });
+    await expect(scene()).rejects.toThrow('OUTCOME_UNKNOWN');
+    await expect(campaign()).rejects.toThrow('OUTCOME_UNKNOWN');
+    clearRecoverableRequests('scene');
+    await expect(scene()).rejects.toThrow('OUTCOME_UNKNOWN');
+    await expect(campaign()).rejects.toThrow('OUTCOME_UNKNOWN');
+    expect(ids[2]).not.toBe(ids[0]);
+    expect(ids[3]).toBe(ids[1]);
+  });
+
+  it('keeps the key on a server error and reports an unknown outcome', async () => {
+    const ids: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      ids.push(new Headers(init?.headers).get('idempotency-key') ?? '');
+      return new Response(JSON.stringify({ error: 'INTERNAL_ERROR' }), { status: 500 });
+    }));
+    const submit = () => api('/api/scenes', { method: 'POST', recoverable: true });
+    await expect(submit()).rejects.toThrow('OUTCOME_UNKNOWN');
+    await expect(submit()).rejects.toThrow('OUTCOME_UNKNOWN');
+    expect(ids[1]).toBe(ids[0]);
+  });
 });

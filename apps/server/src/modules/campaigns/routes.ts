@@ -95,7 +95,7 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
         await writeFile(tempPath, bytes, { flag: 'wx', mode: 0o600 });
       }
 
-      const copied = await db.transaction(async (tx) => {
+      const copyWithSnapshot = () => db.transaction(async (tx) => {
         const actor = await lockCampaignActor(tx, digest(cookie), campaignId, { strength: 'update' });
         if ('error' in actor) return actor;
         if (actor.userId !== user.id || (actor.role !== 'OWNER' && actor.role !== 'GM')) return { error: 'FORBIDDEN' as const };
@@ -198,13 +198,22 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
         }
 
         await tx.insert(auditEvents).values({ campaignId: campaign.id, actorId: actor.userId, action: 'campaign.duplicated', targetId: campaign.id, detail: `Copied from ${campaignId}` });
+        if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [campaign.id]);
         for (const file of prepared) {
           await copyFile(file.tempPath, file.finalPath, fsConstants.COPYFILE_EXCL);
         }
-        if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [campaign.id]);
         return { campaign, replayed: false };
       }, { isolationLevel: 'repeatable read' });
 
+      const copied = await copyWithSnapshot().catch((error: unknown) => {
+        const databaseError = error instanceof Error ? error.cause ?? error : error;
+        if (!requestId || typeof databaseError !== 'object' || databaseError === null ||
+          !('code' in databaseError) || databaseError.code !== '23505' ||
+          !('constraint' in databaseError) || databaseError.constraint !== 'rest_operation_receipts_scope_idx') throw error;
+        // A competing commit can win after this REPEATABLE READ snapshot was taken.
+        // The unique check ran before file copies. Take a fresh snapshot to read its receipt.
+        return copyWithSnapshot();
+      });
       if ('error' in copied) return reply.code(copied.error === 'FORBIDDEN' ? 403 : copied.error === 'CONFLICT' || copied.error === 'RESULT_UNAVAILABLE' ? 409 : 404).send({ error: copied.error });
       return reply.code(copied.replayed ? 200 : 201).send({ campaign: copied.campaign });
     } catch (error) {

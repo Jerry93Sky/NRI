@@ -139,14 +139,17 @@ jobs:
           UPLOAD_DIR: /tmp/nri-command-media
       - name: Test RT-RETRY on an isolated PostgreSQL database
         run: |
+          export UPLOAD_DIR="$(mktemp -d /tmp/nri-retry-media.XXXXXXXX)"
+          trap 'rm -rf -- "$UPLOAD_DIR"' EXIT
           PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_retry_test
           DATABASE_URL=postgres://nri:ci-only-password@127.0.0.1:5432/nri_retry_test pnpm db:migrate
           node apps/server/dist/index.js > /tmp/nri-retry-server.log 2>&1 &
           retry_api=$!
-          trap 'kill "$retry_api" 2>/dev/null || true' EXIT
+          trap 'kill "$retry_api" 2>/dev/null || true; wait "$retry_api" 2>/dev/null || true; rm -rf -- "$UPLOAD_DIR"' EXIT
           for attempt in {1..30}; do
             if curl --fail --silent "$NRI_API_URL/api/ready"; then
               pnpm --filter @nri/server test:retry
+              pnpm --filter @nri/server exec node scripts/rest-retry-recovery.mjs
               exit $?
             fi
             sleep 1
@@ -162,7 +165,6 @@ jobs:
           SESSION_SECRET: ci-secret-is-not-for-deployment
           NRI_API_URL: http://127.0.0.1:3005
           NRI_ENABLE_TEST_FAULTS: "true"
-          UPLOAD_DIR: /tmp/nri-retry-media
       - name: Verify retry migration upgrade preserves existing chat and dice rows
         run: |
           PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_retry_upgrade_test

@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased — RT-RETRY Part II local checkpoint (incomplete)
+## Unreleased — RT-RETRY Part II
 
-- Add a 90-day scoped REST receipt migration and optional `Idempotency-Key` replay handling for token, scene-object, scene, and campaign creation routes. PostgreSQL migration, race, rollback, authorization-revocation, client recovery and CI evidence are outstanding; do not treat these routes as verified.
+- Add 90-day REST receipts and optional `Idempotency-Key` for token, object, scene and campaign create/copy, and asset upload. Store result IDs and check current access on replay.
+- Show an unknown outcome on the campaign list and tabletop, and preserve the original request when scene activation or a realtime token update follows a committed write.
+- Add PostgreSQL tests for concurrent replays, role changes, expiration and file rollback. Extend browser coverage for lost responses, resource snapshots, and token replay after API restart.
 - Record owner-approved Campaign Lobby and GM Screen requirements as `PLANNED`, separate proposed architecture, and align the brand, roadmap, product vision and audio/atlas notes. No UI or later feature implementation is included.
 
 ## Unreleased — V0.1.1 RT-RETRY (in progress)

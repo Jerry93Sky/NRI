@@ -1,7 +1,11 @@
-type ApiOptions = RequestInit & { recoverable?: boolean };
-const pendingRequestIds = new Map<string, string>();
+type ApiOptions = RequestInit & { recoverable?: boolean | 'scene' };
+const campaignRequests = new Map<string, string>();
+const sceneRequests = new Map<string, string>();
 
-export function clearRecoverableRequests() { pendingRequestIds.clear(); }
+export function clearRecoverableRequests(scope?: 'scene') {
+  sceneRequests.clear();
+  if (!scope) campaignRequests.clear();
+}
 
 function intentFingerprint(path: string, options: RequestInit): string {
   const method = (options.method ?? 'GET').toUpperCase();
@@ -15,6 +19,7 @@ function intentFingerprint(path: string, options: RequestInit): string {
 
 export async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const { recoverable = false, ...requestOptions } = options;
+  const pendingRequestIds = recoverable === 'scene' ? sceneRequests : campaignRequests;
   const headers = new Headers(requestOptions.headers);
   const fingerprint = recoverable ? intentFingerprint(path, requestOptions) : null;
   if (fingerprint) {
@@ -31,17 +36,16 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
     try { result = response.status === 204 ? null : await response.json(); }
     catch { if (fingerprint) throw new Error('OUTCOME_UNKNOWN'); throw new Error('INVALID_RESPONSE'); }
     if (!response.ok) {
-      if (fingerprint && response.status >= 500) pendingRequestIds.set(fingerprint, headers.get('idempotency-key')!);
-      else if (fingerprint) pendingRequestIds.delete(fingerprint);
+      if (fingerprint && response.status >= 500) throw new Error('OUTCOME_UNKNOWN');
+      if (fingerprint && pendingRequestIds.get(fingerprint) === headers.get('idempotency-key')) pendingRequestIds.delete(fingerprint);
       throw new Error(result?.error ?? 'REQUEST_FAILED');
     }
-    if (fingerprint) pendingRequestIds.delete(fingerprint);
-    if (path.startsWith('/api/auth/')) pendingRequestIds.clear();
+    if (fingerprint && pendingRequestIds.get(fingerprint) === headers.get('idempotency-key')) pendingRequestIds.delete(fingerprint);
+    if (path.startsWith('/api/auth/') && requestOptions.method === 'POST') clearRecoverableRequests();
     return result as T;
   } catch (error) {
     if (fingerprint && (!responseReceived || (error instanceof Error && error.message === 'OUTCOME_UNKNOWN'))) {
-      // Keep the same in-memory request ID so an explicit repeat of the same UI action is safe.
-      if (!pendingRequestIds.has(fingerprint)) pendingRequestIds.set(fingerprint, headers.get('idempotency-key')!);
+      // The request stays pending only if its scope has not been cleared in the meantime.
       throw new Error('OUTCOME_UNKNOWN');
     }
     throw error;
