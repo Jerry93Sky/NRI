@@ -4,6 +4,10 @@ V0.1.1 remains `IN_PROGRESS`. The contracts added with this plan are `PLANNED`. 
 
 ## Foundation decisions now
 
+### EVERDOOR brand decision — PLANNED
+
+The owner approved the product name EVERDOOR, the tagline “Every door, a new adventure,” a genre-neutral opening-door symbol, and Hearth as the working name for the warm base theme. The final logo, landing and campaign-door layouts, lobby details, theme catalog, Personal Haven, and commercial packaging remain open. The intended journey is Landing → Campaign Doors → Campaign Lobby → Adventure. These decisions do not rename technical identifiers or authorize a V0.1.1 frontend redesign. See [EVERDOOR Brand Vision](../design/EVERDOOR_BRAND_VISION.md).
+
 | Current area | Preserve or improve in V0.1.1 | First release that implements the new capability |
 | --- | --- | --- |
 | REST and realtime mutations | Share the token-movement service and check current membership, role, scene state and record versions in the write transaction. Verify competing edits, permission changes and reconnect behavior against PostgreSQL. Scope retry handling to known lost-acknowledgement cases | V0.2 adds authoritative geometry. Later transactional workflows own their receipt and retry contracts |

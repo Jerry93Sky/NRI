@@ -1,5 +1,7 @@
 # Dark Tavern RPG design vision
 
+> **Brand alignment (PLANNED):** EVERDOOR is the approved product name and “Every door, a new adventure” is the approved tagline. Dark Tavern is one possible campaign theme within a genre-neutral brand, not the product identity or default visual treatment. The approved Hearth direction, open questions, and implementation boundaries are recorded in [EVERDOOR Brand Vision](EVERDOOR_BRAND_VISION.md). No V0.1.1 redesign is authorized by this concept.
+
 **Status** `PLANNED` · Concept for a later visual milestone.
 
 The visual language is minimalist dark fantasy with the atmosphere of a medieval tavern. Dark wood, worn leather, restrained metal and muted bronze belong in the chrome. Keep edge treatments and texture low contrast so that alerts, permissions and game pieces stay readable. The map remains the center of the tabletop and encounter interfaces. Open books, grimoires and scrolls give reference materials a consistent presentation without making ordinary navigation rely on decorative imagery.

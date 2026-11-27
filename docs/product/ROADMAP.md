@@ -30,6 +30,10 @@ V0.3 introduces a small built-in package format and the evaluation contract need
 
 ## Proposed placement of product concepts
 
+### EVERDOOR brand and experience
+
+**PLANNED; no V0.1.1 implementation.** EVERDOOR is the approved product name and Hearth the working name for its warm, genre-neutral base theme. The planned journey is Landing → Campaign Doors → Campaign Lobby → Adventure. The exact landing and campaign layouts, lobby interactions, logo artwork, and alternative theme model remain open. Review the [brand vision](../design/EVERDOOR_BRAND_VISION.md) before assigning a release. Do not add subscriptions, a theme shop, or community discovery under the current scope.
+
 | Concept | Proposed placement |
 | --- | --- |
 | [Dark Tavern RPG](../design/DARK_TAVERN_DESIGN_VISION.md) | Owner-reviewed visual milestone after V0.1.1, coordinated with V0.2 without changing its tactical gates |
