@@ -28,7 +28,7 @@ async function waitForReady(port: number, ready: boolean, timeoutMs = 45_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/ready`);
+      const response = await fetch(`http://127.0.0.1:${port}/api/ready`, { signal: AbortSignal.timeout(2_000) });
       if (response.ok === ready) return;
     } catch {
       if (!ready) return;
@@ -91,10 +91,18 @@ test('GM and Player sessions recover persisted campaign state after API restart'
         PORT: String(port),
         WEB_ORIGIN: baseURL,
       },
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const startupError = new Promise<never>((_resolve, reject) => restartedApi!.once('error', reject));
-    await Promise.race([waitForReady(port, true), startupError]);
+    let startupLog = '';
+    const capture = (chunk: Buffer) => { startupLog = (startupLog + chunk.toString()).slice(-8_000); };
+    restartedApi.stdout?.on('data', capture);
+    restartedApi.stderr?.on('data', capture);
+    const startupError = new Promise<never>((_resolve, reject) => {
+      restartedApi!.once('error', reject);
+      restartedApi!.once('exit', (code, signal) => reject(new Error(`Restarted API exited (${signal ?? code}):\n${startupLog}`)));
+    });
+    try { await Promise.race([waitForReady(port, true), startupError]); }
+    catch (error) { throw new Error(`Restarted API failed readiness:\n${startupLog}`, { cause: error }); }
     await expect(gmPage.locator('.live-status')).toHaveText('Live', { timeout: 60_000 });
     await expect(playerPage.locator('.live-status')).toHaveText('Live', { timeout: 60_000 });
 
@@ -106,6 +114,6 @@ test('GM and Player sessions recover persisted campaign state after API restart'
     expect(playerTokens).toContainEqual(expect.objectContaining({ id: tokenId, x: 7, y: 11 }));
   } finally {
     await Promise.all([gmContext.close(), playerContext.close()]);
-    restartedApi?.unref();
+    restartedApi?.kill();
   }
 });

@@ -92,7 +92,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
       throw error;
     }
-    if (scene.isActive) io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { sceneId: result.activated?.id ?? null });
+    if (scene.isActive) io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { campaignId: scene.campaignId, sceneId: result.activated?.id ?? null });
     return { scene: result.scene };
   });
   app.post('/api/scenes', async (request, reply) => {
@@ -109,7 +109,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       return created;
     });
     if (!scene) throw new Error('Scene creation failed');
-    if (scene.isActive) io.to(`campaign:${input.campaignId}`).emit('scene:activated', { sceneId: scene.id });
+    if (scene.isActive) io.to(`campaign:${input.campaignId}`).emit('scene:activated', { campaignId: input.campaignId, sceneId: scene.id });
     return reply.code(201).send({ scene });
   });
   app.put('/api/scenes/:sceneId/activate', async (request, reply) => {
@@ -135,7 +135,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
       throw error;
     }
-    io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { sceneId: activated.id });
+    io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { campaignId: scene.campaignId, sceneId: activated.id });
     return { scene: activated };
   });
   app.put('/api/scenes/:sceneId/restore', async (request, reply) => {

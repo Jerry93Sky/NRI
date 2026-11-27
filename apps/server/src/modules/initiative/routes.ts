@@ -23,8 +23,8 @@ export function registerInitiativeRoutes(app: FastifyInstance, io: Server) {
     if (!tracker) return;
     const publicView = await initiativeView(campaignId, 'PLAYER');
     const gmView = await initiativeView(campaignId, 'GM');
-    io.to(`campaign:${campaignId}`).emit('initiative:updated', publicView);
-    io.to(`campaign:${campaignId}:gm`).emit('initiative:gm_updated', gmView);
+    io.to(`campaign:${campaignId}`).emit('initiative:updated', { ...publicView, campaignId });
+    io.to(`campaign:${campaignId}:gm`).emit('initiative:gm_updated', { ...gmView, campaignId });
   }
   app.get('/api/campaigns/:campaignId/initiative', async (request, reply) => {
     const user = await requireUser(request, reply); if (!user) return;

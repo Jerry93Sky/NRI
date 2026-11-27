@@ -1,0 +1,11 @@
+export type User = { id: string; email: string; displayName: string };
+export type Campaign = { campaign: { id: string; title: string; description: string; playersCanDraw?: boolean }; role: string };
+export type Scene = { id: string; campaignId: string; title: string; gridSize: number; width: number; height: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean; unitsPerCell: number; unitLabel: string; backgroundAssetId: string | null; isActive: boolean; published: boolean; sortOrder: number; cameraX: number; cameraY: number; cameraZoom: number; version: number; archivedAt: string | null };
+export type Member = { userId: string; displayName: string; role: string };
+export type AssetFolder = { id: string; campaignId: string; name: string; createdAt: string };
+export type CampaignAsset = { id: string; name: string; category: 'MAP' | 'TOKEN' | 'DECORATION' | 'PORTRAIT' | 'OTHER'; folderId: string | null; mediaType: string; size: number; usageCount: number };
+export type DeletedToken = { id: string; sceneId: string; sceneTitle: string; name: string; version: number; deletedAt: string; sceneArchivedAt: string | null };
+export type ChatItem = { id: string; campaignId?: string; senderId: string; displayName: string; body: string; createdAt?: string; private?: boolean; recipientId?: string | null };
+export type RollItem = { id?: string; campaignId?: string; displayName: string; expression: string; rolls: number[]; modifier: number; result: number; hidden?: boolean };
+export type InitiativeView = { tracker: { id: string; active: boolean; round: number; version: number; activeIndex?: number; currentEntryId: string | null } | null; entries: Array<{ id: string; tokenId: string | null; label: string; score: number }> };
+export type SharedPointer = { pointerId: string; userId: string; sceneId: string; displayName: string; x: number; y: number };

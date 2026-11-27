@@ -54,6 +54,17 @@ export type MoveTokenInput = z.infer<typeof moveTokenSchema>;
 export type TokenResourceView = Pick<TokenResource, 'label' | 'current' | 'maximum'> & { visible?: boolean };
 export type PublicToken = { id: string; sceneId: string; name: string; x: number; y: number; color: string; imageAssetId: string | null; width: number; height: number; rotation: number; opacity: number; borderColor: string; zIndex: number; locked: boolean; showName: boolean; resources: [TokenResourceView | null, TokenResourceView | null]; gmNote?: string; ownerNote?: string; hidden?: boolean; version: number; ownerUserId: string | null };
 export type TokenMoved = { type: 'token.moved'; token: PublicToken };
+export type PublicSceneLayer = {
+  id: string; sceneId: string; name: string; kind: string; sortOrder: number;
+  visibleToPlayers: boolean; locked: boolean; version: number;
+};
+export type PublicSceneObject = {
+  id: string; sceneId: string; layerId: string; kind: string;
+  x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number;
+  assetId: string | null; color: string | null; strokeWidth: number | null;
+  points: Array<{ x: number; y: number }> | null; text: string | null;
+  visible: boolean; locked: boolean; version: number; ownedByMe?: boolean;
+};
 
 export function canMoveToken(role: string | null, actorId: string, ownerUserId: string | null, hidden: boolean): boolean {
   if (role === 'OWNER' || role === 'GM') return true;

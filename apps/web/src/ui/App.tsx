@@ -1,59 +1,24 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { useTranslation } from 'react-i18next';
 import type { PublicToken, TokenResource } from '@nri/contracts';
 import { calculateCellSize } from './canvasMath';
-const TableCanvas = lazy(() => import('./TableCanvas').then(({ TableCanvas: component }) => ({ default: component })));
+import { api } from '../services/api';
+import { useTabletopSync } from '../features/tabletop/useTabletopSync';
+import type { AssetFolder, Campaign, CampaignAsset, ChatItem, DeletedToken, InitiativeView, RollItem, Scene, User } from '../features/tabletop/models';
+import type { PublicSceneObject as SceneObject, PublicSceneLayer as SceneLayer } from '@nri/contracts';
 
-type User = { id: string; email: string; displayName: string };
-type Campaign = { campaign: { id: string; title: string; description: string; playersCanDraw?: boolean }; role: string };
-type Scene = { id: string; campaignId: string; title: string; gridSize: number; width: number; height: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean; unitsPerCell: number; unitLabel: string; backgroundAssetId: string | null; isActive: boolean; published: boolean; sortOrder: number; cameraX: number; cameraY: number; cameraZoom: number; version: number; archivedAt: string | null };
-type Member = { userId: string; displayName: string; role: string };
-type AssetFolder = { id: string; campaignId: string; name: string; createdAt: string };
-type CampaignAsset = { id: string; name: string; category: 'MAP' | 'TOKEN' | 'DECORATION' | 'PORTRAIT' | 'OTHER'; folderId: string | null; mediaType: string; size: number; usageCount: number };
-type DeletedToken = { id: string; sceneId: string; sceneTitle: string; name: string; version: number; deletedAt: string; sceneArchivedAt: string | null };
-type SceneLayer = { id: string; sceneId: string; name: string; kind: string; sortOrder: number; visibleToPlayers: boolean; locked: boolean; version: number };
-type SceneObject = { id: string; sceneId: string; layerId: string; kind: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; zIndex: number; assetId: string | null; color: string | null; strokeWidth: number | null; points: Array<{ x: number; y: number }> | null; text: string | null; visible: boolean; locked: boolean; version: number; ownedByMe?: boolean };
-type ChatItem = { id: string; campaignId?: string; senderId: string; displayName: string; body: string; createdAt?: string; private?: boolean; recipientId?: string | null };
-function mergeChatItems(current: ChatItem[], incoming: ChatItem[]) {
-  const byId = new Map<string, ChatItem>();
-  for (const message of incoming) byId.set(message.id, { ...message, private: Boolean(message.private || message.recipientId) });
-  for (const message of current) byId.set(message.id, message);
-  return [...byId.values()].sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? '')).slice(-100);
-}
-type RollItem = { id?: string; campaignId?: string; displayName: string; expression: string; rolls: number[]; modifier: number; result: number; hidden?: boolean };
-type InitiativeView = { tracker: { id: string; active: boolean; round: number; version: number; activeIndex?: number; currentEntryId: string | null } | null; entries: Array<{ id: string; tokenId: string | null; label: string; score: number }> };
 type TokenPosition = { tokenId: string; x: number; y: number };
 type TokenMoveHistory = { positions: TokenPosition[]; expectedVersions: Record<string, number> };
-type SharedPointer = { pointerId: string; userId: string; sceneId: string; displayName: string; x: number; y: number };
+const TableCanvas = lazy(() => import('./TableCanvas').then(({ TableCanvas: component }) => ({ default: component })));
 
-function mergeToken(items: PublicToken[], incoming: PublicToken): PublicToken[] {
-  return items.map((item) => {
-    if (item.id !== incoming.id) return item;
-    if (incoming.ownerNote !== undefined || incoming.ownerUserId !== item.ownerUserId) return incoming;
-    return item.ownerNote === undefined ? incoming : { ...incoming, ownerNote: item.ownerNote };
-  });
-}
-
-async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers = new Headers(options.headers);
-  if (options.body !== undefined && !headers.has('content-type')) headers.set('content-type', 'application/json');
-  const response = await fetch(path, { ...options, credentials: 'include', headers });
-  const result = response.status === 204 ? null : await response.json();
-  if (!response.ok) throw new Error(result?.error ?? 'REQUEST_FAILED');
-  return result as T;
-}
 
 export function App() {
   const { t, i18n } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
-  const [scenes, setScenes] = useState<Scene[]>([]);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [scene, setScene] = useState<Scene | null>(null);
-  const [tokens, setTokens] = useState<PublicToken[]>([]);
   const [tokenMoveUndo, setTokenMoveUndo] = useState<TokenMoveHistory[]>([]);
   const [tokenMoveRedo, setTokenMoveRedo] = useState<TokenMoveHistory[]>([]);
   const [selectedTokenIds, setSelectedTokenIds] = useState<string[]>([]);
@@ -71,27 +36,20 @@ export function App() {
   const [newAssetFolderName, setNewAssetFolderName] = useState('');
   const [assetSort, setAssetSort] = useState<'NAME' | 'SIZE'>('NAME');
   const [assetUploadCategory, setAssetUploadCategory] = useState<CampaignAsset['category']>('OTHER');
-  const [layers, setLayers] = useState<SceneLayer[]>([]);
-  const [objects, setObjects] = useState<SceneObject[]>([]);
   const [selectedObjectId, setSelectedObjectId] = useState('');
   const [selectedObjectIds, setSelectedObjectIds] = useState<string[]>([]);
   const [objectClipboard, setObjectClipboard] = useState<SceneObject[]>([]);
-  const [activeLayerId, setActiveLayerId] = useState('');
   const [drawMode, setDrawMode] = useState(false);
   const [rulerActive, setRulerActive] = useState(false);
   const [pointerActive, setPointerActive] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [drawingColor, setDrawingColor] = useState('#c8794a');
   const [drawingWidth, setDrawingWidth] = useState(3);
-  const [messages, setMessages] = useState<ChatItem[]>([]);
-  const [rolls, setRolls] = useState<RollItem[]>([]);
   const [hiddenRoll, setHiddenRoll] = useState(false);
-  const [initiative, setInitiative] = useState<InitiativeView>({ tracker: null, entries: [] });
   const [initiativeScores, setInitiativeScores] = useState<Record<string, string>>({});
-  const [connected, setConnected] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   useEffect(() => setHiddenRoll(false), [campaign?.campaign.id, campaign?.role]);
-  useEffect(() => { setSelectedTokenIds([]); setTokenMoveUndo([]); setTokenMoveRedo([]); setSelectedObjectId(''); setSelectedObjectIds([]); setObjectClipboard([]); }, [scene?.id]);
+
   const [busy, setBusy] = useState(false);
   const [rightRailWidth, setRightRailWidth] = useState(() => {
     const value = Number(window.localStorage.getItem('nri:table-rail-width'));
@@ -135,11 +93,21 @@ export function App() {
   const mapInput = useRef<HTMLInputElement>(null);
   const assetInput = useRef<HTMLInputElement>(null);
   const socket = useMemo<Socket>(() => io({ autoConnect: false, withCredentials: true, transports: ['websocket', 'polling'] }), []);
-  const campaignIdRef = useRef(campaign?.campaign.id ?? null);
-  campaignIdRef.current = campaign?.campaign.id ?? null;
+  const { scene, setScene, scenes, setScenes, openScene, reloadSceneContent, tokens, setTokens,
+    layers, setLayers, objects, setObjects, activeLayerId, setActiveLayerId, members, messages, setMessages,
+    rolls, setRolls, initiative, setInitiative, connected, campaignIdRef } = useTabletopSync({
+    user, campaign, socket, setCampaign, setCampaigns, setError, setUser,
+  });
+  useEffect(() => {
+    setSelectedTokenIds([]); setTokenMoveUndo([]); setTokenMoveRedo([]); setSelectedObjectId(''); setSelectedObjectIds([]); setObjectClipboard([]); setPointerActive(false);
+  }, [scene?.id, campaign?.role]);
+  useEffect(() => {
+    setTokenClipboard([]); setAssets([]); setAssetFolders([]); setDeletedTokens([]); setArchivedScenes([]); setAssetLibraryOpen(false); setTokenTrashOpen(false); setShowArchivedScenes(false);
+  }, [campaign?.campaign.id, campaign?.role]);
   const role = campaign?.role ?? 'PLAYER';
   const canManage = role === 'OWNER' || role === 'GM';
   const canDraw = canManage || (campaign?.campaign.playersCanDraw === true && scene?.isActive === true);
+  useEffect(() => { if (!canDraw) setDrawMode(false); }, [canDraw]);
   const drawingLayer = layers.find((layer) => layer.id === activeLayerId);
   const visibleAssets = useMemo(() => assets.filter((asset) => (assetCategoryFilter === 'ALL' || asset.category === assetCategoryFilter) && (assetFolderFilter === 'ALL' || (assetFolderFilter === 'ROOT' ? asset.folderId === null : asset.folderId === assetFolderFilter)) && asset.name.toLocaleLowerCase().includes(assetSearch.trim().toLocaleLowerCase())).sort((a, b) => assetSort === 'SIZE' ? b.size - a.size : a.name.localeCompare(b.name)), [assets, assetCategoryFilter, assetFolderFilter, assetSearch, assetSort]);
 
@@ -207,122 +175,6 @@ export function App() {
       }).catch((e) => { history.replaceState(null, '', location.pathname); setError((e as Error).message); });
     } else void api<Campaign[]>('/api/campaigns').then(setCampaigns).catch((e) => setError(e.message));
   }, [user]);
-  useEffect(() => {
-    if (!campaign) return;
-    let active = true;
-    void api<Scene[]>(`/api/campaigns/${campaign.campaign.id}/scenes`).then(async (list) => {
-      if (!active) return;
-      setScenes(list);
-      const first = list[0];
-      if (first) await openScene(first);
-      else setScene(null);
-    }).catch((e) => setError(e.message));
-    return () => { active = false; setScene(null); setTokens([]); setLayers([]); setObjects([]); setActiveLayerId(''); socket.emit('campaign:leave', campaign.campaign.id); };
-  }, [campaign?.campaign.id]);
-  useLayoutEffect(() => {
-    let active = true;
-    setMessages([]);
-    setRolls([]);
-    setMembers([]);
-    setInitiative({ tracker: null, entries: [] });
-    if (!campaign) return () => { active = false; };
-    const campaignId = campaign.campaign.id;
-    void api<Member[]>(`/api/campaigns/${campaignId}/members`).then((list) => { if (active) setMembers(list); }).catch((e) => { if (active) setError((e as Error).message); });
-    void api<Array<ChatItem & { recipientId: string | null }>>(`/api/campaigns/${campaignId}/messages`).then((list) => { if (active) setMessages((current) => mergeChatItems(current, list)); }).catch((e) => { if (active) setError((e as Error).message); });
-    void api<InitiativeView>(`/api/campaigns/${campaignId}/initiative`).then((view) => { if (active) setInitiative(view); }).catch((e) => { if (active) setError((e as Error).message); });
-    return () => { active = false; };
-  }, [campaign?.campaign.id]);
-  useEffect(() => {
-    const onPublicChat = (message: ChatItem) => { if (message.campaignId === campaignIdRef.current) setMessages((items) => items.some((item) => item.id === message.id) ? items : [...items.slice(-99), message]); };
-    const onPrivateChat = (message: ChatItem) => { if (message.campaignId === campaignIdRef.current) setMessages((items) => items.some((item) => item.id === message.id) ? items : [...items.slice(-99), { ...message, private: true }]); };
-    const onDiceResult = (roll: RollItem) => { if (roll.campaignId === campaignIdRef.current) setRolls((items) => roll.id && items.some((item) => item.id === roll.id) ? items : [...items.slice(-19), roll]); };
-    socket.on('chat:message', onPublicChat);
-    socket.on('chat:private', onPrivateChat);
-    socket.on('dice:result', onDiceResult);
-    return () => { socket.off('chat:message', onPublicChat); socket.off('chat:private', onPrivateChat); socket.off('dice:result', onDiceResult); };
-  }, [socket]);
-
-  async function openScene(next: Scene) {
-    setScene(next); setPointerActive(false);
-    setSelectedObjectId(''); setSelectedObjectIds([]); setObjectClipboard([]);
-    socket.emit('campaign:join', next.campaignId, (result: { error?: string; role?: string }) => {
-      if (result?.error) setError(result.error);
-      setConnected(!result?.error);
-    });
-    try {
-      const [nextTokens, nextLayers, nextObjects] = await Promise.all([
-        api<PublicToken[]>(`/api/scenes/${next.id}/tokens`),
-        api<SceneLayer[]>(`/api/scenes/${next.id}/layers`),
-        api<SceneObject[]>(`/api/scenes/${next.id}/objects`),
-      ]);
-      setTokens(nextTokens); setLayers(nextLayers); setObjects(nextObjects);
-      setActiveLayerId((current) => nextLayers.some((layer) => layer.id === current) ? current : nextLayers.find((layer) => layer.kind === 'OBJECTS')?.id ?? nextLayers[0]?.id ?? '');
-    } catch (e) { setError((e as Error).message); }
-  }
-  async function reloadSceneContent(sceneId: string) {
-    if (scene?.id !== sceneId) return;
-    try {
-      const [nextLayers, nextObjects] = await Promise.all([api<SceneLayer[]>(`/api/scenes/${sceneId}/layers`), api<SceneObject[]>(`/api/scenes/${sceneId}/objects`)]);
-      setLayers(nextLayers); setObjects(nextObjects); setActiveLayerId((current) => nextLayers.some((layer) => layer.id === current) ? current : nextLayers.find((layer) => layer.kind === 'OBJECTS')?.id ?? nextLayers[0]?.id ?? '');
-    } catch (e) { setError((e as Error).message); }
-  }
-  useEffect(() => {
-    const onConnect = () => {
-      setConnected(true);
-      if (scene) socket.emit('campaign:join', scene.campaignId, async (result: { error?: string }) => {
-        if (result?.error) { setError(result.error); return; }
-        try { setTokens(await api<PublicToken[]>(`/api/scenes/${scene.id}/tokens`)); await reloadSceneContent(scene.id); } catch (e) { setError((e as Error).message); }
-      });
-    };
-    const onDisconnect = () => setConnected(false);
-    socket.on('connect', onConnect); socket.on('disconnect', onDisconnect);
-    socket.on('token:moved', (token: PublicToken) => setTokens((items) => mergeToken(items, token)));
-    socket.on('token:created', (token: PublicToken) => setTokens((items) => items.some((item) => item.id === token.id) ? items : [...items, token]));
-    socket.on('token:updated', (token: PublicToken) => setTokens((items) => mergeToken(items, token)));
-    socket.on('token:owner_note', ({ id, ownerUserId, ownerNote }: { id: string; ownerUserId: string | null; ownerNote: string }) => setTokens((items) => items.map((item) => {
-      if (item.id !== id) return item;
-      if (ownerUserId === user?.id) return { ...item, ownerUserId, ownerNote };
-      const { ownerNote: _ownerNote, ...withoutOwnerNote } = item;
-      return { ...withoutOwnerNote, ownerUserId };
-    })));
-    socket.on('token:hidden', ({ id }: { id: string }) => setTokens((items) => items.filter((item) => item.id !== id)));
-    const onSharedPointer = (pointer: SharedPointer) => {
-      if (pointer.sceneId === scene?.id && pointer.userId !== user?.id) window.dispatchEvent(new CustomEvent('nri-shared-pointer', { detail: pointer }));
-    };
-    socket.on('scene:pointer', onSharedPointer);
-    const onSceneUpdated = ({ scene: updated }: { scene: Partial<Scene> & { id: string } }) => {
-      setScenes((items) => items.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
-      setScene((item) => item?.id === updated.id ? { ...item, ...updated } : item);
-    };
-    const onDrawingPermission = ({ id, playersCanDraw }: { id: string; playersCanDraw: boolean }) => {
-      const update = (item: Campaign) => item.campaign.id === id ? { ...item, campaign: { ...item.campaign, playersCanDraw } } : item;
-      setCampaign((item) => item ? update(item) : item); setCampaigns((items) => items.map(update));
-      if (!playersCanDraw) setDrawMode(false);
-    };
-    const onSceneActivated = async ({ sceneId }: { sceneId: string | null }) => {
-      if (!campaign) return;
-      try {
-        const list = await api<Scene[]>(`/api/campaigns/${campaign.campaign.id}/scenes`); setScenes(list);
-        if (canManage) setScene((item) => item ? list.find((entry) => entry.id === item.id) ?? item : null);
-        else if (sceneId) { const next = list.find((entry) => entry.id === sceneId); if (next) await openScene(next); }
-        else { setScene(null); setTokens([]); }
-      } catch (e) { setError((e as Error).message); }
-    };
-    const refreshSceneContent = ({ sceneId }: { sceneId: string }) => { if (sceneId) void reloadSceneContent(sceneId); };
-    const refreshChangedObject = ({ object }: { object: SceneObject }) => { if (object?.sceneId === scene?.id) void reloadSceneContent(object.sceneId); };
-    const removeChangedObject = ({ sceneId, objectId }: { sceneId: string; objectId: string }) => { if (sceneId === scene?.id) setObjects((items) => items.filter((object) => object.id !== objectId)); };
-    const onMembershipRemoved = ({ userId }: { userId: string }) => {
-      if (userId !== user?.id) return;
-      setCampaign(null); setCampaigns((items) => items.filter((item) => item.campaign.id !== campaign?.campaign.id));
-      setError('Your campaign access was removed.');
-    };
-    socket.on('scene:updated', onSceneUpdated); socket.on('campaign:drawing_permission', onDrawingPermission); socket.on('scene:activated', onSceneActivated); socket.on('scene:unavailable', () => { setScene(null); setTokens([]); setLayers([]); setObjects([]); }); socket.on('membership:removed', onMembershipRemoved);
-    socket.on('scene:layer_created', refreshSceneContent); socket.on('scene:layer_updated', refreshSceneContent); socket.on('scene:layer_hidden', refreshSceneContent); socket.on('scene:layer_deleted', refreshSceneContent);
-    socket.on('scene:object_created', refreshChangedObject); socket.on('scene:object_updated', refreshChangedObject); socket.on('scene:object_deleted', removeChangedObject);
-    socket.on('initiative:updated', (view: InitiativeView) => setInitiative(view));
-    socket.on('initiative:gm_updated', (view: InitiativeView) => setInitiative(view));
-    return () => { socket.off('connect', onConnect); socket.off('disconnect', onDisconnect); socket.off('token:moved'); socket.off('token:created'); socket.off('token:updated'); socket.off('token:owner_note'); socket.off('token:hidden'); socket.off('scene:pointer', onSharedPointer); socket.off('scene:updated', onSceneUpdated); socket.off('campaign:drawing_permission', onDrawingPermission); socket.off('scene:activated', onSceneActivated); socket.off('scene:unavailable'); socket.off('membership:removed', onMembershipRemoved); socket.off('scene:layer_created', refreshSceneContent); socket.off('scene:layer_updated', refreshSceneContent); socket.off('scene:layer_hidden', refreshSceneContent); socket.off('scene:layer_deleted', refreshSceneContent); socket.off('scene:object_created', refreshChangedObject); socket.off('scene:object_updated', refreshChangedObject); socket.off('scene:object_deleted', removeChangedObject); socket.off('initiative:updated'); socket.off('initiative:gm_updated'); };
-  }, [socket, scene?.id, campaign?.campaign.id, canManage, user?.id]);
   useEffect(() => { if (user && !socket.connected) socket.connect(); }, [user, socket]);
 
   async function submitAuth(event: React.FormEvent<HTMLFormElement>) {
@@ -748,17 +600,20 @@ export function App() {
     catch (e) { setError((e as Error).message); }
   }
   function moveToken(token: PublicToken, x: number, y: number) {
+    if (!connected) { setError(t('offline')); return; }
     socket.emit('token:move', { tokenId: token.id, x, y, expectedVersion: token.version }, (result: { error?: string; token?: PublicToken }) => {
-      if (result?.token) setTokens((items) => items.map((item) => item.id === token.id ? result.token! : item));
+      const next = result?.token;
+      if (next) setTokens((items) => items.map((item) => item.id === token.id && item.version <= next.version ? { ...item, ...next } : item));
       else if (result?.error) setError(result.error === 'CONFLICT' ? 'This token changed elsewhere. Refreshing…' : result.error);
     });
   }
   function sendChat(event: React.FormEvent) {
     event.preventDefault(); if (!campaign || !chatText.trim()) return;
+    if (!connected) { setError(t('offline')); return; }
     const campaignId = campaign.campaign.id;
     socket.emit('chat:send', { campaignId, body: chatText, recipientId: messageRecipient || null }, (result: { error?: string; message?: ChatItem }) => { if (result.message?.campaignId === campaignIdRef.current) setMessages((items) => items.some((item) => item.id === result.message!.id) ? items : [...items.slice(-99), result.message!]); if (result.error && campaignId === campaignIdRef.current) setError(result.error); }); setChatText('');
   }
-  function rollDice() { if (!campaign) return; const campaignId = campaign.campaign.id; socket.emit('dice:roll', { campaignId, expression: '1d20', hidden: hiddenRoll }, (result: { error?: string; roll?: RollItem }) => { if (result.roll?.campaignId === campaignIdRef.current) setRolls((items) => result.roll!.id && items.some((item) => item.id === result.roll!.id) ? items : [...items.slice(-19), result.roll!]); if (result.error && campaignId === campaignIdRef.current) setError(result.error); }); }
+  function rollDice() { if (!campaign) return; if (!connected) { setError(t('offline')); return; } const campaignId = campaign.campaign.id; socket.emit('dice:roll', { campaignId, expression: '1d20', hidden: hiddenRoll }, (result: { error?: string; roll?: RollItem }) => { if (result.roll?.campaignId === campaignIdRef.current) setRolls((items) => result.roll!.id && items.some((item) => item.id === result.roll!.id) ? items : [...items.slice(-19), result.roll!]); if (result.error && campaignId === campaignIdRef.current) setError(result.error); }); }
 
   if (!user) return <main className="auth-shell"><div className="auth-card"><div className="brand-mark">N</div><p className="eyebrow">TABLETOP, REIMAGINED</p><h1>{t('subtitle')}</h1><p className="muted">A calm, flexible space for stories shared around a table.</p><form onSubmit={submitAuth} className="form-stack">
     {authMode === 'register' && <label>{t('displayName')}<input name="displayName" minLength={1} maxLength={48} required /></label>}
