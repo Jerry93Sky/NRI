@@ -85,7 +85,7 @@ jobs:
       - name: Start fresh API for browser tests
         run: |
           cd apps/server
-          node --import tsx src/index.ts > /tmp/nri-browser-server.log 2>&1 &
+          node dist/index.js > /tmp/nri-browser-server.log 2>&1 &
           echo "NRI_BROWSER_API_PID=$!" >> "$GITHUB_ENV"
           for attempt in {1..30}; do
             if curl --fail --silent http://127.0.0.1:3001/api/ready; then exit 0; fi
@@ -102,6 +102,12 @@ jobs:
           SESSION_SECRET: ci-secret-is-not-for-deployment
       - name: Install Playwright Chromium
         run: pnpm --filter @nri/web exec playwright install --with-deps chromium
+      - name: Smoke-test the built Pixi renderer
+        run: pnpm --filter @nri/web e2e texture-lifecycle
+        env:
+          CI: true
+          API_PROXY_TARGET: http://127.0.0.1:3001
+          NRI_E2E_PREVIEW: "true"
       - name: Run browser integration and privacy scenarios
         run: pnpm --filter @nri/web e2e
         env:

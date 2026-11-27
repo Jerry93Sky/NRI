@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import { constants } from 'node:fs';
@@ -20,7 +20,7 @@ export async function createApp() {
   await mkdir(uploadDirectory, { recursive: true });
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] },
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
     bodyLimit: 64 * 1024,
     trustProxy,
   });

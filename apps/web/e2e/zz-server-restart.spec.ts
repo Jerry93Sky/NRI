@@ -82,7 +82,7 @@ test('GM and Player sessions recover persisted campaign state after API restart'
     await expect(gmPage.locator('.live-status')).toHaveText(/Reconnecting|Offline/, { timeout: 15_000 });
     await expect(playerPage.locator('.live-status')).toHaveText(/Reconnecting|Offline/, { timeout: 15_000 });
 
-    restartedApi = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
+    restartedApi = spawn(process.execPath, ['dist/index.js'], {
       cwd: fileURLToPath(new URL('../../server', import.meta.url)),
       env: {
         ...process.env,

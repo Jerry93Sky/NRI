@@ -257,6 +257,22 @@ test('separate GM and player contexts keep drafts and GM objects private', async
     expect(movedToken?.y).toBe(startingToken!.y);
     await expect.poll(async () => !(await playerCanvas.screenshot()).equals(playerCanvasBeforeMove)).toBe(true);
 
+    for (const [label, page] of [['gm', gmPage], ['player', playerPage]] as const) {
+      const originalViewport = page.viewportSize();
+      for (const viewport of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }, { width: 2560, height: 1440 }]) {
+        await page.setViewportSize(viewport);
+        const canvas = page.locator('.table-canvas canvas');
+        await expect(canvas).toBeVisible();
+        const bounds = await canvas.boundingBox();
+        expect(bounds?.width ?? 0).toBeGreaterThan(600);
+        expect(bounds?.height ?? 0).toBeGreaterThan(400);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+        await page.screenshot({ path: testInfo.outputPath(`${label}-${viewport.width}x${viewport.height}.png`) });
+      }
+      if (originalViewport) await page.setViewportSize(originalViewport);
+    }
+
+
     const publicMessage = `Shared table message ${suffix}`;
     await gmPage.getByPlaceholder('Write a message…').fill(publicMessage);
     await gmPage.getByRole('button', { name: 'Send' }).click();
@@ -546,7 +562,7 @@ test('GM can select, copy, and paste scene objects atomically', async ({ browser
     await gmPage.getByRole('button', { name: 'Paste objects' }).click();
     const groupCopyResponse = await groupCopyResponsePromise;
     expect(groupCopyResponse.status()).toBe(201);
-    const copied = (await groupCopyResponse.json() as { objects: Array<{ id: string }> }).objects;
+    const copied = (await groupCopyResponse.json() as { objects: Array<{ id: string; version: number }> }).objects;
     expect(copied).toHaveLength(2);
     expect(new Set(copied.map((object) => object.id)).size).toBe(2);
     expect(copied.every((object) => !sourceObjects.some((source) => source.id === object.id))).toBe(true);
@@ -568,6 +584,38 @@ test('GM can select, copy, and paste scene objects atomically', async ({ browser
       layerId: objectsLayer.id, objects: [{ objectId: sourceObjects[0]!.id, expectedVersion: sourceObjects[0]!.version, x: 500, y: 500 }],
     });
     expect(deniedCopy.status).toBe(403);
+
+    const historyPath = `/api/scenes/${scene.id}/object-lifecycle`;
+    const waitForHistory = () => gmPage.waitForResponse((response) => response.url().endsWith(historyPath) && response.request().method() === 'PATCH');
+    const undo = gmPage.getByRole('button', { name: 'Undo', exact: true });
+    await expect(undo).toBeEnabled();
+    const undoResponse = waitForHistory();
+    await gmPage.keyboard.press('Control+z');
+    expect((await undoResponse).status()).toBe(200);
+    const afterUndo = (await requestJson(playerPage, `/api/scenes/${scene.id}/objects`)).body as typeof copied;
+    expect(afterUndo.map(({ id }) => id).sort()).toEqual(sourceObjects.map(({ id }) => id).sort());
+
+    const redoResponse = waitForHistory();
+    await gmPage.keyboard.press('Control+Shift+z');
+    const redoing = await redoResponse;
+    expect(redoing.status()).toBe(200);
+    const restored = (await redoing.json() as { objects: typeof copied }).objects;
+    expect(restored.map(({ id }) => id).sort()).toEqual(copied.map(({ id }) => id).sort());
+
+    const { user } = (await requestJson(playerPage, '/api/auth/me')).body as { user: { id: string } };
+    expect((await requestJson(gmPage, `/api/campaigns/${scene.campaignId}/members/${user.id}/role`, 'POST', { role: 'GM' })).status).toBe(200);
+    await expect(playerPage.getByRole('button', { name: 'Add token' })).toBeVisible();
+    expect((await requestJson(playerPage, `/api/objects/${restored[0]!.id}`, 'PATCH', { expectedVersion: restored[0]!.version, x: 777 })).status).toBe(200);
+    const conflictResponse = waitForHistory();
+    await undo.click();
+    expect((await conflictResponse).status()).toBe(409);
+    await expect(gmPage.getByText('Cannot apply history. Another change has already been saved.')).toBeVisible();
+    const current = (await requestJson(gmPage, `/api/scenes/${scene.id}/objects`)).body as Array<{ id: string; x: number; version: number }>;
+    expect(current.find(({ id }) => id === restored[0]!.id)?.x).toBe(777);
+    expect(current.find(({ id }) => id === restored[1]!.id)?.version).toBe(restored[1]!.version);
+
+    expect((await requestJson(gmPage, `/api/campaigns/${scene.campaignId}/members/${user.id}/role`, 'POST', { role: 'PLAYER' })).status).toBe(200);
+    await expect(playerPage.getByRole('button', { name: 'Add token' })).toHaveCount(0);
   } finally {
     await Promise.allSettled([gmContext.close(), playerContext.close()]);
   }
