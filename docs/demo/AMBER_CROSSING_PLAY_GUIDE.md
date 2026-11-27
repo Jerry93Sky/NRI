@@ -1,6 +1,6 @@
 # Amber Crossing: The Lantern Vault — Play Guide
 
-**Status:** playable demo content; run `pnpm db:seed:playable-amber` after migrations. The seed is additive and idempotent. It creates a separate campaign and leaves the existing Amber Crossing campaign untouched.
+**Status:** playable demo content. On a clean database apply migrations, run `pnpm db:seed` with a local `DEMO_PASSWORD`, then run `pnpm db:seed:playable-amber`. The additive seed is idempotent. It creates a separate campaign and leaves the existing Amber Crossing campaign untouched.
 
 ## Session outline (30–60 minutes)
 

@@ -1,5 +1,7 @@
 # Data model
 
+Migration `0018_scene_object_recovery` adds nullable `scene_objects.deleted_at`. Active projections, scene/campaign duplication and Player media visibility omit deleted objects. The recovery route changes deletion state and increments every affected object's version in one transaction. Recoverable rows retain references to their images. Deleting an otherwise empty custom layer permanently removes its deleted objects. Player freehand cleanup continues to delete the corresponding strokes permanently.
+
 PostgreSQL is the source of truth. Every campaign-owned record carries `campaignId` directly or through a parent relation. Queries and writes must scope by membership and campaign ID. Add foreign keys, unique constraints, and indexes for access paths; use transactions for multi-row changes.
 
 ## V0.1 entities

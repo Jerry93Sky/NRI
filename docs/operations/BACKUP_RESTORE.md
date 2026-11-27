@@ -1,6 +1,35 @@
 # PostgreSQL and media backup / restore
 
-**Status:** `IN_PROGRESS` — no-overwrite database/media backup with manifest verification is implemented; local create/verify and isolated `nri_test` restore drill passed; coordinated production quiescence and scheduled restore validation remain open.
+## Maintenance-window drill — 2026-11-27
+
+The local drill captured and restored the generated **Amber Crossing: The Lantern Vault** fixture in a dedicated Compose instance. The source was `nri_demo` and the target was a new `nri_restore` database. The API was stopped for the entire capture. Seed processes had exited before the dump began. Creation and verification checked a 13-file SHA-256 manifest. The restored campaign title and all 12 asset storage keys matched. Every original asset SHA-256 matched the checksum persisted in PostgreSQL.
+
+The drill was repeated after applying migration `0018_scene_object_recovery`, using a distinct `nri_restore_final` target. The same table counts and all 12 asset hashes matched. A separate retention drill applied expiration to generated copies in a temporary workspace. The newest valid backup, corrupted test directory and original backup survived.
+
+| Restored table | Matched row count |
+| --- | ---: |
+| users | 1 |
+| campaigns | 2 |
+| campaign_memberships | 2 |
+| scenes | 4 |
+| scene_layers | 12 |
+| tokens | 15 |
+| scene_objects | 15 |
+| assets | 12 |
+| chat_messages | 1 |
+| dice_rolls / initiative_trackers / initiative_entries | 0 each |
+
+Keep application and external writers stopped until the dump, media copy and manifest verification finish. Boot the restored database with a separate copy of the backed-up media in a separate network or loopback environment. Restore with `pg_restore --exit-on-error --single-transaction --no-owner --no-privileges` into a newly created database. Compare campaign and scene IDs and membership, object and token counts. Verify each asset storage key with the checksum from PostgreSQL. Generated thumbnails can be rebuilt from the validated originals.
+
+The Docker fallback for `pg_dump` checks that Compose's loopback port matches the configured database. For the closed alpha's unexposed DB, run the PostgreSQL-compatible client in a controlled maintenance environment with access to that network and the media snapshot. Keep backup directories private. A manifest provides integrity checking. Access control and encryption of storage are operator responsibilities.
+
+## Retention
+
+- `pnpm db:backup:prune` previews archived directories eligible for removal. Defaults preserve all verified backups younger than 30 days and the 3 newest verified backups regardless of age.
+- Override `NRI_BACKUP_RETENTION_DAYS` and `NRI_BACKUP_KEEP_MINIMUM` for the deployment. Run `pnpm db:backup:prune --apply` after reviewing the preview and confirming no restore or backup writer is using the directory. The command verifies manifests and keeps unknown, corrupt, staged, symlinked and reserved directories out of its managed set.
+- Schedule the reviewed maintenance commands using the host scheduler. Keep an independently verified copy before applying retention on the primary backup store.
+
+**Status:** verified on isolated data, including the quiesced maintenance-window drill above. Production backup and restore schedules belong to the operator.
 
 ## What must be captured
 

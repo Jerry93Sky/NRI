@@ -4,7 +4,7 @@ Socket.IO is used for multiplayer delivery. The current implementation uses name
 
 ## Connection and rooms
 
-The server resolves the opaque HTTP session cookie during the Socket.IO handshake. Missing, expired, or revoked sessions are rejected. `campaign:join` takes a campaign UUID; the server checks current membership, joins `campaign:<id>`, and additionally joins `campaign:<id>:gm` for Owner/GM. `campaign:leave` leaves both rooms. Sensitive commands also check room membership and current role. Membership removal emits `membership:removed` to the affected `user:<id>` room and removes all of that user's sockets from campaign rooms; a three-context Chromium test verifies removal and event/write denial across two active Player sessions.
+The server resolves the opaque HTTP session cookie during the Socket.IO handshake and rechecks it after registering the session's revocation room. Logout and rotation disconnect sockets attached to that session. Other logins retain their connections. An expiry timer disconnects idle sessions at their stored expiry. `campaign:join` resolves current membership and joins campaign and member rooms plus the GM room for managers. Leave clears those subscriptions. Role changes update joined sockets, removal clears the affected member's subscriptions, and archiving a campaign clears all its subscriptions. Commands have per-event, per-socket rate limits.
 
 ## Client commands
 
@@ -24,14 +24,15 @@ REST endpoints implement scene activation and editing, token creation/ownership,
 | Event | Audience / purpose |
 |---|---|
 | `presence:joined` | Other campaign-room members |
-| `membership:changed` | Campaign room, role update notification |
+| `membership:changed` | Campaign room, role update notification with `campaignId` |
 | `membership:removed` | Affected user's personal room; client clears campaign state |
-| `scene:activated` | Campaign room, `{sceneId}` or `null`; clients reload role-filtered scene list |
+| `campaign:archived` | Campaign room, `{campaignId}`; clients close that workspace |
+| `scene:activated` | Campaign room, `{campaignId, sceneId}` with nullable scene ID. Clients reload the role-filtered scene list |
 | `scene:updated` | Campaign room, public projection, active scene settings only |
 | `token:created`, `token:updated`, `token:moved` | Campaign room for visible active-scene tokens; GM room for hidden or inactive-scene tokens |
 | `chat:message` | Campaign room for public messages |
 | `chat:private` | Sender and recipient personal rooms |
-| `dice:result` | Campaign room |
+| `dice:result` | Campaign room for public rolls and GM room for hidden rolls |
 | `initiative:updated` | Campaign room, player-safe projection |
 | `initiative:gm_updated` | GM room, full projection |
 | `scene:layer_created`, `scene:layer_updated`, `scene:layer_deleted` | Visible layers are sent to the active scene campaign room; all layer changes are also sent to the GM room |
@@ -39,8 +40,10 @@ REST endpoints implement scene activation and editing, token creation/ownership,
 | `scene:object_created`, `scene:object_updated`, `scene:object_deleted` | Public visible active-scene objects go to campaign room; GM-only, hidden, draft-scene and private transitions stay in GM room; public objects leaving visibility emit a remove event |
 | `scene:pointer` | Transient coordinates and server-derived user identity; active scene pointers go to campaign room, while GM draft pointers go to the GM room only. Clients expire markers after 1.6 seconds; pointers are not persisted |
 
-Players receive only the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive/archived scenes are denied. Hidden token snapshots, hidden token resource tracks, GM notes, owner notes, scene layers/objects, and hidden initiative details use separate role projections. GM token notes stay in GM projections; owner notes are sent to the assigned owner's user room only while the token is visible in the active scene. Players may adjust visible resource tracks only on owned tokens. Player layer/object snapshots omit GM or non-visible layers and invisible objects. Clients must not use local filtering as an access control.
+Players receive the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive or archived scenes are denied. Hidden token fields, note fields, scene items and initiative use role-specific projections. Owner-note events go to the assigned owner's joined campaign member room while the token is visible in the active scene. The ordinary token projection updates the former owner. Players may adjust visible resource tracks on owned tokens. Player object snapshots omit deleted objects, GM layers, other non-visible layers and invisible objects.
 
 ## Concurrency and recovery limits
 
-Mutable scenes and tokens use `expectedVersion`; stale writes return `CONFLICT`. A stale authorized `token:move` acknowledgement includes the latest privacy-filtered token projection when it still exists, so clients can reconcile without guessing which concurrent move committed. Multiplayer smoke and a two-browser scenario race two authorized moves, check that exactly one commits, and compare the conflict acknowledgement with the committed snapshot. Reconnect requires a new authenticated connection and clients reload campaign and tabletop REST snapshots; a browser test verifies GM/Player session and token-state recovery after restarting the isolated API. There is no durable event log or cursor replay. Hidden-object event permutations and revocation caused by role changes still need additional coverage.
+Mutable records use `expectedVersion`. A stale authorized `token:move` may return the latest allowed token projection. Token group updates and object lifecycle groups fail atomically if any expected version is stale. Undo/Redo submits inverse commands with the recorded versions, under current permissions. Clients rejoin and refill campaign and scene snapshots after reconnect. Scope checks discard late results from previous workspaces, and token events received while a snapshot loads are applied on top of it.
+
+Command IDs and idempotency keys would help with non-idempotent chat and dice after a lost acknowledgement. The current client does not automatically retry these commands. Token/object edits use revision checks and snapshots. An event cursor or transactional outbox would become relevant when durable replay or delivery across API instances is required. The single-instance deployment uses in-memory rooms and has no general durable realtime replay contract.

@@ -2,30 +2,31 @@
 
 ## V0.1 shape
 
-Use a pnpm TypeScript workspace with a React/Vite frontend, a Fastify application, shared Zod contracts, and cohesive modules in a modular monolith. PostgreSQL is the durable source of truth; Drizzle ORM and Drizzle Kit migrations manage the schema. Socket.IO carries realtime events. Uploaded media currently uses a local filesystem directory configured with `UPLOAD_DIR`; the storage adapter is not yet abstracted for S3.
+The pnpm TypeScript workspace contains a React/Vite frontend, a Fastify application and shared Zod contracts. PostgreSQL owns durable state. Drizzle ORM and Drizzle Kit migrations manage the schema. Socket.IO carries realtime events. Uploaded media uses the local filesystem directory configured by `UPLOAD_DIR`.
 
 ```text
 Browser (React, PixiJS)
   ├── HTTP JSON API ── Fastify ── route/domain logic ── Drizzle ── PostgreSQL
   └── Socket.IO ─────── auth + campaign room authorization ───────┘
-                                      └── asset storage adapter ── local files
+                                      └── asset module ── local files
 ```
 
-Shared Zod contracts validate selected input boundaries. Several Socket.IO handlers still contain logic directly in `apps/server/src/index.ts`; common REST/socket application services are a V0.1.1 refactoring target. The browser is a renderer and command source; it is never authoritative for roles, random results, or final state.
+Shared Zod contracts validate command inputs and define public token, layer and object shapes. The browser sends commands and renders server results. The server owns roles, random results and committed state.
 
 ## Module boundaries
 
-Current code is primarily in `apps/server/src/index.ts` and `apps/server/src/db/`: auth, campaigns/membership, assets, scenes/tokens, messaging, dice, initiative, sockets and audit writes are route-level concerns. `packages/contracts` contains shared schemas and pure dice/movement rules. The named modules below are boundaries to extract as related V0.1.1 work is implemented, not existing directories.
-
-Do not add placeholder modules for later products.
+- `index.ts` starts and shuts down the HTTP process. `app.ts` configures the server, middleware and route registration. `config/runtime.ts` validates the deployment settings for this process.
+- Route modules own auth, campaigns, invitations and membership, chat, initiative, scenes, scene content, tokens and assets. `security/access.ts` shares session, role and body validation. `domain/projections.ts` owns sensitive projection rules. `realtime/` owns session and campaign subscriptions, command limits and socket commands.
+- Several transactions and publications still sit in the feature route modules. Extracting shared token and scene mutation services remains open.
+- The web app uses a scoped snapshot-and-event hook in `features/tabletop/useTabletopSync.ts`, versioned undo/redo in `useCommandHistory.ts`, an HTTP helper in `services/api.ts` and the lazy Pixi component in `ui/TableCanvas.tsx`. `App.tsx` retains page assembly and several workflow handlers.
 
 ## State flow and concurrency
 
-Authenticate every HTTP and WebSocket connection. The current handlers resolve membership for protected requests and use optimistic versions for scene/token/initiative writes. Not every multi-record operation shares a transaction, mutation command IDs are not implemented, and reconnect currently reloads scene state instead of replaying a durable event cursor. V0.1.1 should close these gaps before making broader reliability claims.
+HTTP and WebSocket operations resolve identity and campaign role. Scene, token, object and initiative writes use optimistic versions. Token groups, object copy and lifecycle groups use PostgreSQL transactions. The browser rejoins after reconnect and reloads its scoped snapshots. Some permission checks precede their mutation transaction. See [realtime details](REALTIME_PROTOCOL.md) for current limits.
 
 ## Security and operations
 
-Never broadcast ORM records directly. Build public and GM-specific projections. Enforce asset access at the server for every request. Do not log passwords, session IDs, invite secrets, message bodies marked secret, or hidden object payloads. Production uses HTTPS, secure cookies, generated secrets, restrictive origins, backups, and operator-managed secrets. No billing, AI dependency, or production readiness claim is part of this design.
+The security review tracks projection and media ACLs by role. The closed-alpha Compose configuration has locally verified HTTPS and shutdown paths. Operators manage deployment secrets, network restrictions and backups. [Security review](../security/V0.1.1_REVIEW.md) · [Production deployment](../operations/PRODUCTION_DEPLOYMENT.md)
 
 ## Extension points
 

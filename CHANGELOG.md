@@ -4,6 +4,15 @@ All notable project changes will be recorded here.
 
 ## Unreleased — V0.1.1
 
+### Foundation stabilization
+
+- Split Fastify assembly, feature routes, realtime session and room management, and privacy projections into modules. Isolated frontend scene synchronization and a shared versioned history.
+- Disconnect socket sessions on logout and rotation. Update room access on role changes, archive campaigns without leaving live subscriptions, and restrict owner-note delivery to the current member.
+- Add versioned tabletop Undo/Redo for token movement and supported token/object edits, plus recoverable and atomic scene object lifecycle. Migration `0018_scene_object_recovery` extends existing databases.
+- Fix production Pixi initialization. Reuse token display nodes and scope redraws to changed layers. Record measured profiles A, B and C.
+- Add alpha HTTPS containers, controlled migration, graceful shutdown and local metrics. Verify quiesced backup/restore with Amber and add retention controls.
+- Verify the playable demo on a clean local seed and add GM/Player acceptance steps. CI includes dependency, tracked-secret, operational and production renderer checks.
+
 - Added an original three-scene “Amber Crossing: The Lantern Vault” demo seed with procedural map and portrait assets, hidden GM content, system-neutral resources, and a facilitator guide/provenance register. The seed is additive, idempotent, and refuses non-loopback or non-`nri_dev`/`nri_demo` databases.
 - Added Owner/GM campaign copying with independent scene/layer/object/token/asset IDs, copied image bytes under new storage keys, preserved draft and GM content, no copied memberships/chat/live initiative, and cleared owner-specific token assignments/notes. Dedicated two-context Playwright coverage verifies copy relationships and Player denial.
 
