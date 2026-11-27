@@ -6,7 +6,7 @@ import sharp from 'sharp';
 import { and, eq, sql } from 'drizzle-orm';
 import { amberPlayableMaps, amberPlayablePortrait, amberPlayablePortraits } from './demoArt.js';
 import { db, pool } from './db/index.js';
-import { assets, auditEvents, campaigns, memberships, messages, sceneLayers, sceneObjects, scenes, tokens } from './db/schema.js';
+import { assets, auditEvents, campaigns, memberships, messages, sceneLayers, sceneObjects, scenes, tokens, users } from './db/schema.js';
 
 const campaignTitle = 'Amber Crossing: The Lantern Vault';
 const parentTitle = 'Amber Crossing';
@@ -118,8 +118,13 @@ async function main() {
     throw new Error('This additive demo seed only runs against loopback PostgreSQL databases named nri_dev or nri_demo.');
   }
 
-  const parentCampaigns = await db.select({ id: campaigns.id, ownerId: campaigns.ownerId }).from(campaigns)
+  let parentCampaigns = await db.select({ id: campaigns.id, ownerId: campaigns.ownerId }).from(campaigns)
     .where(and(eq(campaigns.title, parentTitle), sql`${campaigns.archivedAt} IS NULL`)).limit(2);
+  if (parentCampaigns.length === 0) {
+    parentCampaigns = await db.select({ id: campaigns.id, ownerId: campaigns.ownerId }).from(campaigns)
+      .innerJoin(users, eq(campaigns.ownerId, users.id))
+      .where(and(eq(campaigns.title, 'The Amber Crossing'), eq(users.email, 'demo@nri.local'), sql`${campaigns.archivedAt} IS NULL`)).limit(2);
+  }
   if (parentCampaigns.length !== 1) throw new Error('Expected exactly one active Amber Crossing campaign to identify its owner; no rows will be changed.');
   const parent = parentCampaigns[0]!;
   const existing = await db.select({ id: campaigns.id }).from(campaigns)
