@@ -17,12 +17,22 @@ Shared Zod contracts validate command inputs and define public token, layer and 
 
 - `index.ts` starts and shuts down the HTTP process. `app.ts` configures the server, middleware and route registration. `config/runtime.ts` validates the deployment settings for this process.
 - Route modules own auth, campaigns, invitations and membership, chat, initiative, scenes, scene content, tokens and assets. `security/access.ts` shares session, role and body validation. `domain/projections.ts` owns sensitive projection rules. `realtime/` owns session and campaign subscriptions, command limits and socket commands.
-- Several transactions and publications still sit in the feature route modules. Extracting shared token and scene mutation services remains open.
+- `modules/tokens/movement.ts` handles single Socket.IO movement and REST group updates. `security/commandAccess.ts` provides row-locking queries for session and campaign authorization. `realtime/movementEvents.ts` delivers committed movement and group updates. Other feature transactions and publications remain in their route modules.
 - The web app uses a scoped snapshot-and-event hook in `features/tabletop/useTabletopSync.ts`, versioned undo/redo in `useCommandHistory.ts`, an HTTP helper in `services/api.ts` and the lazy Pixi component in `ui/TableCanvas.tsx`. `App.tsx` retains page assembly and several workflow handlers.
 
 ## State flow and concurrency
 
 HTTP and WebSocket operations resolve identity and campaign role. Scene, token, object and initiative writes use optimistic versions. Token groups, object copy and lifecycle groups use PostgreSQL transactions. The browser rejoins after reconnect and reloads its scoped snapshots. Some permission checks precede their mutation transaction. See [realtime details](REALTIME_PROTOCOL.md) for current limits.
+
+### Token movement transaction
+
+The service uses PostgreSQL `READ COMMITTED`. It locks the session, parses the shared Zod contract, resolves UUIDs and locks the active campaign record, the current membership and the scene. It locks live target tokens by ascending UUID. A single command requires a joined campaign. A group requires Owner/GM and 2–50 distinct targets. Managers can access non-archived drafts. Players must own a visible token on the active scene. Coordinates use the existing finite −10,000 to 10,000 range. A locked token rejects a positional edit, including an attempt to unlock and move it in one group patch. A property-only unlock remains available.
+
+The order is session → campaign → memberships by user UUID → scene → tokens by token UUID. Session, campaign, membership and scene reads use `FOR SHARE`. Mutable token rows use `FOR NO KEY UPDATE`. PostgreSQL rechecks a row after waiting for a concurrent update or delete. Logout and rotation delete the same session row. Membership removal and role changes write the same membership row. Token locking and visibility edits use the same token row and version. Ownership reassignment locks both the acting member and the prospective owner in UUID order before the scene and token. Scene activation, archive and reordering take the campaign with `FOR NO KEY UPDATE` before touching scene rows. Token copies take campaign and membership locks before locking source tokens in UUID order. Disjoint token moves can proceed concurrently.
+
+The service rechecks session expiry after waiting. It authorizes and version-checks the entire group before applying any update. The token updates use the expected version in the predicate, increment it once per token and commit with their audit rows. If withdrawal commits first, movement uses the new permissions. A movement holding the relevant locks can commit before withdrawal, and subsequent movement uses the new permissions. Explicit locks and version predicates cover these resources at the existing isolation level. The service has no Serializable retry loop.
+
+The commit returns the caller's authorized projection and the affected token IDs and visibility transitions. The publisher locks current audience and token state in a follow-up transaction before queuing Socket.IO packets. Current roles and visibility govern delivery if they change after the write. Audit rows record committed actions. Delivery is best effort, with snapshots on reconnect. Command IDs and stored acknowledgements remain future work.
 
 ## Security and operations
 
@@ -113,7 +123,7 @@ sequenceDiagram
 
 ### V0.1.1 guardrails
 
-- Continue stabilizing the existing REST and Socket.IO paths. Prioritize the shared token-movement transaction, current permissions at commit and regression tests for in-flight role changes. Keep the existing lost-acknowledgement follow-up focused on concrete non-idempotent command paths.
+- Extract scene-object group delete/recover into one application service next. Preserve its REST contract, check versions and permissions under locks, and add deterministic regressions for role and layer changes, rollback and post-commit publication. Track lost acknowledgements for non-idempotent chat and dice separately.
 - Preserve current IDs, stored campaigns, projections, optimistic versions and existing API payloads. V0.1.1 token coordinates and scene geometry use different current units. V0.2 owns the explicit conversion and geometry versioning, following its measured baseline.
 - Treat the current dice expression, initiative tracker and bounded token resource fields as legacy tabletop capabilities. Future rule packages can opt into other models. Keep future snapshots free of assumptions about mandatory turn order, classes or hit points.
 - Future package metadata, character and world schemas, evaluator and editors start with their named releases. The current refactor has enough work in authorization, projections, concurrency, reconnect, lifecycle and manual acceptance. [Release checkpoints](../product/LONG_TERM_IMPLEMENTATION_PLAN.md)

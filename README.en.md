@@ -10,6 +10,7 @@ NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns
 
 - Campaign roles, invitations, active scenes and GM drafts. PostgreSQL and Socket.IO back multiplayer commands.
 - Grid calibration, images, tokens and private notes, layers and objects, grouped actions, drawing, ruler, pointer and selection. Version-aware Undo/Redo covers movement, supported properties and the object lifecycle.
+- Single movement and group token updates share a PostgreSQL transaction for authorization, version checks and atomic writes. Movement events are published after commit.
 - Public/private chat, public and hidden rolls, initiative, reconnect and API restart recovery. Session and role changes update active realtime access.
 - **Amber Crossing: The Lantern Vault** with original assets, campaign copy and the [owner acceptance guide](docs/releases/V0.1.1_MANUAL_ACCEPTANCE.md).
 - Isolated verification of the [HTTPS alpha stack](docs/operations/PRODUCTION_DEPLOYMENT.md), [SHA-256 backup/restore and retention](docs/operations/BACKUP_RESTORE.md), and [load profiles A/B/C](docs/performance/LOAD_TEST_REPORT.md).
@@ -43,7 +44,7 @@ corepack pnpm@12.23.0 typecheck
 corepack pnpm@12.23.0 test
 ```
 
-The multiplayer integration test is documented in the [acceptance report](docs/releases/V0.1_ACCEPTANCE_REPORT.md). Do not publish `.env`, user data, or uploaded maps.
+The [V0.1 report](docs/releases/V0.1_ACCEPTANCE_REPORT.md) documents the multiplayer integration test. The [V0.1.1 report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md#transactional-token-movement--2026-11-27) covers concurrent movement tests. Do not publish `.env`, user data, or uploaded maps.
 
 ## Documentation and roadmap
 

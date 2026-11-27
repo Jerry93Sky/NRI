@@ -10,6 +10,10 @@ All notable project changes will be recorded here.
 
 ### Foundation stabilization
 
+- Run Playwright on Ubuntu 24.04 after the Ubuntu 26.04 runner failed to fetch Chromium dependencies from the Microsoft APT repository.
+- Route single Socket.IO moves and REST group moves through one PostgreSQL transaction for authorization, version checks, atomic writes and audit records. Reject positional updates to locked tokens, and authorize live movement delivery after commit.
+- Add 23 PostgreSQL movement regression scenarios to CI, including lock-ordered authorization races, private conflict projections and rollback without realtime events.
+
 - Split Fastify assembly, feature routes, realtime session and room management, and privacy projections into modules. Isolated frontend scene synchronization and a shared versioned history.
 - Disconnect socket sessions on logout and rotation. Update room access on role changes, archive campaigns without leaving live subscriptions, and restrict owner-note delivery to the current member.
 - Add versioned tabletop Undo/Redo for token movement and supported token/object edits, plus recoverable and atomic scene object lifecycle. Migration `0018_scene_object_recovery` extends existing databases.

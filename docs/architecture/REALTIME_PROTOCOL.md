@@ -13,7 +13,7 @@ The server resolves the opaque HTTP session cookie during the Socket.IO handshak
 | `campaign:join` | campaign UUID string | `{ok, role}` or `{error}`; role is resolved on server |
 | `campaign:leave` | campaign UUID string | no acknowledgement |
 | `scene:pointer` | `{campaignId, sceneId, x, y}` | `{ok}` or `{error}`; current membership and joined campaign room are checked, coordinates must be within scene bounds, Players may point only at the active scene, and per-socket updates are rate-limited to 20/sec |
-| `token:move` | `{tokenId, x, y, expectedVersion}` | `{ok, token}`, `{error: CONFLICT, token?}`, or `{error}`; ownership/role, active scene, room and optimistic token version checked. On conflict, `token` is the current privacy-filtered projection when it still exists |
+| `token:move` | `{tokenId, x, y, expectedVersion}` | `{ok: true, token}`, `{error: 'CONFLICT', token}`, or `{error}`. Conflict details require current permission to move. Inaccessible and unknown token IDs receive `FORBIDDEN` without a token |
 | `chat:send` | `{campaignId, body, recipientId?}` | `{ok, message}` or `{error}`; recipient membership and Player-to-GM private-message policy checked |
 | `dice:roll` | `{campaignId, expression}` | `{ok, roll}` or `{error}`; server parses and generates dice results |
 
@@ -43,6 +43,10 @@ REST endpoints implement scene activation and editing, token creation/ownership,
 Players receive the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive or archived scenes are denied. Hidden token fields, note fields, scene items and initiative use role-specific projections. Owner-note events go to the assigned owner's joined campaign member room while the token is visible in the active scene. The ordinary token projection updates the former owner. Players may adjust visible resource tracks on owned tokens. Player object snapshots omit deleted objects, GM layers, other non-visible layers and invisible objects.
 
 ## Concurrency and recovery limits
+
+`token:move` and `PATCH /api/scenes/:sceneId/tokens/group` share the [token movement transaction](ARCHITECTURE.md#token-movement-transaction). The group returns `{tokens}` after commit, HTTP 409 with `CONFLICT` for a stale authorized batch, or HTTP 403 with `FORBIDDEN` for forbidden movement on an accessible scene, including a positional patch on any locked target. Unknown and inaccessible scenes share the HTTP 404 response. Group rejections carry only an error code. An authorized Player-owner single conflict can include their owner note and visible resource tracks. The regular Player acknowledgement and public broadcast omit private notes.
+
+The service commits before any successful movement or group event is queued. For these commands, sockets in the campaign room are delivery candidates. The publisher checks live sessions and roles in PostgreSQL and applies current scene and token visibility. A formerly public token hidden by a group update can emit `token:hidden` with only the token and scene IDs. Publication can reflect a newer committed version if another update wins before delivery. The acknowledgement is the scoped result at the command transaction. On transport interruption, subsequent snapshots reconcile durable state. The transport provides best-effort live delivery.
 
 Mutable records use `expectedVersion`. A stale authorized `token:move` may return the latest allowed token projection. Token group updates and object lifecycle groups fail atomically if any expected version is stale. Undo/Redo submits inverse commands with the recorded versions, under current permissions. Clients rejoin and refill campaign and scene snapshots after reconnect. Scope checks discard late results from previous workspaces, and token events received while a snapshot loads are applied on top of it.
 
