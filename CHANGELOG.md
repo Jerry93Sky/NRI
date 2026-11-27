@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — RT-RETRY final fixes, SEC-OPS and PLAY-GESTURES
+
+- Recover a committed token copy after source deletion and a scene copy after source archive. Recover a committed campaign copy before opening source files. Verify pruning concurrent with replay.
+- Redact filesystem and database failure details from application logs. Add a canary test and a bounded upload profile with real image dimensions.
+- Cancel interrupted canvas gestures, restore scene creation focus and refresh the authorized snapshot after history conflicts.
+- Record planned Player Tabletop and NPC social relations, commercial hypotheses and the PERF-GPU/OPS follow-up.
+
 ## Unreleased — RT-RETRY Part II
 
 - Add 90-day REST receipts and optional `Idempotency-Key` for token, object, scene and campaign create/copy, and asset upload. Store result IDs and check current access on replay.

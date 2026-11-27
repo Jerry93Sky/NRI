@@ -12,6 +12,8 @@ Preparation and improv tools include a reusable NPC pool; NPCs and opponents pla
 
 ## Proposed architectural directions
 
+Player-facing dialogue and the visible attitude indicator belong to the [Player Tabletop](PLAYER_TABLETOP.md). The GM controls the indicator in the planned [Social Relations](../architecture/SOCIAL_RELATIONS.md) flow. Private notes and GM-only reasons for attitude changes remain scoped to the GM.
+
 These are working names for possible boundaries, not existing modules: **Scene Triggers**, **Effects & Hazards**, **NPC/Encounter Pool**, **GM Notebook**, **GM Overlay**, **Party Monitor**, **Quick Actions**, **Fate Engine**, and **World Control**.
 
 Visual effects should remain separate from Rules Engine mechanics. Hidden triggers, notes, and per-player scenes require server-authoritative access control. Secret data must not be sent to unauthorized players through APIs, realtime events, media, or cached projections. These are future constraints, not a request to build these systems now.

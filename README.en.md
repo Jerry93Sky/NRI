@@ -10,6 +10,9 @@ NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns
 
 ## Implemented
 
+- Replaying a token copy can recover an authorized result after source deletion. Receipt cleanup is tested in an isolated database. Two simultaneous asset processing jobs bound image upload memory, and application logs exclude sensitive data. [RT-RETRY](docs/architecture/COMMAND_RETRY_POLICY.md) · [SEC-OPS](docs/security/LOGGING_AND_REDACTION.md) · [Gesture matrix](docs/testing/PLAY_GESTURES_MATRIX.md)
+- [Player Tabletop](docs/design/PLAYER_TABLETOP.md) and [NPC social relations](docs/architecture/SOCIAL_RELATIONS.md) are `PLANNED`. [Commercial strategy](docs/product/COMMERCIAL_STRATEGY_DRAFT.md) is a discussion draft. The next operational package is described in the [PERF-GPU and OPS handoff](docs/operations/PERF_GPU_OPS_HANDOFF.md).
+
 - Campaign roles, invitations, active scenes and GM drafts. PostgreSQL and Socket.IO back multiplayer commands.
 - Grid calibration, images, tokens and private notes, layers and objects, grouped actions, drawing, ruler, pointer and selection. Version-aware Undo/Redo covers movement, supported properties and the object lifecycle.
 - Single movement and group token updates share a PostgreSQL transaction for authorization, version checks and atomic writes. Movement events are published after commit.

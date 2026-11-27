@@ -19,6 +19,8 @@
 
 ## Planned experience concepts
 
+The [Player Tabletop](PLAYER_TABLETOP.md) describes the player experience around the central scene. The [GM Screen](GM_SCREEN.md) remains the GM workspace. NPC conversations use spoken roleplay and the future [group attitude](../architecture/SOCIAL_RELATIONS.md) concept.
+
 ### Landing and Campaign Doors
 
 The landing may use a classic game menu or a themed site. Campaign Doors use a responsive grid of large, individually illustrated doors, presented like folders in Windows rather than a 3D corridor. Show each campaign title and a one- or two-line description beneath its door. Hover may crack the door open and reveal colored light; title hover shows a short story phrase, title click opens full details, and door click transitions into the campaign lobby. A separate crooked, plain door is captioned «Создать новое приключение». See [Campaign Doors](CAMPAIGN_DOORS.md) for the approved direction and open choices.

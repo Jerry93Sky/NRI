@@ -10,7 +10,7 @@ The owner approved the product name EVERDOOR, the tagline “Every door, a new a
 
 ### Campaign Lobby and GM Screen — PLANNED
 
-Owner-approved lobby requirements and GM Screen capabilities are recorded in [Campaign Lobby](../design/CAMPAIGN_LOBBY.md) and [GM Screen](../design/GM_SCREEN.md). The lobby is a pre-session prepared-material space, not the primary world editor; Master Studio prepares content. One multitrack audio concept spans lobby and game scenes. Structured event inputs, chronicle drafts, GM review and audience-scoped publication are a proposed implementation direction, not a mandate for generative AI. GM Screen module names are working concepts. No release sequence is approved, no V0.1.1 gate changes, and Player Tabletop redesign remains paused.
+Approved directions are recorded in [Campaign Lobby](../design/CAMPAIGN_LOBBY.md), [GM Screen](../design/GM_SCREEN.md), [Player Tabletop](../design/PLAYER_TABLETOP.md) and [Social Relations](../architecture/SOCIAL_RELATIONS.md). Master Studio prepares content used by the lobby and the game. One multitrack audio concept spans both. Audience-scoped chronicle drafts and review, configurable combat automation and the Social Relations architecture are proposals. Release sequencing and licensing decisions remain open. [Commercial hypotheses](COMMERCIAL_STRATEGY_DRAFT.md) are separate from delivery scope.
 
 | Current area | Preserve or improve in V0.1.1 | First release that implements the new capability |
 | --- | --- | --- |
