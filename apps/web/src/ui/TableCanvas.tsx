@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { Application, Assets, Container, Graphics, Sprite, Text } from 'pixi.js';
-import type { Texture } from 'pixi.js';
+import type { FederatedPointerEvent, Texture } from 'pixi.js';
 import type { PublicSceneObject, PublicToken } from '@nri/contracts';
 import { measureSceneDistance, selectTokenIdsInRect, zoomToPointer } from './canvasMath';
 
 type Props = {
+  interactionScope: string; connected: boolean;
   tokens: PublicToken[]; objects: PublicSceneObject[]; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number; unitsPerCell: number; unitLabel: string;
   onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; onDropTokenAsset: (assetId: string, x: number, y: number) => void; fitLabel: string; rulerActive: boolean; rulerLabel: string; selectionMode: boolean; selectionLabel: string; onSelectTokens: (ids: string[]) => void; pointerActive: boolean; pointerLabel: string; onSharePointer: (x: number, y: number) => void; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
@@ -46,6 +47,50 @@ export function TableCanvas(props: Props) {
     let objectTexturesChanged = false;
     let tokenTexturesChanged = false;
     let refresh = () => {};
+    type Gesture = { kind: 'object' | 'token' | 'drawing' | 'selection'; pointer: number; valid: () => boolean; cancel: () => void };
+    let gesture: Gesture | undefined;
+    const cancelGesture = () => gesture?.cancel();
+    const onPointerInterrupted = (event: PointerEvent) => {
+      if (gesture?.pointer === event.pointerId) cancelGesture();
+    };
+    const onPointerReleasedOutside = (event: PointerEvent) => {
+      if (gesture?.pointer !== event.pointerId) return;
+      const bounds = app.canvas.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX >= bounds.right || event.clientY < bounds.top || event.clientY >= bounds.bottom) cancelGesture();
+    };
+    const onGestureKey = (event: KeyboardEvent) => { if (event.key === 'Escape') cancelGesture(); };
+    const startGesture = (
+      event: FederatedPointerEvent, kind: Gesture['kind'], valid: () => boolean,
+      move: (event: FederatedPointerEvent) => void, commit: (event: FederatedPointerEvent) => void, reset: () => void,
+    ) => {
+      cancelGesture();
+      const scope = latest.current.interactionScope;
+      const allowed = () => latest.current.connected && latest.current.interactionScope === scope && valid();
+      if (event.button !== 0 || !allowed()) { reset(); return; }
+      const pointer = event.pointerId;
+      const clear = () => {
+        gesture = undefined;
+        app.stage.off('globalpointermove', onMove);
+        app.stage.off('pointerup', onUp);
+        app.stage.off('pointerupoutside', onOutside);
+      };
+      const cancel = () => { clear(); reset(); };
+      const onMove = (update: FederatedPointerEvent) => {
+        if (update.pointerId !== pointer) return;
+        if (allowed()) move(update); else cancel();
+      };
+      const onUp = (update: FederatedPointerEvent) => {
+        if (update.pointerId !== pointer) return;
+        clear();
+        try { if (allowed()) commit(update); }
+        finally { reset(); }
+      };
+      const onOutside = (update: FederatedPointerEvent) => { if (update.pointerId === pointer) cancel(); };
+      gesture = { kind, pointer, valid: allowed, cancel };
+      app.stage.on('globalpointermove', onMove);
+      app.stage.on('pointerup', onUp);
+      app.stage.on('pointerupoutside', onOutside);
+    };
     const loadTexture = async (url: string) => {
       await unloadingAssetUrls.get(url);
       trackedAssetUrls.add(url);
@@ -151,6 +196,8 @@ export function TableCanvas(props: Props) {
         }
         else continue;
         if (latest.current.canEditObject(item)) {
+          const editable = () => latest.current.objects.some((current) => current.id === item.id
+            && current.version === item.version && latest.current.canEditObject(current)) && !latest.current.pointerActive;
           shape.eventMode = 'static'; shape.cursor = 'grab';
           shape.on('pointerdown', (event) => {
             if (latest.current.pointerActive) { event.stopPropagation(); return; }
@@ -158,11 +205,12 @@ export function TableCanvas(props: Props) {
             const start = world.toLocal(event.global); const originalX = item.x; const originalY = item.y;
             const move = (moveEvent: typeof event) => { const point = world.toLocal(moveEvent.global); shape.position.set(originalX + point.x - start.x + item.width / 2, originalY + point.y - start.y + item.height / 2); };
             const finish = () => {
-              app.stage.off('globalpointermove', move); app.stage.off('pointerup', finish); app.stage.off('pointerupoutside', finish); shape.cursor = 'grab';
               const nextX = Math.round(shape.x - item.width / 2); const nextY = Math.round(shape.y - item.height / 2);
               if (nextX !== originalX || nextY !== originalY) latest.current.onEditObject(item.id, { x: nextX, y: nextY });
             };
-            shape.cursor = 'grabbing'; app.stage.on('globalpointermove', move); app.stage.on('pointerup', finish); app.stage.on('pointerupoutside', finish);
+            const origin = shape.position.clone();
+            shape.cursor = 'grabbing';
+            startGesture(event, 'object', editable, move, finish, () => { shape.position.copyFrom(origin); shape.cursor = 'grab'; });
           });
           const resizeHandle = new Graphics().rect(-6, -6, 12, 12).fill({ color: 0xf3c78b }).stroke({ color: 0x342a24, width: 1 });
           resizeHandle.position.set(item.width / 2, item.height / 2); resizeHandle.eventMode = 'static'; resizeHandle.cursor = 'nwse-resize';
@@ -171,12 +219,12 @@ export function TableCanvas(props: Props) {
             event.stopPropagation();
             const move = (moveEvent: typeof event) => { const point = shape.toLocal(moveEvent.global); resizeHandle.position.set(Math.max(4, point.x), Math.max(4, point.y)); };
             const finish = (finishEvent: typeof event) => {
-              app.stage.off('globalpointermove', move); app.stage.off('pointerup', finish); app.stage.off('pointerupoutside', finish);
               const point = shape.toLocal(finishEvent.global); const width = Math.max(8, Math.round(point.x * 2)); const height = Math.max(8, Math.round(point.y * 2));
               const x = Math.round(shape.x - width / 2); const y = Math.round(shape.y - height / 2);
               if (width !== item.width || height !== item.height) latest.current.onEditObject(item.id, { x, y, width, height });
             };
-            app.stage.on('globalpointermove', move); app.stage.on('pointerup', finish); app.stage.on('pointerupoutside', finish);
+            const origin = resizeHandle.position.clone();
+            startGesture(event, 'object', editable, move, finish, () => resizeHandle.position.copyFrom(origin));
           });
           shape.addChild(resizeHandle);
         }
@@ -259,18 +307,21 @@ export function TableCanvas(props: Props) {
           const groupTokens = latest.current.canManage && latest.current.selectedTokenIds.includes(token.id) ? latest.current.tokens.filter((item) => latest.current.selectedTokenIds.includes(item.id) && latest.current.canEdit(item) && !item.locked) : [];
           const groupNodes = groupTokens.length > 1 ? [...pieces.children].filter((child) => groupTokens.some((item) => item.id === (child as Container).label)) as Container[] : [];
           const groupOrigins = groupNodes.map((child) => child.position.clone());
+          const movable = () => (groupNodes.length > 1 ? groupTokens : [token]).every((original) =>
+            latest.current.tokens.some((current) => current.id === original.id && current.version === original.version
+              && !current.locked && latest.current.canEdit(current))) && !latest.current.pointerActive;
           const move = (moveEvent: typeof event) => { const point = world.toLocal(moveEvent.global); const dx = point.x - start.x; const dy = point.y - start.y; node.position.set(origin.x + dx, origin.y + dy); groupNodes.forEach((child, index) => child.position.set(groupOrigins[index]!.x + dx, groupOrigins[index]!.y + dy)); };
           const up = () => {
-            app.stage.off('globalpointermove', move); app.stage.off('pointerup', up); app.stage.off('pointerupoutside', up); node.cursor = 'grab';
             const { gridSize: cellSize, snapToGrid: snap } = latest.current;
             const x = node.x / cellSize; const y = node.y / cellSize;
-            node.position.copyFrom(origin);
-            groupNodes.forEach((child, index) => child.position.copyFrom(groupOrigins[index]!));
             const nextX = snap ? Math.round(x) : Number(x.toFixed(2)); const nextY = snap ? Math.round(y) : Number(y.toFixed(2));
             if (groupTokens.length > 1) { const deltaX = (snap ? Math.round(nextX - token.x) : Number((nextX - token.x).toFixed(2))); const deltaY = (snap ? Math.round(nextY - token.y) : Number((nextY - token.y).toFixed(2))); if (deltaX || deltaY) latest.current.onMoveGroup(groupTokens.map((item) => item.id), deltaX, deltaY); }
             else if (nextX !== token.x || nextY !== token.y) latest.current.onMove(token, nextX, nextY);
           };
-          app.stage.on('globalpointermove', move); app.stage.on('pointerup', up); app.stage.on('pointerupoutside', up);
+          startGesture(event, 'token', movable, move, up, () => {
+            node.cursor = 'grab'; node.position.copyFrom(origin);
+            groupNodes.forEach((child, index) => child.position.copyFrom(groupOrigins[index]!));
+          });
         });
         node.label = token.id;
         pieces.addChildAt(node, index);
@@ -321,14 +372,12 @@ export function TableCanvas(props: Props) {
       const props = latest.current;
       const prior = priorProps;
       const sceneChanged = props.sceneId !== previousSceneId;
+      if (gesture && (!gesture.valid() || sceneChanged || props.gridSize !== prior?.gridSize)) cancelGesture();
       if (sceneChanged) {
         previousSceneId = props.sceneId;
         rulerPoints.length = 0;
         clearSelectionBox();
         clearRemotePointers();
-        app.stage.removeAllListeners('globalpointermove');
-        app.stage.removeAllListeners('pointerup');
-        app.stage.removeAllListeners('pointerupoutside');
         for (const { node } of tokenNodes.values()) node.destroy({ children: true });
         tokenNodes.clear();
       }
@@ -345,9 +394,15 @@ export function TableCanvas(props: Props) {
       if (gridChanged) redrawGrid();
       if (gridChanged || props.rulerActive !== prior?.rulerActive || props.unitsPerCell !== prior?.unitsPerCell || props.unitLabel !== prior?.unitLabel) redrawRuler();
       if (props.objects !== prior?.objects || props.canEditObject !== prior?.canEditObject || props.layerSortOrder !== prior?.layerSortOrder
-        || props.canManage !== prior?.canManage || objectTexturesChanged || sceneChanged) redrawObjects();
+        || props.canManage !== prior?.canManage || objectTexturesChanged || sceneChanged) {
+        if (gesture?.kind === 'object') cancelGesture();
+        redrawObjects();
+      }
       if (props.tokens !== prior?.tokens || props.canManage !== prior?.canManage || props.canEdit !== prior?.canEdit
-        || props.gridSize !== prior?.gridSize || tokenTexturesChanged || sceneChanged) redrawTokens();
+        || props.gridSize !== prior?.gridSize || tokenTexturesChanged || sceneChanged) {
+        if (gesture?.kind === 'token' && (props.tokens !== prior?.tokens || tokenTexturesChanged)) cancelGesture();
+        redrawTokens();
+      }
       if (sceneChanged || props.backgroundUrl !== prior?.backgroundUrl || sizeChanged) void redrawMap();
       objectTexturesChanged = false;
       tokenTexturesChanged = false;
@@ -370,7 +425,7 @@ export function TableCanvas(props: Props) {
       rulerPoints.push(world.toLocal(event.global));
       redrawRuler();
     };
-    const onSelectionStart = (event: { global: { x: number; y: number }; stopPropagation: () => void }) => {
+    const onSelectionStart = (event: FederatedPointerEvent) => {
       if (!latest.current.canManage || !latest.current.selectionMode || latest.current.calibrationActive || latest.current.pointerActive) return;
       event.stopPropagation();
       const start = world.toLocal(event.global);
@@ -382,14 +437,12 @@ export function TableCanvas(props: Props) {
       };
       const move = (moveEvent: { global: { x: number; y: number } }) => { current = world.toLocal(moveEvent.global); redraw(); };
       const finish = () => {
-        app.stage.off('globalpointermove', move); app.stage.off('pointerup', finish); app.stage.off('pointerupoutside', finish);
         const rect = { x: start.x, y: start.y, width: current.x - start.x, height: current.y - start.y };
-        clearSelectionBox();
         if (Math.abs(rect.width) + Math.abs(rect.height) > 4) latest.current.onSelectTokens(selectTokenIdsInRect(latest.current.tokens, latest.current.gridSize, rect));
       };
-      app.stage.on('globalpointermove', move); app.stage.on('pointerup', finish); app.stage.on('pointerupoutside', finish);
+      startGesture(event, 'selection', () => latest.current.canManage && latest.current.selectionMode && !latest.current.pointerActive, move, finish, clearSelectionBox);
     };
-    const onDrawStart = (event: { global: { x: number; y: number }; stopPropagation: () => void }) => {
+    const onDrawStart = (event: FederatedPointerEvent) => {
       if (!latest.current.drawMode || latest.current.calibrationActive || latest.current.pointerActive) return;
       event.stopPropagation();
       const points = [world.toLocal(event.global)];
@@ -397,10 +450,9 @@ export function TableCanvas(props: Props) {
       const redraw = () => { preview.clear().moveTo(points[0]!.x, points[0]!.y); for (const point of points.slice(1)) preview.lineTo(point.x, point.y); preview.stroke({ color: 0xf3c78b, width: 3 }); };
       const move = (moveEvent: { global: { x: number; y: number } }) => { const point = world.toLocal(moveEvent.global); const previous = points[points.length - 1]!; if (Math.hypot(point.x - previous.x, point.y - previous.y) >= 2) { points.push(point); redraw(); } };
       const finish = () => {
-        app.stage.off('globalpointermove', move); app.stage.off('pointerup', finish); app.stage.off('pointerupoutside', finish); preview.destroy();
         if (points.length > 1) latest.current.onCreateDrawing(points.map(({ x, y }) => ({ x, y })));
       };
-      app.stage.on('globalpointermove', move); app.stage.on('pointerup', finish); app.stage.on('pointerupoutside', finish);
+      startGesture(event, 'drawing', () => latest.current.drawMode && !latest.current.pointerActive, move, finish, () => preview.destroy());
     };
     let lastPointerSent = 0;
     const onPointerMove = (event: PointerEvent) => {
@@ -431,6 +483,11 @@ export function TableCanvas(props: Props) {
       host.current.appendChild(app.canvas); refresh();
       app.canvas.addEventListener('nri-refresh', refresh);
       app.canvas.addEventListener('pointermove', onPointerMove);
+      app.canvas.addEventListener('pointercancel', onPointerInterrupted);
+      app.canvas.addEventListener('lostpointercapture', onPointerInterrupted);
+      window.addEventListener('pointerup', onPointerReleasedOutside, true);
+      window.addEventListener('keydown', onGestureKey);
+      window.addEventListener('blur', cancelGesture);
       window.addEventListener('nri-shared-pointer', receiveSharedPointer);
       window.addEventListener('nri-drop-token-asset', onDropTokenAsset);
       window.addEventListener('nri-fit-scene', fit);
@@ -452,6 +509,10 @@ export function TableCanvas(props: Props) {
     void start().catch(() => { if (!cancelled) latest.current.onRendererError(); });
     return () => {
       cancelled = true;
+      cancelGesture();
+      window.removeEventListener('pointerup', onPointerReleasedOutside, true);
+      window.removeEventListener('keydown', onGestureKey);
+      window.removeEventListener('blur', cancelGesture);
       window.removeEventListener('nri-fit-scene', fit);
       window.removeEventListener('nri-shared-pointer', receiveSharedPointer);
       window.removeEventListener('nri-drop-token-asset', onDropTokenAsset);
@@ -465,7 +526,7 @@ export function TableCanvas(props: Props) {
   useEffect(() => {
     const canvas = host.current?.querySelector('canvas');
     if (canvas) canvas.dispatchEvent(new Event('nri-refresh'));
-  }, [tokens, props.objects, props.canManage, props.canEditObject, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY, props.rulerActive, props.unitsPerCell, props.unitLabel, props.selectionMode, props.pointerActive]);
+  }, [tokens, props.objects, props.canManage, props.canEditObject, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY, props.rulerActive, props.unitsPerCell, props.unitLabel, props.selectionMode, props.pointerActive, props.connected, props.interactionScope, props.drawMode]);
 
   return <div className={`table-canvas ${props.pointerActive ? 'pointer-active' : ''}`} ref={host}><div className="canvas-controls">{props.canManage && <button aria-label={props.selectionLabel} aria-pressed={props.selectionMode} onClick={() => window.dispatchEvent(new Event('nri-toggle-selection'))}>{props.selectionLabel}</button>}<button aria-label={props.pointerLabel} aria-pressed={props.pointerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-pointer'))}>{props.pointerLabel}</button><button aria-label={props.rulerLabel} aria-pressed={props.rulerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-ruler'))}>{props.rulerLabel}</button><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div>{(props.rulerActive || props.selectionMode || props.pointerActive) && <span className="ruler-hint">{props.pointerActive ? props.pointerLabel : props.selectionMode ? props.selectionLabel : props.rulerLabel}</span>}</div>;
 }
