@@ -380,7 +380,12 @@ export function App() {
   }
   async function createSceneObjectCopy(source: SceneObject, layerId: string) {
     if (!scene) throw new Error('SCENE_REQUIRED');
-    const { object: copy } = await api<{ object: SceneObject }>(`/api/scenes/${scene.id}/objects`, { method: 'POST', body: JSON.stringify({ layerId, kind: source.kind, x: source.x + scene.gridSize / 2, y: source.y + scene.gridSize / 2, width: source.width, height: source.height, rotation: source.rotation, opacity: source.opacity, zIndex: source.zIndex + 1, assetId: source.assetId, color: source.color, strokeWidth: source.strokeWidth, points: source.points, text: source.text, visible: source.visible, locked: false }) });
+    const { objects: [copy] } = await api<{ objects: SceneObject[] }>(`/api/scenes/${scene.id}/objects/duplicate`, {
+      method: 'POST',
+      body: JSON.stringify({ layerId, objects: [{ objectId: source.id, expectedVersion: source.version,
+        x: source.x + scene.gridSize / 2, y: source.y + scene.gridSize / 2 }] }),
+    });
+    if (!copy) throw new Error('NOT_FOUND');
     applyObjectUpdates([copy]);
     recordObjectCreation([copy]);
     if (copy.assetId) setAssets((items) => items.map((asset) => asset.id === copy.assetId ? { ...asset, usageCount: asset.usageCount + 1 } : asset));

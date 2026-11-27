@@ -94,8 +94,9 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
         api<PublicSceneObject[]>(`/api/scenes/${sceneId}/objects`),
       ]);
       if (!active()) return;
+      const readableLayers = new Set(nextLayers.map(({ id }) => id));
       setLayers(nextLayers);
-      setObjects(nextObjects);
+      setObjects(nextObjects.filter(({ layerId }) => readableLayers.has(layerId)));
       setActiveLayerId((current) => nextLayers.some((layer) => layer.id === current) ? current : nextLayers.find((layer) => layer.kind === 'OBJECTS')?.id ?? nextLayers[0]?.id ?? '');
     } catch (error) { if (active()) setError((error as Error).message); }
   }, [setError]);
@@ -244,8 +245,31 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       if (current() && event.userId === userId) closeCampaign(event.campaignId);
     };
     const onArchived = (event: { campaignId: string }) => { if (current()) closeCampaign(event.campaignId); };
-    const reload = ({ sceneId }: { sceneId: string }) => { if (current()) void reloadSceneContent(sceneId); };
+    let contentRefresh: ReturnType<typeof setTimeout> | undefined;
+    let refreshSceneId: string | undefined;
+    const reload = ({ sceneId }: { sceneId: string }) => {
+      if (!current() || sceneIdRef.current !== sceneId) return;
+      contentRequest.current++;
+      if (contentRefresh !== undefined && refreshSceneId === sceneId) return;
+      clearTimeout(contentRefresh);
+      refreshSceneId = sceneId;
+      contentRefresh = setTimeout(() => {
+        contentRefresh = undefined;
+        if (current()) void reloadSceneContent(sceneId);
+      }, 0);
+    };
     const onObject = ({ object }: { object: PublicSceneObject }) => reload(object);
+    const onObjectRemoved = ({ sceneId, objectId }: { sceneId: string; objectId: string }) => {
+      if (!current() || sceneIdRef.current !== sceneId) return;
+      setObjects((items) => items.filter((item) => item.id !== objectId));
+      reload({ sceneId });
+    };
+    const onLayerRemoved = ({ sceneId, layerId }: { sceneId: string; layerId: string }) => {
+      if (!current() || sceneIdRef.current !== sceneId) return;
+      setLayers((items) => items.filter((item) => item.id !== layerId));
+      setObjects((items) => items.filter((item) => item.layerId !== layerId));
+      reload({ sceneId });
+    };
     const onInitiative = (view: InitiativeView & { campaignId?: string }) => {
       if (current() && (!view.campaignId || view.campaignId === campaignId)) setInitiative(view);
     };
@@ -255,8 +279,8 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       'campaign:archived': onArchived, 'campaign:drawing_permission': onDrawingPermission,
       'membership:changed': onMembershipChanged, 'membership:removed': onMembershipRemoved,
       'scene:updated': onSceneUpdated, 'scene:activated': onSceneActivated, 'scene:pointer': onPointer,
-      'scene:layer_created': reload, 'scene:layer_updated': reload, 'scene:layer_hidden': reload, 'scene:layer_deleted': reload,
-      'scene:object_created': onObject, 'scene:object_updated': onObject, 'scene:object_deleted': reload,
+      'scene:layer_created': reload, 'scene:layer_updated': reload, 'scene:layer_hidden': onLayerRemoved, 'scene:layer_deleted': onLayerRemoved,
+      'scene:object_created': onObject, 'scene:object_updated': onObject, 'scene:object_deleted': onObjectRemoved,
       'token:moved': onToken, 'token:updated': onToken, 'token:created': onToken, 'token:hidden': onTokenHidden, 'token:owner_note': onOwnerNote,
       'chat:message': onChat, 'chat:private': onChat, 'dice:result': onDice,
       [canManage ? 'initiative:gm_updated' : 'initiative:updated']: onInitiative,
@@ -267,6 +291,7 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
 
     return () => {
       active = false;
+      clearTimeout(contentRefresh);
       for (const [event, handler] of Object.entries(listeners)) socket.off(event, handler);
       if (socket.connected) socket.emit('campaign:leave', campaignId);
     };
