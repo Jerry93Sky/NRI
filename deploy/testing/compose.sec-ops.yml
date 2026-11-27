@@ -1,0 +1,32 @@
+name: nri-sec-ops-profile
+services:
+  db:
+    image: postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    environment:
+      POSTGRES_USER: nri
+      POSTGRES_DB: nri_sec_ops_profile
+      POSTGRES_PASSWORD: ${NRI_PROFILE_DB_PASSWORD:?Set an isolated profile database password}
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "nri", "-d", "nri_sec_ops_profile"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+  api:
+    image: ${NRI_PROFILE_API_IMAGE:?Set the locally built profile image}
+    mem_limit: 768m
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: postgres://nri:${NRI_PROFILE_DB_PASSWORD}@db:5432/nri_sec_ops_profile
+      SESSION_SECRET: ${NRI_PROFILE_SESSION_SECRET:?Set a disposable session secret}
+      WEB_ORIGIN: http://127.0.0.1:35595
+      UPLOAD_DIR: /tmp/nri-profile-media
+      LOG_LEVEL: warn
+    tmpfs:
+      - /tmp/nri-profile-media:mode=1777
+    ports:
+      - "127.0.0.1:35595:3000"
+    depends_on:
+      db:
+        condition: service_healthy

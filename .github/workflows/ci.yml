@@ -172,6 +172,27 @@ jobs:
         env:
           NODE_ENV: test
           DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_retry_upgrade_test
+      - name: Check isolated operational logs for synthetic sensitive data
+        run: |
+          PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_sec_ops_test
+          pnpm db:migrate
+          pnpm --filter @nri/server exec node scripts/logging-canary.mjs
+        env:
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_sec_ops_test
+      - name: Profile bounded image uploads in isolated Compose
+        run: |
+          docker compose -f deploy/testing/compose.sec-ops.yml config -q
+          docker build --target api -f Dockerfile.production -t "$NRI_PROFILE_API_IMAGE" .
+          trap 'docker compose -f deploy/testing/compose.sec-ops.yml down --remove-orphans' EXIT
+          docker compose -f deploy/testing/compose.sec-ops.yml run --rm api node dist/migrate.js
+          docker compose -f deploy/testing/compose.sec-ops.yml up -d api
+          export NRI_PROFILE_CONTAINER="$(docker compose -f deploy/testing/compose.sec-ops.yml ps -q api)"
+          pnpm --filter @nri/server exec node scripts/sec-ops-upload-profile.mjs
+        env:
+          NRI_PROFILE_API_IMAGE: nri-sec-ops-ci:local
+          NRI_PROFILE_DB_PASSWORD: isolated-upload-profile-ci
+          NRI_PROFILE_SESSION_SECRET: isolated-upload-profile-ci-only
+          NRI_PROFILE_BOUNDED: "1"
       - name: Start fresh API for browser tests
         run: |
           cd apps/server

@@ -3,6 +3,7 @@ import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import { constants } from 'node:fs';
 import { access, mkdir } from 'node:fs/promises';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { isProduction, sessionSecret, trustProxy, uploadDirectory, webOrigins } from './config/runtime.js';
 import { pool } from './db/index.js';
 import { registerRealtime } from './realtime/register.js';
@@ -15,11 +16,13 @@ import { registerSceneRoutes } from './modules/scenes/routes.js';
 import { registerSceneContentRoutes } from './modules/scene-content/routes.js';
 import { registerAssetRoutes } from './modules/assets/routes.js';
 import { registerTokenRoutes } from './modules/tokens/routes.js';
+import { errorCategory, operationalLogOptions } from './security/logging.js';
 
 export async function createApp() {
   await mkdir(uploadDirectory, { recursive: true });
   const app = Fastify({
-    logger: { level: process.env.LOG_LEVEL ?? 'info', redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers.set-cookie'] },
+    logger: { level: process.env.LOG_LEVEL ?? 'info', ...operationalLogOptions },
+    requestIdHeader: false,
     logController: new LogController({ disableRequestLogging: true }),
     bodyLimit: 64 * 1024,
     trustProxy,
@@ -33,7 +36,7 @@ export async function createApp() {
   if (!isProduction && sessionSecret.length < 24) app.log.warn('Set a unique SESSION_SECRET in .env before local use.');
   app.setErrorHandler((error, request, reply) => {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
-    if (status >= 500) request.log.error({ route: request.routeOptions.url, type: error instanceof Error ? error.name : 'unknown' }, 'Request failed');
+    if (status >= 500) request.log.error({ route: request.routeOptions.url, category: errorCategory(error) }, 'Request failed');
     const code = status >= 500 ? 'INTERNAL_ERROR' : status === 429 ? 'RATE_LIMITED' : (error as { code?: string }).code ?? 'INVALID';
     reply.code(status).send({ error: code });
   });
@@ -57,6 +60,8 @@ export async function createApp() {
     catch { return reply.code(503).send({ status: 'not_ready' }); }
   });
   const io = registerRealtime(app.server, app.log);
+  const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+  loopDelay.enable();
   app.get('/api/metrics', async (request, reply) => {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '')) {
       return reply.code(404).send({ error: 'NOT_FOUND' });
@@ -69,6 +74,7 @@ export async function createApp() {
       httpFailures: failedRequests,
       connectedSockets: io.sockets.sockets.size,
       databasePool: { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount },
+      assetProcessing: { ...assetProcessing(), loopP95Ms: +(loopDelay.percentile(95) / 1e6).toFixed(2) },
     };
   });
   registerAuthRoutes(app, io);
@@ -78,13 +84,20 @@ export async function createApp() {
   registerInitiativeRoutes(app, io);
   registerSceneRoutes(app, io);
   registerSceneContentRoutes(app, io);
-  registerAssetRoutes(app, io);
+  const assetProcessing = registerAssetRoutes(app, io);
   registerTokenRoutes(app, io);
+
+  const logIdleDatabaseError = (error: Error) => app.log.warn({ category: errorCategory(error) }, 'Idle database connection failed');
+  pool.on('error', logIdleDatabaseError);
 
   app.addHook('preClose', async () => {
     shuttingDown = true;
     io.engine.close();
   });
-  app.addHook('onClose', async () => { await pool.end(); });
+  app.addHook('onClose', async () => {
+    loopDelay.disable();
+    try { await pool.end(); }
+    finally { pool.off('error', logIdleDatabaseError); }
+  });
   return app;
 }

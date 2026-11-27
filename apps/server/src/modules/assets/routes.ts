@@ -16,6 +16,8 @@ import { digest, parseBody } from '../../security/access.js';
 import { commandSessionIsActive, lockCampaign, lockCampaignActor, lockCampaignRoles, lockCampaignSceneActor, lockCommandSession } from '../../security/commandAccess.js';
 import { publishSceneUpdate } from '../../realtime/sceneEvents.js';
 import { childOperationRequestId, lockOperationReceipt, operationRequestId, saveOperationReceipt } from '../../security/operationReceipts.js';
+import { errorCategory } from '../../security/logging.js';
+import { createUploadAdmission } from '../../domain/uploadAdmission.js';
 
 const errorStatus = { UNAUTHENTICATED: 401, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409 } as const;
 const assetResponse = (asset: typeof assets.$inferSelect) => ({ id: asset.id, name: asset.name, category: asset.category, folderId: asset.folderId, mediaType: asset.mediaType, size: asset.size });
@@ -53,6 +55,7 @@ function testFault(request: FastifyRequest, stage: string) {
 }
 
 export function registerAssetRoutes(app: FastifyInstance, io: Server) {
+  const uploadAdmission = createUploadAdmission();
   app.post('/api/campaigns/:campaignId/assets', async (request, reply) => {
     const cookie = request.cookies[cookieName];
     if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
@@ -68,86 +71,102 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
     });
     if ('error' in preflight) return reply.code(errorStatus[preflight.error]).send({ error: preflight.error });
 
-    const uploaded: Array<{ id: string; name: string; category: string; mediaType: string; size: number; width: number; height: number }> = [];
-    const failures: Array<{ filename: string; error: string }> = [];
-    let fileOrdinal = 0;
-    for await (const file of request.files()) {
-      const ordinal = fileOrdinal++;
-      let buffer: Buffer;
-      try { buffer = await file.toBuffer(); }
-      catch { failures.push({ filename: file.filename, error: 'FILE_TOO_LARGE' }); continue; }
-      let metadata: ReturnType<typeof inspectImage>;
-      let thumbnail: Buffer;
-      try {
-        metadata = inspectImage(buffer);
-        await decodeImage(buffer, metadata);
-        thumbnail = await makeAssetThumbnail(buffer);
-      } catch (error) {
-        failures.push({ filename: file.filename, error: error instanceof Error ? error.message : 'INVALID_IMAGE' });
-        continue;
-      }
-      testFault(request, 'after-thumbnail-generation');
-      const extension = metadata.mediaType === 'image/png' ? '.png' : metadata.mediaType === 'image/jpeg' ? '.jpg' : '.webp';
-      const storageKey = `${randomBytes(24).toString('hex')}${extension}`;
-      const thumbnailKey = assetThumbnailKey(storageKey);
-      const filename = file.filename.split(/[\\/]/).pop()?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120) || 'Untitled image';
-      const originalTemp = resolve(uploadDirectory, `.asset-${randomBytes(16).toString('hex')}.pending`);
-      const thumbnailTemp = resolve(uploadDirectory, `.asset-${randomBytes(16).toString('hex')}.pending`);
-      const destination = resolve(uploadDirectory, storageKey);
-      const thumbnailDestination = resolve(uploadDirectory, thumbnailKey);
-      const checksum = createHash('sha256').update(buffer).digest('hex');
-      let committed = false;
-      try {
-        await mkdir(uploadDirectory, { recursive: true });
-        await writeFile(originalTemp, buffer, { flag: 'wx', mode: 0o600 });
-        testFault(request, 'after-original-stage');
-        await writeFile(thumbnailTemp, thumbnail, { flag: 'wx', mode: 0o600 });
-        testFault(request, 'after-thumbnail-stage');
-        const result = await db.transaction(async (tx) => {
-          const actor = await lockCampaignActor(tx, digest(cookie), campaignId);
-          if ('error' in actor) return actor;
-          if (!requireManager(actor.role)) return { error: 'FORBIDDEN' } as const;
-          const receipt = batchRequestId ? await lockOperationReceipt(tx, {
-            actorId: actor.userId, campaignId, operationType: 'asset.upload', requestId: childOperationRequestId(batchRequestId, ordinal),
-          }, { ordinal, filename, category: category.data, mediaType: metadata.mediaType, size: buffer.byteLength, checksum }) : null;
-          if (receipt?.kind === 'conflict') return { error: 'CONFLICT' } as const;
-          if (receipt?.kind === 'replay') {
-            const [asset] = await tx.select().from(assets).where(and(eq(assets.id, receipt.resultIds[0]!), eq(assets.campaignId, campaignId))).limit(1);
-            return asset ? { asset, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' } as const;
-          }
-          const [asset] = await tx.insert(assets).values({ campaignId, name: filename, category: category.data, storageKey, mediaType: metadata.mediaType,
-            size: buffer.byteLength, checksum, uploaderId: actor.userId }).returning();
-          if (!asset) throw new Error('Asset metadata creation failed');
-          testFault(request, 'after-db-insert');
-          testFault(request, 'before-file-rename');
-          await rename(originalTemp, destination);
-          testFault(request, 'after-original-rename');
-          await rename(thumbnailTemp, thumbnailDestination);
-          testFault(request, 'after-thumbnail-rename');
-          await tx.insert(auditEvents).values({ campaignId, actorId: actor.userId, action: 'asset.uploaded', targetId: asset.id });
-          if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [asset.id]);
-          return { asset, replayed: false } as const;
-        });
-        if ('error' in result) {
-          await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {})]);
-          return reply.code(result.error === 'CONFLICT' || result.error === 'RESULT_UNAVAILABLE' ? 409 : errorStatus[result.error]).send({ error: result.error });
+    const cancelled = new AbortController();
+    const abort = () => cancelled.abort();
+    request.raw.once('aborted', abort);
+    reply.raw.once('close', abort);
+    if (request.raw.aborted || reply.raw.destroyed) abort();
+    const release = await uploadAdmission.acquire(cancelled.signal);
+    try {
+      if (cancelled.signal.aborted) return;
+      if (!release) return reply.header('retry-after', '2').code(503).send({ error: 'UPLOAD_BUSY' });
+      const uploaded: Array<{ id: string; name: string; category: string; mediaType: string; size: number; width: number; height: number }> = [];
+      const failures: Array<{ filename: string; error: string }> = [];
+      let fileOrdinal = 0;
+      for await (const file of request.files()) {
+        const ordinal = fileOrdinal++;
+        let buffer: Buffer;
+        try { buffer = await file.toBuffer(); }
+        catch { failures.push({ filename: file.filename, error: 'FILE_TOO_LARGE' }); continue; }
+        let metadata: ReturnType<typeof inspectImage>;
+        let thumbnail: Buffer;
+        try {
+          metadata = inspectImage(buffer);
+          const declared = file.mimetype === 'image/jpg' ? 'image/jpeg' : file.mimetype;
+          if (declared && declared !== 'application/octet-stream' && declared !== metadata.mediaType) throw new Error('IMAGE_TYPE_MISMATCH');
+          await decodeImage(buffer, metadata);
+          thumbnail = await makeAssetThumbnail(buffer);
+        } catch (error) {
+          failures.push({ filename: file.filename, error: error instanceof Error ? error.message : 'INVALID_IMAGE' });
+          continue;
         }
-        if (!result.replayed) committed = true;
-        else await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {})]);
-        uploaded.push({ id: result.asset.id, name: result.asset.name, category: result.asset.category, mediaType: result.asset.mediaType,
-          size: result.asset.size, width: metadata.width, height: metadata.height });
-      } catch (error) {
-        await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {}), unlink(destination).catch(() => {}), unlink(thumbnailDestination).catch(() => {})]);
-        if (request.headers['x-nri-test-asset-fault'] !== undefined && process.env.NODE_ENV === 'test') throw error;
-        failures.push({ filename: file.filename, error: 'UPLOAD_FAILED' });
-      } finally {
-        if (!committed) await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {})]);
+        testFault(request, 'after-thumbnail-generation');
+        const extension = metadata.mediaType === 'image/png' ? '.png' : metadata.mediaType === 'image/jpeg' ? '.jpg' : '.webp';
+        const storageKey = `${randomBytes(24).toString('hex')}${extension}`;
+        const thumbnailKey = assetThumbnailKey(storageKey);
+        const filename = file.filename.split(/[\\/]/).pop()?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120) || 'Untitled image';
+        const originalTemp = resolve(uploadDirectory, `.asset-${randomBytes(16).toString('hex')}.pending`);
+        const thumbnailTemp = resolve(uploadDirectory, `.asset-${randomBytes(16).toString('hex')}.pending`);
+        const destination = resolve(uploadDirectory, storageKey);
+        const thumbnailDestination = resolve(uploadDirectory, thumbnailKey);
+        const checksum = createHash('sha256').update(buffer).digest('hex');
+        let committed = false;
+        try {
+          await mkdir(uploadDirectory, { recursive: true });
+          await writeFile(originalTemp, buffer, { flag: 'wx', mode: 0o600 });
+          testFault(request, 'after-original-stage');
+          await writeFile(thumbnailTemp, thumbnail, { flag: 'wx', mode: 0o600 });
+          testFault(request, 'after-thumbnail-stage');
+          const result = await db.transaction(async (tx) => {
+            const actor = await lockCampaignActor(tx, digest(cookie), campaignId);
+            if ('error' in actor) return actor;
+            if (!requireManager(actor.role)) return { error: 'FORBIDDEN' } as const;
+            const receipt = batchRequestId ? await lockOperationReceipt(tx, {
+              actorId: actor.userId, campaignId, operationType: 'asset.upload', requestId: childOperationRequestId(batchRequestId, ordinal),
+            }, { ordinal, filename, category: category.data, mediaType: metadata.mediaType, size: buffer.byteLength, checksum }) : null;
+            if (receipt?.kind === 'conflict') return { error: 'CONFLICT' } as const;
+            if (receipt?.kind === 'replay') {
+              const [asset] = await tx.select().from(assets).where(and(eq(assets.id, receipt.resultIds[0]!), eq(assets.campaignId, campaignId))).limit(1);
+              return asset ? { asset, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' } as const;
+            }
+            const [asset] = await tx.insert(assets).values({ campaignId, name: filename, category: category.data, storageKey, mediaType: metadata.mediaType,
+              size: buffer.byteLength, checksum, uploaderId: actor.userId }).returning();
+            if (!asset) throw new Error('Asset metadata creation failed');
+            testFault(request, 'after-db-insert');
+            testFault(request, 'before-file-rename');
+            await rename(originalTemp, destination);
+            testFault(request, 'after-original-rename');
+            await rename(thumbnailTemp, thumbnailDestination);
+            testFault(request, 'after-thumbnail-rename');
+            await tx.insert(auditEvents).values({ campaignId, actorId: actor.userId, action: 'asset.uploaded', targetId: asset.id });
+            if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [asset.id]);
+            return { asset, replayed: false } as const;
+          });
+          if ('error' in result) {
+            await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {})]);
+            return reply.code(result.error === 'CONFLICT' || result.error === 'RESULT_UNAVAILABLE' ? 409 : errorStatus[result.error]).send({ error: result.error });
+          }
+          if (!result.replayed) committed = true;
+          else await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {})]);
+          uploaded.push({ id: result.asset.id, name: result.asset.name, category: result.asset.category, mediaType: result.asset.mediaType,
+            size: result.asset.size, width: metadata.width, height: metadata.height });
+        } catch (error) {
+          await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {}), unlink(destination).catch(() => {}), unlink(thumbnailDestination).catch(() => {})]);
+          if (request.headers['x-nri-test-asset-fault'] !== undefined && process.env.NODE_ENV === 'test') throw error;
+          failures.push({ filename: file.filename, error: 'UPLOAD_FAILED' });
+        } finally {
+          if (!committed) await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {})]);
+        }
       }
+      if (!uploaded.length && !failures.length) return reply.code(400).send({ error: 'FILE_REQUIRED' });
+      const status = failures.length ? uploaded.length ? 207 : failures[0]?.error === 'FILE_TOO_LARGE' ? 413 : 415 : 201;
+      if (!uploaded.length) return reply.code(status).send({ error: failures[0]?.error ?? 'UPLOAD_FAILED', assets: uploaded, failures });
+      return reply.code(status).send({ assets: uploaded, asset: uploaded[0], failures });
+    } finally {
+      request.raw.off('aborted', abort);
+      reply.raw.off('close', abort);
+      release?.();
     }
-    if (!uploaded.length && !failures.length) return reply.code(400).send({ error: 'FILE_REQUIRED' });
-    const status = failures.length ? uploaded.length ? 207 : failures[0]?.error === 'FILE_TOO_LARGE' ? 413 : 415 : 201;
-    if (!uploaded.length) return reply.code(status).send({ error: failures[0]?.error ?? 'UPLOAD_FAILED', assets: uploaded, failures });
-    return reply.code(status).send({ assets: uploaded, asset: uploaded[0], failures });
   });
 
   app.get('/api/campaigns/:campaignId/assets', async (request, reply) => {
@@ -281,8 +300,10 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
     });
     if ('error' in result) return reply.code(result.error === 'IN_USE' ? 409 : errorStatus[result.error]).send({ error: result.error === 'IN_USE' ? 'ASSET_IN_USE' : result.error });
     await Promise.all([
-      unlink(resolve(uploadDirectory, result.asset.storageKey)).catch((error: unknown) => app.log.error({ err: error, assetId }, 'Deleted asset file cleanup failed')),
-      unlink(resolve(uploadDirectory, assetThumbnailKey(result.asset.storageKey))).catch((error: unknown) => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') app.log.error({ err: error, assetId }, 'Deleted asset thumbnail cleanup failed'); }),
+      unlink(resolve(uploadDirectory, result.asset.storageKey)).catch((error: unknown) => request.log.error({ category: errorCategory(error) }, 'Deleted asset file cleanup failed')),
+      unlink(resolve(uploadDirectory, assetThumbnailKey(result.asset.storageKey))).catch((error: unknown) => {
+        if (errorCategory(error) !== 'FILE_MISSING') request.log.error({ category: errorCategory(error) }, 'Deleted asset thumbnail cleanup failed');
+      }),
     ]);
     return reply.code(204).send();
   });
@@ -356,10 +377,14 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
       try { await readFile(thumbnailPath); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        const original = await readFile(resolve(uploadDirectory, first.asset.storageKey));
-        const thumbnail = await makeAssetThumbnail(original);
-        try { await writeFile(thumbnailPath, thumbnail, { flag: 'wx', mode: 0o600 }); }
-        catch (writeError) { if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError; }
+        const release = await uploadAdmission.acquire(AbortSignal.timeout(10_000));
+        if (!release) return reply.header('retry-after', '2').code(503).send({ error: 'UPLOAD_BUSY' });
+        try {
+          const original = await readFile(resolve(uploadDirectory, first.asset.storageKey));
+          const thumbnail = await makeAssetThumbnail(original);
+          try { await writeFile(thumbnailPath, thumbnail, { flag: 'wx', mode: 0o600 }); }
+          catch (writeError) { if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError; }
+        } finally { release(); }
       }
       const current = await authorizeAsset(tokenHash, assetId, 'thumbnail', true, true);
       if ('error' in current) return reply.code(current.error === 'UNAUTHENTICATED' ? 401 : 404).send({ error: current.error === 'UNAUTHENTICATED' ? current.error : 'NOT_FOUND' });
@@ -369,4 +394,5 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
     if ('error' in current) return reply.code(current.error === 'UNAUTHENTICATED' ? 401 : 404).send({ error: current.error === 'UNAUTHENTICATED' ? current.error : 'NOT_FOUND' });
     return reply.type(current.asset.mediaType).header('x-content-type-options', 'nosniff').header('cache-control', 'private, no-store').header('accept-ranges', 'none').send(current.stream);
   });
+  return uploadAdmission.stats;
 }

@@ -17,6 +17,7 @@ RUN pnpm --filter @nri/server... install --prod --frozen-lockfile \
     && mkdir -p /app/.data/uploads && chown -R node:node /app/.data
 COPY --from=build /app/apps/server/dist ./apps/server/dist
 COPY --from=build /app/apps/server/drizzle ./apps/server/drizzle
+COPY apps/server/scripts/prune-operation-receipts.mjs ./apps/server/scripts/prune-operation-receipts.mjs
 COPY --from=build /app/packages/contracts/src ./packages/contracts/src
 WORKDIR /app/apps/server
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000 UPLOAD_DIR=/app/.data/uploads
