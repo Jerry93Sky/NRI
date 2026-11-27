@@ -13,6 +13,8 @@ All notable project changes will be recorded here.
 - Run Playwright on Ubuntu 24.04 after the Ubuntu 26.04 runner failed to fetch Chromium dependencies from the Microsoft APT repository.
 - Route single Socket.IO moves and REST group moves through one PostgreSQL transaction for authorization, version checks, atomic writes and audit records. Reject positional updates to locked tokens, and authorize live movement delivery after commit.
 - Add 23 PostgreSQL movement regression scenarios to CI, including lock-ordered authorization races, private conflict projections and rollback without realtime events.
+- Make scene-object delete/restore and permanent own-drawing cleanup transactional. Synchronize scene, layer and object checks with competing writes and authorize lifecycle event recipients after commit.
+- Add 28 PostgreSQL object lifecycle scenarios and extend Chromium coverage for versioned Undo/Redo and history isolation across workspaces.
 
 - Split Fastify assembly, feature routes, realtime session and room management, and privacy projections into modules. Isolated frontend scene synchronization and a shared versioned history.
 - Disconnect socket sessions on logout and rotation. Update room access on role changes, archive campaigns without leaving live subscriptions, and restrict owner-note delivery to the current member.

@@ -18,6 +18,7 @@ Shared Zod contracts validate command inputs and define public token, layer and 
 - `index.ts` starts and shuts down the HTTP process. `app.ts` configures the server, middleware and route registration. `config/runtime.ts` validates the deployment settings for this process.
 - Route modules own auth, campaigns, invitations and membership, chat, initiative, scenes, scene content, tokens and assets. `security/access.ts` shares session, role and body validation. `domain/projections.ts` owns sensitive projection rules. `realtime/` owns session and campaign subscriptions, command limits and socket commands.
 - `modules/tokens/movement.ts` handles single Socket.IO movement and REST group updates. `security/commandAccess.ts` provides row-locking queries for session and campaign authorization. `realtime/movementEvents.ts` delivers committed movement and group updates. Other feature transactions and publications remain in their route modules.
+- `modules/objects/lifecycle.ts` handles group delete/restore, point deletion and permanent own-drawing cleanup. The layer and object writers share its access and lock ordering. `realtime/campaignAudience.ts` batches live audience authorization for object lifecycle and token movement.
 - The web app uses a scoped snapshot-and-event hook in `features/tabletop/useTabletopSync.ts`, versioned undo/redo in `useCommandHistory.ts`, an HTTP helper in `services/api.ts` and the lazy Pixi component in `ui/TableCanvas.tsx`. `App.tsx` retains page assembly and several workflow handlers.
 
 ## State flow and concurrency
@@ -33,6 +34,14 @@ The order is session → campaign → memberships by user UUID → scene → tok
 The service rechecks session expiry after waiting. It authorizes and version-checks the entire group before applying any update. The token updates use the expected version in the predicate, increment it once per token and commit with their audit rows. If withdrawal commits first, movement uses the new permissions. A movement holding the relevant locks can commit before withdrawal, and subsequent movement uses the new permissions. Explicit locks and version predicates cover these resources at the existing isolation level. The service has no Serializable retry loop.
 
 The commit returns the caller's authorized projection and the affected token IDs and visibility transitions. The publisher locks current audience and token state in a follow-up transaction before queuing Socket.IO packets. Current roles and visibility govern delivery if they change after the write. Audit rows record committed actions. Delivery is best effort, with snapshots on reconnect. Command IDs and stored acknowledgements remain future work.
+
+### Scene object lifecycle transaction
+
+`PATCH /api/scenes/:sceneId/object-lifecycle` accepts 1–50 distinct objects with expected versions. Owner and GM can operate on writable layers in active and draft scenes. The service preserves each object's ID, author, geometry and visibility. It changes only the deletion timestamp and version. Players have no group restore or delete access. Their point deletion is permanent and limited to their own visible freehand strokes on a readable layer of the active scene. They can still clear their own drawings after drawing permission is turned off.
+
+The order is session → campaign → membership → scene → layers by UUID → objects by UUID. The service uses PostgreSQL `READ COMMITTED`. It takes shared locks on session, campaign, membership, scene and relevant layers. It locks mutable objects with `FOR NO KEY UPDATE` or takes `FOR UPDATE` for permanent deletion. It verifies that each target is still on the layer identified before it waited. Object edits that move an object lock both source and target layers before the object. Layer edits take an exclusive write lock on the layer row. Layer removal locks the layer before deleting its tombstones. Scene archive takes the existing campaign lock first, and role changes and logout write the same membership and session rows that lifecycle reads.
+
+The service validates the whole batch before a single set-based write scoped to the scene, object IDs, individual expected versions and deletion state. The audit insert is in the same transaction. The publisher runs after commit. It reauthorizes current recipients and locks the scene, affected layers and surviving objects before queuing packets. Superseded revisions are skipped. Player projections omit creator IDs, and a restore still needs both layer and object visibility before it can reach Players. Reconnect snapshots recover durable state.
 
 ## Security and operations
 
@@ -123,7 +132,7 @@ sequenceDiagram
 
 ### V0.1.1 guardrails
 
-- Extract scene-object group delete/recover into one application service next. Preserve its REST contract, check versions and permissions under locks, and add deterministic regressions for role and layer changes, rollback and post-commit publication. Track lost acknowledgements for non-idempotent chat and dice separately.
+- Extend current-recipient authorization to regular scene-object create/edit and layer events next. Test publication with a role or visibility change after commit. Track lost acknowledgements for non-idempotent chat and dice separately.
 - Preserve current IDs, stored campaigns, projections, optimistic versions and existing API payloads. V0.1.1 token coordinates and scene geometry use different current units. V0.2 owns the explicit conversion and geometry versioning, following its measured baseline.
 - Treat the current dice expression, initiative tracker and bounded token resource fields as legacy tabletop capabilities. Future rule packages can opt into other models. Keep future snapshots free of assumptions about mandatory turn order, classes or hit points.
 - Future package metadata, character and world schemas, evaluator and editors start with their named releases. The current refactor has enough work in authorization, projections, concurrency, reconnect, lifecycle and manual acceptance. [Release checkpoints](../product/LONG_TERM_IMPLEMENTATION_PLAN.md)
