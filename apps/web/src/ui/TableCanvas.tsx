@@ -6,7 +6,7 @@ import { measureSceneDistance, selectTokenIdsInRect, zoomToPointer } from './can
 
 type Props = {
   interactionScope: string; connected: boolean;
-  tokens: PublicToken[]; objects: PublicSceneObject[]; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: { x?: number; y?: number; width?: number; height?: number }) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
+  tokens: PublicToken[]; objects: PublicSceneObject[]; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: Partial<Pick<PublicSceneObject, 'x' | 'y' | 'width' | 'height' | 'points'>>) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number; unitsPerCell: number; unitLabel: string;
   onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; onDropTokenAsset: (assetId: string, x: number, y: number) => void; fitLabel: string; rulerActive: boolean; rulerLabel: string; selectionMode: boolean; selectionLabel: string; onSelectTokens: (ids: string[]) => void; pointerActive: boolean; pointerLabel: string; onSharePointer: (x: number, y: number) => void; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
@@ -221,7 +221,11 @@ export function TableCanvas(props: Props) {
             const finish = (finishEvent: typeof event) => {
               const point = shape.toLocal(finishEvent.global); const width = Math.max(8, Math.round(point.x * 2)); const height = Math.max(8, Math.round(point.y * 2));
               const x = Math.round(shape.x - width / 2); const y = Math.round(shape.y - height / 2);
-              if (width !== item.width || height !== item.height) latest.current.onEditObject(item.id, { x, y, width, height });
+              if (width === item.width && height === item.height) return;
+              const points = (item.kind === 'LINE' || item.kind === 'FREEHAND') && item.points
+                ? item.points.map((point) => ({ x: point.x * width / item.width, y: point.y * height / item.height }))
+                : undefined;
+              latest.current.onEditObject(item.id, { x, y, width, height, ...(points ? { points } : {}) });
             };
             const origin = resizeHandle.position.clone();
             startGesture(event, 'object', editable, move, finish, () => resizeHandle.position.copyFrom(origin));

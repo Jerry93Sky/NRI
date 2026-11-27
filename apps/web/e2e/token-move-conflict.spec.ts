@@ -170,18 +170,49 @@ test('simultaneous GM and owner moves resolve one stale version in two browser s
       const unfreeze = await requestJson(gmPage, `/api/tokens/${tokenId}`, 'PATCH', { expectedVersion: lockedToken.version, locked: false });
       expect(unfreeze.status).toBe(200);
       const unlocked = (unfreeze.body as { token: TableToken }).token;
+      await gmPage.reload();
+      await gmPage.getByRole('button', { name: new RegExp(`Move conflict ${suffix}`) }).click();
+      await expect(gmPage.locator('.live-status')).toHaveText('Live');
       const gmWhere = await canvasCoordinates(gmPage, scene);
-      await gmPage.locator('.token-group-tools').getByRole('button', { name: 'Select all', exact: true }).click();
+      const selection = gmPage.getByRole('button', { name: 'Select area', exact: true });
+      await selection.click();
+      await startDrag(gmPage, gmWhere.point((Math.min(unlocked.x, foreign.x) - 1) * scene.gridSize, (Math.min(unlocked.y, foreign.y) - 1) * scene.gridSize),
+        gmWhere.point((Math.max(unlocked.x, foreign.x) + 1) * scene.gridSize, (Math.max(unlocked.y, foreign.y) + 1) * scene.gridSize));
+      await gmPage.mouse.up();
+      await expect(gmPage.locator('.token-group-tools')).toContainText('2 selected');
+      await gmPage.getByRole('button', { name: 'Stop selecting', exact: true }).click();
       await startDrag(gmPage, gmWhere.point(unlocked.x * scene.gridSize, unlocked.y * scene.gridSize),
         gmWhere.point((unlocked.x + 1) * scene.gridSize, unlocked.y * scene.gridSize));
       await gmPage.mouse.up();
       await expect.poll(async () => (await currentToken(foreign.id)).x).toBeCloseTo(foreign.x + 1, 1);
       const grouped = await currentToken(tokenId);
       expect(grouped.x).toBeCloseTo(unlocked.x + 1, 1);
+      const tokenFields = gmPage.locator('.token-property-card').filter({ hasText: 'Shared hero' });
+      await tokenFields.locator('summary').click();
+      const tokenName = tokenFields.getByLabel('Name', { exact: true });
+      const note = tokenFields.getByLabel('GM note', { exact: true });
       const chat = gmPage.getByPlaceholder('Write a message…');
-      await chat.fill('Editing chat');
-      await chat.press('Control+z');
-      await chat.press('Delete');
+      const undoButton = gmPage.locator('.table-actions').getByRole('button', { name: 'Undo', exact: true });
+      const redoButton = gmPage.locator('.table-actions').getByRole('button', { name: 'Redo', exact: true });
+      await expect(undoButton).toBeEnabled();
+      await gmPage.getByRole('button', { name: 'Asset library', exact: true }).click();
+      const search = gmPage.getByRole('textbox', { name: 'Search assets' });
+      for (const field of [search, tokenName, note, chat]) {
+        const original = await field.inputValue();
+        await field.press('End');
+        await field.press('r');
+        await expect(field).toHaveValue(`${original}r`);
+        await field.press('Backspace');
+        await field.press('Control+z');
+        await field.press('Control+Shift+z');
+        await field.press('End');
+        await field.press('Delete');
+        await field.fill(original);
+        if (field === search) await gmPage.locator('.modal-backdrop').getByRole('button', { name: '×', exact: true }).click();
+        await expect(gmPage.getByRole('button', { name: 'Measure', exact: true })).toBeVisible();
+        await expect(undoButton).toBeEnabled();
+        await expect(redoButton).toBeDisabled();
+      }
       expect(await currentToken(tokenId)).toMatchObject(grouped);
 
       const layers = (await requestJson(gmPage, `/api/scenes/${sceneId}/layers`)).body as Array<{ id: string; kind: string; version: number }>;
@@ -221,6 +252,43 @@ test('simultaneous GM and owner moves resolve one stale version in two browser s
       await expect(gmPage.getByRole('alert')).toContainText('Another change has already been saved');
       expect(await readObject()).toMatchObject((externalEdit.body as { object: Rectangle }).object);
       const newVersion = await readObject();
+
+      const lineResponse = await requestJson(gmPage, `/api/scenes/${sceneId}/objects`, 'POST', {
+        layerId: objectLayer.id, kind: 'LINE', x: 850, y: 230, width: 140, height: 60, strokeWidth: 10,
+        points: [{ x: 0, y: 0 }, { x: 140, y: 60 }],
+      });
+      expect(lineResponse.status).toBe(201);
+      type Line = Rectangle & { points: Array<{ x: number; y: number }> };
+      const line = (lineResponse.body as { object: Line }).object;
+      const readLine = async () => ((await requestJson(gmPage, `/api/scenes/${sceneId}/objects`)).body as Line[]).find(({ id }) => id === line.id)!;
+      await expect(gmPage.locator(`[data-object-id="${line.id}"]`)).toBeVisible();
+      const lineWhere = await canvasCoordinates(gmPage, scene);
+      const center = lineWhere.point(line.x + line.width / 2, line.y + line.height / 2);
+      const lineCenter = { x: Math.round(center.x), y: Math.round(center.y) };
+      await gmPage.mouse.move(lineCenter.x, lineCenter.y);
+      await gmPage.mouse.wheel(0, -250);
+      const zoomedScale = Math.max(.25, Math.min(2.2, lineWhere.scale * Math.exp(.25)));
+      const screenDelta = { x: Math.round(54 * zoomedScale), y: Math.round(36 * zoomedScale) };
+      await startDrag(gmPage, lineCenter, { x: lineCenter.x + screenDelta.x, y: lineCenter.y + screenDelta.y });
+      await gmPage.mouse.up();
+      await expect.poll(async () => (await readLine()).x).toBe(Math.round(line.x + screenDelta.x / zoomedScale));
+      const movedLine = await readLine();
+      expect(movedLine.y).toBe(Math.round(line.y + screenDelta.y / zoomedScale));
+      await gmPage.keyboard.press('Control+z');
+      await expect.poll(async () => (await readLine()).x).toBe(line.x);
+      await gmPage.keyboard.press('Control+Shift+z');
+      await expect.poll(async () => (await readLine()).x).toBe(movedLine.x);
+      const lineHandle = { x: Math.round(lineCenter.x + screenDelta.x + (line.width / 2) * zoomedScale),
+        y: Math.round(lineCenter.y + screenDelta.y + (line.height / 2) * zoomedScale) };
+      await startDrag(gmPage, lineHandle, { x: lineHandle.x + 10, y: lineHandle.y + 8 });
+      await gmPage.mouse.up();
+      await expect.poll(async () => (await readLine()).width).toBeGreaterThan(movedLine.width + 20);
+      const resizedLine = await readLine();
+      expect(resizedLine.height).toBeGreaterThan(movedLine.height + 16);
+      expect(resizedLine.points).toEqual([{ x: 0, y: 0 }, { x: resizedLine.width, y: resizedLine.height }]);
+      await gmPage.keyboard.press('Control+z');
+      await expect.poll(async () => (await readLine()).points).toEqual(line.points);
+
       const lockLayer = await requestJson(gmPage, `/api/layers/${objectLayer.id}`, 'PATCH', { expectedVersion: objectLayer.version, locked: true });
       expect(lockLayer.status).toBe(200);
       const lockedObjectWhere = await canvasCoordinates(gmPage, scene);
