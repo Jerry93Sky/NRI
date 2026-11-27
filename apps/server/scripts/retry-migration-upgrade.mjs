@@ -43,11 +43,11 @@ try {
   assert.equal(count.count, 22);
   const { rows: receiptRows } = await pool.query(`INSERT INTO rest_operation_receipts
     (actor_id, campaign_id, operation_type, request_id, payload_digest, result_ids)
-    VALUES ($1, NULL, 'campaign.create', $2, repeat('a', 64), '[]') RETURNING actor_id`, [user.id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']);
+    VALUES ($1, NULL, 'campaign.create', $2, repeat('a', 64), '["campaign-result"]') RETURNING actor_id`, [user.id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']);
   assert.equal(receiptRows.length, 1, 'campaign creation receipts support the pre-campaign actor scope');
   await assert.rejects(pool.query(`INSERT INTO rest_operation_receipts
     (actor_id, campaign_id, operation_type, request_id, payload_digest, result_ids)
-    VALUES ($1, NULL, 'campaign.create', $2, repeat('b', 64), '[]')`, [user.id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']), /duplicate key/u);
+    VALUES ($1, NULL, 'campaign.create', $2, repeat('b', 64), '["campaign-result"]')`, [user.id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']), /duplicate key/u);
   console.info('PASS: migration 20→21 preserves legacy chat/dice rows; 21→22 adds scoped REST receipts with actor-only campaign-create uniqueness.');
 } finally {
   await pool.end();
