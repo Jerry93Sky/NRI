@@ -1,0 +1,28 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api, clearRecoverableRequests } from './api';
+
+afterEach(() => {
+  clearRecoverableRequests();
+  vi.unstubAllGlobals();
+});
+
+describe('recoverable REST requests', () => {
+  it('keeps the same in-memory key after a lost response, then starts a new key after success', async () => {
+    const ids: string[] = [];
+    let calls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      ids.push(new Headers(init?.headers).get('idempotency-key') ?? '');
+      calls += 1;
+      if (calls === 1) throw new TypeError('connection lost');
+      return new Response(JSON.stringify({ ok: true }), { status: 201, headers: { 'content-type': 'application/json' } });
+    }));
+    const options = { method: 'POST', body: JSON.stringify({ title: 'same intent' }), recoverable: true } as const;
+
+    await expect(api('/api/campaigns', options)).rejects.toThrow('OUTCOME_UNKNOWN');
+    await expect(api('/api/campaigns', options)).resolves.toEqual({ ok: true });
+    await expect(api('/api/campaigns', options)).resolves.toEqual({ ok: true });
+    expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+});

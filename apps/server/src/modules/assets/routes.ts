@@ -15,6 +15,7 @@ import { cookieName, uploadDirectory } from '../../config/runtime.js';
 import { digest, parseBody } from '../../security/access.js';
 import { commandSessionIsActive, lockCampaign, lockCampaignActor, lockCampaignRoles, lockCampaignSceneActor, lockCommandSession } from '../../security/commandAccess.js';
 import { publishSceneUpdate } from '../../realtime/sceneEvents.js';
+import { childOperationRequestId, lockOperationReceipt, operationRequestId, saveOperationReceipt } from '../../security/operationReceipts.js';
 
 const errorStatus = { UNAUTHENTICATED: 401, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409 } as const;
 const assetResponse = (asset: typeof assets.$inferSelect) => ({ id: asset.id, name: asset.name, category: asset.category, folderId: asset.folderId, mediaType: asset.mediaType, size: asset.size });
@@ -56,6 +57,8 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
     const cookie = request.cookies[cookieName];
     if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { campaignId } = request.params as { campaignId: string };
+    const batchRequestId = operationRequestId(request.headers['idempotency-key']);
+    if (batchRequestId === 'invalid') return reply.code(400).send({ error: 'INVALID_REQUEST_ID' });
     const category = assetCategorySchema.safeParse((request.query as { category?: string }).category ?? 'OTHER');
     if (!category.success) return reply.code(400).send({ error: 'INVALID_CATEGORY' });
     const preflight = await db.transaction(async (tx) => {
@@ -67,7 +70,9 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
 
     const uploaded: Array<{ id: string; name: string; category: string; mediaType: string; size: number; width: number; height: number }> = [];
     const failures: Array<{ filename: string; error: string }> = [];
+    let fileOrdinal = 0;
     for await (const file of request.files()) {
+      const ordinal = fileOrdinal++;
       let buffer: Buffer;
       try { buffer = await file.toBuffer(); }
       catch { failures.push({ filename: file.filename, error: 'FILE_TOO_LARGE' }); continue; }
@@ -90,6 +95,7 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
       const thumbnailTemp = resolve(uploadDirectory, `.asset-${randomBytes(16).toString('hex')}.pending`);
       const destination = resolve(uploadDirectory, storageKey);
       const thumbnailDestination = resolve(uploadDirectory, thumbnailKey);
+      const checksum = createHash('sha256').update(buffer).digest('hex');
       let committed = false;
       try {
         await mkdir(uploadDirectory, { recursive: true });
@@ -101,8 +107,16 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
           const actor = await lockCampaignActor(tx, digest(cookie), campaignId);
           if ('error' in actor) return actor;
           if (!requireManager(actor.role)) return { error: 'FORBIDDEN' } as const;
+          const receipt = batchRequestId ? await lockOperationReceipt(tx, {
+            actorId: actor.userId, campaignId, operationType: 'asset.upload', requestId: childOperationRequestId(batchRequestId, ordinal),
+          }, { ordinal, filename, category: category.data, mediaType: metadata.mediaType, size: buffer.byteLength, checksum }) : null;
+          if (receipt?.kind === 'conflict') return { error: 'CONFLICT' } as const;
+          if (receipt?.kind === 'replay') {
+            const [asset] = await tx.select().from(assets).where(and(eq(assets.id, receipt.resultIds[0]!), eq(assets.campaignId, campaignId))).limit(1);
+            return asset ? { asset, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' } as const;
+          }
           const [asset] = await tx.insert(assets).values({ campaignId, name: filename, category: category.data, storageKey, mediaType: metadata.mediaType,
-            size: buffer.byteLength, checksum: createHash('sha256').update(buffer).digest('hex'), uploaderId: actor.userId }).returning();
+            size: buffer.byteLength, checksum, uploaderId: actor.userId }).returning();
           if (!asset) throw new Error('Asset metadata creation failed');
           testFault(request, 'after-db-insert');
           testFault(request, 'before-file-rename');
@@ -111,13 +125,15 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
           await rename(thumbnailTemp, thumbnailDestination);
           testFault(request, 'after-thumbnail-rename');
           await tx.insert(auditEvents).values({ campaignId, actorId: actor.userId, action: 'asset.uploaded', targetId: asset.id });
-          return { asset } as const;
+          if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [asset.id]);
+          return { asset, replayed: false } as const;
         });
         if ('error' in result) {
           await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {})]);
-          return reply.code(errorStatus[result.error]).send({ error: result.error });
+          return reply.code(result.error === 'CONFLICT' || result.error === 'RESULT_UNAVAILABLE' ? 409 : errorStatus[result.error]).send({ error: result.error });
         }
-        committed = true;
+        if (!result.replayed) committed = true;
+        else await Promise.all([unlink(originalTemp).catch(() => {}), unlink(thumbnailTemp).catch(() => {})]);
         uploaded.push({ id: result.asset.id, name: result.asset.name, category: result.asset.category, mediaType: result.asset.mediaType,
           size: result.asset.size, width: metadata.width, height: metadata.height });
       } catch (error) {

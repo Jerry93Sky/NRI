@@ -13,6 +13,7 @@ import { cookieName, uploadDirectory } from '../../config/runtime.js';
 import { archiveCampaignSockets } from '../../realtime/campaignRooms.js';
 import { publishDrawingPermission } from '../../realtime/campaignEvents.js';
 import { commandSessionIsActive, lockCampaignActor, lockCommandSession } from '../../security/commandAccess.js';
+import { lockOperationReceipt, operationRequestId, saveOperationReceipt } from '../../security/operationReceipts.js';
 
 export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns', async (request, reply) => {
@@ -43,23 +44,36 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
     const cookie = request.cookies[cookieName];
     if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const input = parseBody(createCampaignSchema, request.body);
+    const requestId = operationRequestId(request.headers['idempotency-key']);
+    if (requestId === 'invalid') return reply.code(400).send({ error: 'INVALID_REQUEST_ID' });
     const created = await db.transaction(async (tx) => {
       const session = await lockCommandSession(tx, digest(cookie));
       if (!session) return { error: 'UNAUTHENTICATED' } as const;
+      const receipt = requestId ? await lockOperationReceipt(tx, { actorId: session.userId, campaignId: null, operationType: 'campaign.create', requestId }, input) : null;
+      if (receipt?.kind === 'conflict') return { error: 'CONFLICT' } as const;
+      if (receipt?.kind === 'replay') {
+        const [campaign] = await tx.select().from(campaigns).innerJoin(memberships, and(eq(memberships.campaignId, campaigns.id), eq(memberships.userId, session.userId), eq(memberships.role, 'OWNER')))
+          .where(and(eq(campaigns.id, receipt.resultIds[0]!), eq(campaigns.ownerId, session.userId))).limit(1);
+        return campaign ? { campaign: campaign.campaigns, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' } as const;
+      }
+      if (receipt?.kind === 'invalid') return { error: 'INVALID_REQUEST_ID' } as const;
       const [campaign] = await tx.insert(campaigns).values({ ...input, ownerId: session.userId }).returning();
       if (!campaign) throw new Error('Campaign creation failed');
       await tx.insert(memberships).values({ campaignId: campaign.id, userId: session.userId, role: 'OWNER' });
       await tx.insert(auditEvents).values({ campaignId: campaign.id, actorId: session.userId, action: 'campaign.created', targetId: campaign.id });
-      return { campaign } as const;
+      if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [campaign.id]);
+      return { campaign, replayed: false } as const;
     });
-    if ('error' in created) return reply.code(401).send({ error: created.error });
-    return reply.code(201).send({ campaign: created.campaign });
+    if ('error' in created) return reply.code(created.error === 'UNAUTHENTICATED' ? 401 : created.error === 'CONFLICT' || created.error === 'RESULT_UNAVAILABLE' ? 409 : 400).send({ error: created.error });
+    return reply.code(created.replayed ? 200 : 201).send({ campaign: created.campaign });
   });
   app.post('/api/campaigns/:campaignId/duplicate', async (request, reply) => {
     const user = await requireUser(request, reply); if (!user) return;
     const cookie = request.cookies[cookieName];
     if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { campaignId } = request.params as { campaignId: string };
+    const requestId = operationRequestId(request.headers['idempotency-key']);
+    if (requestId === 'invalid') return reply.code(400).send({ error: 'INVALID_REQUEST_ID' });
     const role = await roleFor(campaignId, user.id);
     if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
 
@@ -87,6 +101,13 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
         if (actor.userId !== user.id || (actor.role !== 'OWNER' && actor.role !== 'GM')) return { error: 'FORBIDDEN' as const };
         const [source] = await tx.select().from(campaigns).where(and(eq(campaigns.id, campaignId), isNull(campaigns.archivedAt))).limit(1);
         if (!source) return { error: 'NOT_FOUND' as const };
+        const receipt = requestId ? await lockOperationReceipt(tx, { actorId: actor.userId, campaignId, operationType: 'campaign.duplicate', requestId }, { campaignId }) : null;
+        if (receipt?.kind === 'conflict') return { error: 'CONFLICT' as const };
+        if (receipt?.kind === 'replay') {
+          const [existing] = await tx.select().from(campaigns).innerJoin(memberships, and(eq(memberships.campaignId, campaigns.id), eq(memberships.userId, actor.userId), eq(memberships.role, 'OWNER')))
+            .where(and(eq(campaigns.id, receipt.resultIds[0]!), eq(campaigns.ownerId, actor.userId), isNull(campaigns.archivedAt))).limit(1);
+          return existing ? { campaign: existing.campaigns, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' as const };
+        }
 
         const sourceSceneRows = await tx.select().from(scenes).where(eq(scenes.campaignId, campaignId)).orderBy(asc(scenes.sortOrder), asc(scenes.id));
         const sourceSceneIds = sourceSceneRows.map((scene) => scene.id);
@@ -180,11 +201,12 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
         for (const file of prepared) {
           await copyFile(file.tempPath, file.finalPath, fsConstants.COPYFILE_EXCL);
         }
-        return { campaign };
+        if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [campaign.id]);
+        return { campaign, replayed: false };
       }, { isolationLevel: 'repeatable read' });
 
-      if ('error' in copied) return reply.code(copied.error === 'FORBIDDEN' ? 403 : 404).send({ error: copied.error });
-      return reply.code(201).send({ campaign: copied.campaign });
+      if ('error' in copied) return reply.code(copied.error === 'FORBIDDEN' ? 403 : copied.error === 'CONFLICT' || copied.error === 'RESULT_UNAVAILABLE' ? 409 : 404).send({ error: copied.error });
+      return reply.code(copied.replayed ? 200 : 201).send({ campaign: copied.campaign });
     } catch (error) {
       await Promise.allSettled(prepared.map(async (file) => {
         await unlink(file.tempPath).catch(() => undefined);

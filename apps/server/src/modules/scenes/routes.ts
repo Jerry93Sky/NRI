@@ -13,6 +13,7 @@ import { cookieName } from '../../config/runtime.js';
 import { invalidateSceneInitiative } from '../initiative/service.js';
 import { publishInitiative } from '../../realtime/initiativeEvents.js';
 import { publishSceneActivation, publishSceneUpdate } from '../../realtime/sceneEvents.js';
+import { lockOperationReceipt, operationRequestId, saveOperationReceipt } from '../../security/operationReceipts.js';
 
 export function registerSceneRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns/:campaignId/scenes', async (request, reply) => {
@@ -61,11 +62,19 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     const cookie = request.cookies[cookieName];
     if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { sceneId } = request.params as { sceneId: string };
+    const requestId = operationRequestId(request.headers['idempotency-key']);
+    if (requestId === 'invalid') return reply.code(400).send({ error: 'INVALID_REQUEST_ID' });
     const duplicate = await db.transaction(async (tx) => {
       const context = await lockCampaignSceneActor(tx, digest(cookie), sceneId, { sceneStrength: 'update' });
       if ('error' in context) return context;
       if (context.role !== 'OWNER' && context.role !== 'GM') return { error: 'FORBIDDEN' } as const;
       const source = context.scene;
+      const receipt = requestId ? await lockOperationReceipt(tx, { actorId: context.userId, campaignId: source.campaignId, operationType: 'scene.duplicate', requestId }, { sceneId }) : null;
+      if (receipt?.kind === 'conflict') return { error: 'CONFLICT' } as const;
+      if (receipt?.kind === 'replay') {
+        const [scene] = await tx.select().from(scenes).where(and(eq(scenes.id, receipt.resultIds[0]!), eq(scenes.campaignId, source.campaignId), isNull(scenes.archivedAt))).limit(1);
+        return scene ? { scene, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' } as const;
+      }
       const [last] = await tx.select({ sortOrder: scenes.sortOrder }).from(scenes).where(eq(scenes.campaignId, source.campaignId)).orderBy(desc(scenes.sortOrder), desc(scenes.id)).limit(1);
       const { id: _id, archivedAt: _archivedAt, version: _version, isActive: _isActive, published: _published, sortOrder: _sortOrder, ...copy } = source;
       const [scene] = await tx.insert(scenes).values({ ...copy, title: `${source.title} (copy)`.slice(0, 80), sortOrder: (last?.sortOrder ?? -1) + 1, isActive: false, published: false, archivedAt: null, version: 1 }).returning();
@@ -78,10 +87,11 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       const sourceTokens = await tx.select().from(tokens).where(and(eq(tokens.sceneId, source.id), isNull(tokens.deletedAt))).orderBy(asc(tokens.id)).for('share');
       if (sourceTokens.length) await tx.insert(tokens).values(sourceTokens.map(({ id: _id, sceneId: _sceneId, ...token }) => ({ ...token, sceneId: scene.id })));
       await tx.insert(auditEvents).values({ campaignId: source.campaignId, actorId: context.userId, action: 'scene.duplicated', targetId: scene.id });
-      return { scene } as const;
+      if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [scene.id]);
+      return { scene, replayed: false } as const;
     });
-    if ('error' in duplicate) return reply.code(duplicate.error === 'UNAUTHENTICATED' ? 401 : duplicate.error === 'NOT_FOUND' ? 404 : 403).send({ error: duplicate.error });
-    return reply.code(201).send({ scene: duplicate.scene });
+    if ('error' in duplicate) return reply.code(duplicate.error === 'UNAUTHENTICATED' ? 401 : duplicate.error === 'NOT_FOUND' ? 404 : duplicate.error === 'CONFLICT' || duplicate.error === 'RESULT_UNAVAILABLE' ? 409 : 403).send({ error: duplicate.error });
+    return reply.code(duplicate.replayed ? 200 : 201).send({ scene: duplicate.scene });
   });
   app.put('/api/scenes/:sceneId/archive', async (request, reply) => {
     const cookie = request.cookies[cookieName];
@@ -116,22 +126,31 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     const cookie = request.cookies[cookieName];
     if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const input = parseBody(createSceneSchema, request.body);
+    const requestId = operationRequestId(request.headers['idempotency-key']);
+    if (requestId === 'invalid') return reply.code(400).send({ error: 'INVALID_REQUEST_ID' });
     const result = await db.transaction(async (tx) => {
       const actor = await lockCampaignActor(tx, digest(cookie), input.campaignId, { strength: 'no key update' });
       if ('error' in actor) return actor;
       if (actor.role !== 'OWNER' && actor.role !== 'GM') return { error: 'FORBIDDEN' } as const;
+      const receipt = requestId ? await lockOperationReceipt(tx, { actorId: actor.userId, campaignId: input.campaignId, operationType: 'scene.create', requestId }, input) : null;
+      if (receipt?.kind === 'conflict') return { error: 'CONFLICT' } as const;
+      if (receipt?.kind === 'replay') {
+        const [scene] = await tx.select().from(scenes).where(and(eq(scenes.id, receipt.resultIds[0]!), eq(scenes.campaignId, input.campaignId), isNull(scenes.archivedAt))).limit(1);
+        return scene ? { scene, replayed: true } as const : { error: 'RESULT_UNAVAILABLE' } as const;
+      }
       const [last] = await tx.select({ sortOrder: scenes.sortOrder }).from(scenes).where(eq(scenes.campaignId, input.campaignId)).orderBy(desc(scenes.sortOrder)).limit(1);
       const [active] = await tx.select({ id: scenes.id }).from(scenes).where(and(eq(scenes.campaignId, input.campaignId), eq(scenes.isActive, true), isNull(scenes.archivedAt))).limit(1);
       const [created] = await tx.insert(scenes).values({ campaignId: input.campaignId, title: input.title, gridSize: input.gridSize, sortOrder: (last?.sortOrder ?? -1) + 1, isActive: !active, published: !active }).returning();
       if (created) await tx.insert(sceneLayers).values(defaultLayerRows.map((layer) => ({ ...layer, sceneId: created.id })));
       if (!created) throw new Error('Scene creation failed');
       await tx.insert(auditEvents).values({ campaignId: input.campaignId, actorId: actor.userId, action: 'scene.created', targetId: created.id });
-      return { scene: created } as const;
+      if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [created.id]);
+      return { scene: created, replayed: false } as const;
     });
-    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : result.error === 'NOT_FOUND' ? 404 : 403).send({ error: result.error });
+    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : result.error === 'NOT_FOUND' ? 404 : result.error === 'CONFLICT' || result.error === 'RESULT_UNAVAILABLE' ? 409 : 403).send({ error: result.error });
     const { scene } = result;
-    if (scene.isActive) void publishSceneActivation(io, input.campaignId).catch(() => request.log.error('Scene activation could not be published'));
-    return reply.code(201).send({ scene });
+    if (!result.replayed && scene.isActive) void publishSceneActivation(io, input.campaignId).catch(() => request.log.error('Scene activation could not be published'));
+    return reply.code(result.replayed ? 200 : 201).send({ scene });
   });
   app.put('/api/scenes/:sceneId/activate', async (request, reply) => {
     const cookie = request.cookies[cookieName];

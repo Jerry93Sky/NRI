@@ -18,8 +18,8 @@ try {
   await pool.query('DROP SCHEMA public CASCADE');
   await pool.query('CREATE SCHEMA public');
   const journal = JSON.parse(await readFile(join(source, 'meta', '_journal.json'), 'utf8'));
-  const priorEntries = journal.entries.slice(0, -1);
-  assert.equal(priorEntries.length, 20, 'The pre-retry baseline has migrations 0000 through 0019');
+  const priorEntries = journal.entries.slice(0, -2);
+  assert.equal(priorEntries.length, 20, 'The legacy baseline has migrations 0000 through 0019');
   await mkdir(join(tempRoot, 'meta'));
   for (const entry of priorEntries) await copyFile(join(source, `${entry.tag}.sql`), join(tempRoot, `${entry.tag}.sql`));
   await writeFile(join(tempRoot, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries: priorEntries }, null, 2));
@@ -40,8 +40,15 @@ try {
   assert.deepEqual(chatRows, [{ body: 'legacy chat row', client_message_id: null, request_digest: null }]);
   assert.deepEqual(diceRows, [{ expression: '1d20', result: 7, request_id: null, request_digest: null }]);
   const { rows: [count] } = await pool.query('SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations');
-  assert.equal(count.count, 21);
-  console.info('PASS: migration 20→21 preserves legacy chat/dice rows and applies scoped retry columns/indexes.');
+  assert.equal(count.count, 22);
+  const { rows: receiptRows } = await pool.query(`INSERT INTO rest_operation_receipts
+    (actor_id, campaign_id, operation_type, request_id, payload_digest, result_ids)
+    VALUES ($1, NULL, 'campaign.create', $2, repeat('a', 64), '[]') RETURNING actor_id`, [user.id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']);
+  assert.equal(receiptRows.length, 1, 'campaign creation receipts support the pre-campaign actor scope');
+  await assert.rejects(pool.query(`INSERT INTO rest_operation_receipts
+    (actor_id, campaign_id, operation_type, request_id, payload_digest, result_ids)
+    VALUES ($1, NULL, 'campaign.create', $2, repeat('b', 64), '[]')`, [user.id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']), /duplicate key/u);
+  console.info('PASS: migration 20→21 preserves legacy chat/dice rows; 21→22 adds scoped REST receipts with actor-only campaign-create uniqueness.');
 } finally {
   await pool.end();
   const resolvedTemp = resolve(tempRoot);

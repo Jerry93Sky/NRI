@@ -37,5 +37,9 @@ V0.3 introduces a small built-in package format and the evaluation contract need
 | Concept | Proposed placement |
 | --- | --- |
 | [Dark Tavern RPG](../design/DARK_TAVERN_DESIGN_VISION.md) | Owner-reviewed visual milestone after V0.1.1, coordinated with V0.2 without changing its tactical gates |
-| [Sound & Atmosphere](../architecture/SCENE_AUDIO.md) | Optional V0.5 Campaign Studio follow-up after scene privacy. Spatial and reactive audio follow geometry and rule/simulation integration |
+| [Campaign Lobby](../design/CAMPAIGN_LOBBY.md) | Owner-approved product direction; sequencing and release scope remain to be agreed. Lobby and scene audio share one planned multitrack concept |
+| [GM Screen](../design/GM_SCREEN.md) | Owner-approved requirements recorded as `PLANNED`; module boundaries and sequencing remain design proposals |
+| [Sound & Atmosphere](../architecture/SCENE_AUDIO.md) | Optional Campaign Studio follow-up after scene privacy. Spatial and reactive audio follow geometry and rule/simulation integration |
 | [Adventure Atlas](../architecture/ADVENTURE_ATLAS.md) | Linked maps and discovery after V0.2 and V0.5. Map authoring stays with V0.7, and split-party exploration needs a later location model |
+
+The table above records concepts without setting their relative release order. The owner paused Player Tabletop redesign; it remains out of scope until explicitly resumed. The Adventure Chronicle's structured event/draft/review flow is a proposal, does not require generative AI, and must preserve audience privacy.

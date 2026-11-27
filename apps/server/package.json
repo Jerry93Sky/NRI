@@ -20,6 +20,7 @@
     "test:command-authorization": "node scripts/command-authorization.mjs",
     "test:retry": "node scripts/retry-recovery.mjs",
     "test:retry-migration-upgrade": "node scripts/retry-migration-upgrade.mjs",
+    "db:prune-operation-receipts": "node scripts/prune-operation-receipts.mjs",
     "test": "vitest run"
   },
   "dependencies": {

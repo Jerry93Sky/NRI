@@ -148,6 +148,13 @@
       "when": 1795780000000,
       "tag": "0020_chat_dice_retry_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795781000000,
+      "tag": "0021_rest_operation_receipts",
+      "breakpoints": true
     }
   ]
 }

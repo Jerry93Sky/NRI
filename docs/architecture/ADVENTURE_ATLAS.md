@@ -1,6 +1,6 @@
 # Adventure Atlas
 
-**Status** `PLANNED` · Architecture concept for linked campaign maps and exploration.
+**Status** `PLANNED` · Architecture concept for linked campaign maps and exploration. It is separate from the owner-approved Campaign Lobby and the proposed GM Screen workspace; this document does not authorize either implementation.
 
 ## Maps, links and travel
 

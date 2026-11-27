@@ -8,6 +8,10 @@ V0.1.1 remains `IN_PROGRESS`. The contracts added with this plan are `PLANNED`. 
 
 The owner approved the product name EVERDOOR, the tagline “Every door, a new adventure,” a genre-neutral opening-door symbol, and Hearth as the working name for the warm base theme. The final logo, landing and campaign-door layouts, lobby details, theme catalog, Personal Haven, and commercial packaging remain open. The intended journey is Landing → Campaign Doors → Campaign Lobby → Adventure. These decisions do not rename technical identifiers or authorize a V0.1.1 frontend redesign. See [EVERDOOR Brand Vision](../design/EVERDOOR_BRAND_VISION.md).
 
+### Campaign Lobby and GM Screen — PLANNED
+
+Owner-approved lobby requirements and GM Screen capabilities are recorded in [Campaign Lobby](../design/CAMPAIGN_LOBBY.md) and [GM Screen](../design/GM_SCREEN.md). The lobby is a pre-session prepared-material space, not the primary world editor; Master Studio prepares content. One multitrack audio concept spans lobby and game scenes. Structured event inputs, chronicle drafts, GM review and audience-scoped publication are a proposed implementation direction, not a mandate for generative AI. GM Screen module names are working concepts. No release sequence is approved, no V0.1.1 gate changes, and Player Tabletop redesign remains paused.
+
 | Current area | Preserve or improve in V0.1.1 | First release that implements the new capability |
 | --- | --- | --- |
 | REST and realtime mutations | Share the token-movement service and check current membership, role, scene state and record versions in the write transaction. Verify competing edits, permission changes and reconnect behavior against PostgreSQL. Scope retry handling to known lost-acknowledgement cases | V0.2 adds authoritative geometry. Later transactional workflows own their receipt and retry contracts |

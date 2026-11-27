@@ -18,7 +18,7 @@ Masters will be able to customize their campaign door. Doors can represent any g
 
 ## Campaign Lobby
 
-The lobby is a standalone campaign page before a game session begins. Players can add a character; GM music and chat are available; other preparation and social actions may be added. It is not the live tabletop. The full composition and interaction set remain open design decisions.
+The lobby is a standalone pre-session campaign page, not the live tabletop or primary world editor. Its owner-approved top-down table, prepared widgets and materials, participant/character flow, session readiness, chat, shared audio direction, and between-session access are specified in [Campaign Lobby](CAMPAIGN_LOBBY.md). Master Studio prepares the content that the GM places in the lobby.
 
 ## Adventure Keys and access
 

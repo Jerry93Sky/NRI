@@ -4,7 +4,7 @@
 
 The approved product name is **EVERDOOR** with the tagline **Every door, a new adventure**. “NRI Platform” remains the temporary technical project name. The genre-neutral symbol direction is a stylized opening door; final logo artwork remains open. The working base theme is Hearth: a welcoming place before a larger adventure. See [EVERDOOR Brand Vision](../design/EVERDOOR_BRAND_VISION.md) for approved decisions, planned journey, and unresolved design questions.
 
-The planned user journey is Landing → Campaign Doors → Campaign Lobby → Adventure. Doors use a responsive grid like folders, lead into a pre-session lobby, and represent access granted by server-side permissions. Public discovery and a GM marketplace are later concepts. The approved interaction direction and limits are recorded in [Campaign Doors](../design/CAMPAIGN_DOORS.md). These are product direction only: do not treat them as implemented V0.1.1 features.
+The planned user journey is Landing → Campaign Doors → Campaign Lobby → Adventure. Doors use a responsive grid like folders, lead into a pre-session lobby, and represent access granted by server-side permissions. Public discovery and a GM marketplace are later concepts. The approved lobby direction includes prepared content, participant readiness, and published between-session reading; the [Campaign Lobby](../design/CAMPAIGN_LOBBY.md) and [GM Screen](../design/GM_SCREEN.md) specifications are `PLANNED`, not implemented. Lobby chronicle architecture and GM Screen module names are proposals, not approved technical decisions. The approved interaction direction and limits are recorded in [Campaign Doors](../design/CAMPAIGN_DOORS.md). Do not treat these as implemented V0.1.1 features.
 
 ## Purpose
 
@@ -39,7 +39,7 @@ V0.1.1 is the active stabilization release. The [acceptance report](../releases/
 
 ## Campaign and world choices
 
-The default visual direction is Dark Tavern RPG, with a map-first tabletop, original or licensed tokens and optional decoration independent of game state. Campaign atmosphere adds reusable audio profiles. Adventure Atlas connects authorized maps, discoveries and scenes while keeping reveal separate from travel. These concepts require separate release decisions after stabilization. [Dark Tavern](../design/DARK_TAVERN_DESIGN_VISION.md) · [Scene audio](../architecture/SCENE_AUDIO.md) · [Adventure Atlas](../architecture/ADVENTURE_ATLAS.md)
+The default visual direction is Dark Tavern RPG, with a map-first tabletop, original or licensed tokens and optional decoration independent of game state. Campaign atmosphere adds reusable multitrack audio across the lobby and game scenes. Adventure Atlas connects authorized maps, discoveries and scenes while keeping reveal separate from travel. GM Screen and lobby chronicle architecture remain proposals. These concepts require separate release decisions after stabilization. [Dark Tavern](../design/DARK_TAVERN_DESIGN_VISION.md) · [Scene audio](../architecture/SCENE_AUDIO.md) · [Adventure Atlas](../architecture/ADVENTURE_ATLAS.md) · [Campaign Lobby](../design/CAMPAIGN_LOBBY.md) · [GM Screen](../design/GM_SCREEN.md)
 
 Character rules and world laws have separate versioned configurations. A campaign can run a rules-neutral tabletop, use only character rules, or attach a World Instance with its own calendar and selected subsystems. Fantasy, science fiction, historical, modern and custom settings choose their own concepts and depth, including worlds without magic, states or monetary economies.
 

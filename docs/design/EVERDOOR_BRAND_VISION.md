@@ -25,7 +25,7 @@ The landing may use a classic game menu or a themed site. Campaign Doors use a r
 
 ### Campaign Lobby
 
-The lobby is a waiting space before play. The direction is a table with maps, books, notes, and atmospheric objects, with a few small interactions, optional music, and optimized visual effects. The short door transition is planned here. Lobby layout and the set of interactions are not approved yet.
+The lobby is a pre-session top-down table with a participant sidebar, selected characters, GM-placed prepared materials, saved layouts, readiness, chat, and a route into the session. It returns after play and supports published read-only material between sessions. The owner-approved requirements and unresolved choices are recorded in [Campaign Lobby](CAMPAIGN_LOBBY.md). Its exact artwork and widget catalog remain open. A single future multitrack audio concept should span the lobby and play scenes; see [Sound & Atmosphere](../architecture/SCENE_AUDIO.md).
 
 ### Themes and Personal Haven
 
@@ -49,5 +49,5 @@ Player and GM discovery, campaign listings, friends, and social interaction are 
 
 ## Delivery boundaries
 
-All concepts in this document are `PLANNED`. The brand decision records direction, not final visual assets or implementation. Campaign Doors, Door Studio, Campaign Lobby, Adventure Keys, and marketplace are later concepts. Existing UI stays as-is in V0.1.1. No subscriptions, theme store, community features, audio engine, or commercial rights decision is introduced here. Revisit the experience through owner-reviewed design artifacts before scheduling implementation.
+All concepts in this document are `PLANNED`. The brand decision records direction, not final visual assets or implementation. Campaign Doors, Door Studio, Campaign Lobby, GM Screen, Adventure Keys, and marketplace are later concepts. Existing UI stays as-is in V0.1.1. Subscription packaging, theme store, community features, audio engine, and commercial rights remain undecided. Revisit the experience through owner-reviewed design artifacts before scheduling implementation.
 

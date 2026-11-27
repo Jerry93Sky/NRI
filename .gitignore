@@ -3,6 +3,7 @@ node_modules/
 dist/
 coverage/
 apps/web/test-results/
+apps/server/tmp-regression-media/
 .turbo/
 .vite/
 

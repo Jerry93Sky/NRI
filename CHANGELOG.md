@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — RT-RETRY Part II local checkpoint (incomplete)
+
+- Add a 90-day scoped REST receipt migration and optional `Idempotency-Key` replay handling for token, scene-object, scene, and campaign creation routes. PostgreSQL migration, race, rollback, authorization-revocation, client recovery and CI evidence are outstanding; do not treat these routes as verified.
+- Record owner-approved Campaign Lobby and GM Screen requirements as `PLANNED`, separate proposed architecture, and align the brand, roadmap, product vision and audio/atlas notes. No UI or later feature implementation is included.
+
 ## Unreleased — V0.1.1 RT-RETRY (in progress)
 
 - Add scoped, digest-bound retry IDs to public/private chat and dice; replay returns the original row/result after current authorization and does not republish an event.
