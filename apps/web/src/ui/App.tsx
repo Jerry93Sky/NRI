@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 25329)
-Total output lines: 827
-
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { io, type Socket } from 'socket.io-client';
@@ -717,7 +714,27 @@ export function App() {
     }
   }
   function startInitiative() {
-   …329 tokens truncated…ew Error(t('offline'));
+    if (!campaign || !scene) return;
+    const entries = tokens.map((token) => ({ tokenId: token.id, label: token.name, score: Number(initiativeScores[token.id] ?? 0) }));
+    if (!entries.length || entries.some((entry) => !Number.isInteger(entry.score))) { setError(t('initiativeInvalid')); return; }
+    return submitInitiative('start', { sceneId: scene.id, entries });
+  }
+  function advanceInitiative() {
+    if (initiative.tracker) return submitInitiative('advance', { expectedVersion: initiative.tracker.version });
+  }
+  function stopInitiative() {
+    if (initiative.tracker) return submitInitiative('stop', { expectedVersion: initiative.tracker.version });
+  }
+  async function moveToken(token: PublicToken, x: number, y: number) {
+    const move = (nextX: number, nextY: number) => async (versions: Versions) => {
+      if (!socket.connected) throw new Error(t('offline'));
+      const result = await socket.timeout(5000).emitWithAck('token:move', { tokenId: token.id, x: nextX, y: nextY, expectedVersion: versions[token.id] }) as { error?: string; token?: PublicToken };
+      if (result.token) applyTokenUpdates([result.token]);
+      if (!result.token || result.error) throw new Error(result.error ?? 'MOVE_FAILED');
+      return versionsOf([result.token]);
+    };
+    try {
+      if (!connected) throw new Error(t('offline'));
       if (x === token.x && y === token.y) return;
       const before = versionsOf([token]);
       const redo = move(x, y);
