@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased — V0.1.1 CMD-ACL (in progress)
+## Unreleased — V0.1.1 CMD-ACL (automated tests passed)
 
 - Move token, scene, campaign, membership/invitation and asset command authorization and required audit writes into lock-compatible PostgreSQL transactions; retain existing movement and realtime publisher paths.
 - Add [endpoint authorization matrix](docs/security/COMMAND_AUTHORIZATION_MATRIX.md), finite deferred RT-RETRY scope, and approved EVERDOOR brand direction (`PLANNED`).
-- Add 20 dedicated PostgreSQL authorization, race, rollback, media privacy, filesystem-compensation and local profiling scenarios. Full browser/CI acceptance remains pending.
+- Add 20 dedicated PostgreSQL authorization, race, rollback, media privacy, filesystem-compensation and local profiling scenarios.
+- Pass the complete Ubuntu 24.04 workflow, including all PostgreSQL regressions, Pixi preview and Playwright 9/9, on [CI run #196](https://github.com/Jerry93Sky/NRI/actions/runs/46014338206). V0.1.1 remains `IN_PROGRESS` pending manual and operational gates.
 
 All notable project changes will be recorded here.
 
