@@ -38,7 +38,7 @@ Baseline `7fd3d6bebe44383b55a1e0038a79ef9d94cf0d7c`, CI #192. This inventory cov
 - Object edit/copy and layer edit/delete committed before their emits. They routed captured data through rooms without re-reading layer visibility or the recipient's current database authorization. Copy used its earlier destination snapshot. Object edits formed removal and update packets from the command's snapshots.
 - Layer hide supplied an ID-only invalidation. The web client already loads fresh snapshots on object and layer events and scopes results by workspace and latest request. Existing events therefore support invalidation without a wire redesign. A future delivery path must still prevent disclosure in the packet itself.
 
-Other room-based paths remain outside this increment. The risk column describes possible interleavings unless an explicit test or confirmed code gap is stated. It does not claim a reproduced leak for each row.
+The historical table records the baseline. Current private and other room-based paths are listed below. The risk column describes possible interleavings unless an explicit test or confirmed code gap is stated. It does not claim a reproduced leak for each row.
 
 ## Delivery after stabilization
 
@@ -50,3 +50,16 @@ Other room-based paths remain outside this increment. The risk column describes 
 | `token:moved`, group token events, object lifecycle restore/delete | Share the scene audience acquisition with ordinary scene content. The 23 movement and 28 lifecycle regressions retain their previous scope |
 
 The authorization locks stay held through synchronous Socket.IO enqueue. Session expiry and the local subscription are checked at each scene-content send. After enqueue, a packet may travel or sit in a transport buffer while permissions change. The server cannot recall bytes that have left the process. Delivery is best effort on a single API instance. Reconnect and scope changes use authorized snapshots. [Protocol](../architecture/REALTIME_PROTOCOL.md) · [Performance](../performance/SCENE_REALTIME_PROFILE.md)
+
+## Current private and public projections
+
+| Events | Writer and persistence | Current receiver and projection | Recovery, duplicate and stale behavior |
+| --- | --- | --- | --- |
+| `chat:message`, `chat:private` | Joined member and valid session. Private recipient also must be a member, with Player-to-Owner/GM restriction. Session, campaign and memberships are locked through append | Public goes to subscribed current members. Private goes to the authorized sender and recipient personal sockets. Uninvolved managers receive nothing. ACK additionally requires active subscription | History returns the last 100 authorized messages. Role and other-party revocations do not change participant history. Stored ID deduplication. A repeat can append |
+| `dice:result` | Current joined member, hidden writes restricted to Owner/GM. Append stores roll and visibility | Current campaign subscribers for public, current managers for hidden. Sender ACK uses the same check | Transient browser state, no dice history endpoint. Stored ID deduplication, no request deduplication |
+| `initiative:updated`, `initiative:gm_updated` | Owner/GM session, campaign write gate and active scene. Mutation and audit share a commit | Current campaign members get public projection, current managers get the full projection. Tracker, entries and linked visibility are read coherently | REST recovers the current scene snapshot. Superseded revision is skipped. Token visibility invalidates the same tracker revision. Browser rejects old scope and response sequence |
+| `token:created`, `token:updated`, `token:hidden`, `token:owner_note` | Property/owner/resource/trash changes lock the current actor, scene and token and commit audit with the write. Create/copy command authorization remains tracked separately | Current sessions and membership for all. Player projection of active visible live token or ID-only removal. Managers may get full token fields. Exact visible revision sends its note to the currently assigned subscribed owner | REST snapshot and live version guards. Ownership update clears prior note. A superseded note or state packet can be missed until snapshot. Queued packets and user copies persist |
+
+## Remaining direct sends
+
+Eight room-based event names remain. `scene:pointer` can contain draft scene coordinates and identity. `scene:updated` contains previously active scene metadata. `scene:activated`, `presence:joined`, `campaign:drawing_permission`, `membership:changed`, `membership:removed` and `campaign:archived` carry notifications, including deliberate removal feedback to a revoked user. Their narrower payloads can still be stale or reordered. This round reviews their source paths and does not establish reproduced disclosure from them. [Closure plan](../releases/V0.1.1_CLOSURE_PLAN.md)
