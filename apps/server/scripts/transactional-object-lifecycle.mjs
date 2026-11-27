@@ -77,7 +77,8 @@ function waitEvent(mark, socket, name, id) {
 async function quiet(mark, ids, recipients = sockets, names = eventsOfInterest) {
   // Observe packet absence here. PostgreSQL lock graphs, not this delay, order competing requests.
   await delay(120);
-  assert.deepEqual(events.slice(mark).filter((event) => recipients.includes(event.socket) && names.has(event.name) && ids.includes(event.id)), []);
+  const unexpected = events.slice(mark).filter((event) => recipients.includes(event.socket) && names.has(event.name) && ids.includes(event.id));
+  assert.deepEqual(unexpected.map(({ name, id }) => ({ name, id })), []);
 }
 
 async function waitOn(blockers, queryLike, exclude = []) {
@@ -172,9 +173,20 @@ try {
     name, kind: 'CUSTOM', visibleToPlayers: true,
   }, 201)).result.layer;
   const layerEdit = async (layer, patch) => (await request(`/api/layers/${layer.id}`, 'PATCH', owner, { expectedVersion: layer.version, ...patch })).result.layer;
-  const create = async (layer = publicLayer, target = active, fields = {}, actor = owner) => (await request(`/api/scenes/${target.id}/objects`, 'POST', actor, {
-    layerId: layer.id, kind: 'TEXT', x: 20, y: 30, text: 'Fixture object', ...fields,
-  }, 201)).result.object;
+  const create = async (layer = publicLayer, target = active, fields = {}, actor = owner) => {
+    const mark = events.length;
+    const { result: { object } } = await request(`/api/scenes/${target.id}/objects`, 'POST', actor, {
+      layerId: layer.id, kind: 'TEXT', x: 20, y: 30, text: 'Fixture object', ...fields,
+    }, 201);
+    if (target.campaignId === host.id) {
+      await waitEvent(mark, ownerSocket, 'scene:object_created', object.id);
+      // Drain the previously enqueued fixture packets on every connection before testing the next write.
+      await Promise.all(sockets.filter((socket) => socket.connected).map(async (socket) => {
+        assert.deepEqual(await socket.timeout(timeout).emitWithAck('scene:pointer', null), { error: 'INVALID' });
+      }));
+    }
+    return object;
+  };
   const edit = async (object, patch, status = 200) => (await request(`/api/objects/${object.id}`, 'PATCH', owner, { expectedVersion: object.version, ...patch }, status)).result;
 
   async function life(action, targets, { actor = gm, targetScene = active, status = 200 } = {}) {

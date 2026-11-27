@@ -512,6 +512,20 @@ test('GM can select, copy, and paste scene objects atomically', async ({ browser
   const playerContext = await browser.newContext({ locale: 'en-US' });
   const gmPage = await gmContext.newPage();
   const playerPage = await playerContext.newPage();
+  const objectFrames = new Map<string, string>();
+  let playerWire: import('@playwright/test').WebSocketRoute | undefined;
+  await playerPage.routeWebSocket((url) => url.pathname === '/socket.io/', (wire) => {
+    playerWire = wire;
+    wire.connectToServer().onMessage((packet) => {
+      if (typeof packet === 'string' && packet.startsWith('42[')) {
+        const [event, payload] = JSON.parse(packet.slice(2)) as [string, { object?: { id: string; version: number } }];
+        if ((event === 'scene:object_created' || event === 'scene:object_updated') && payload.object) {
+          objectFrames.set(`${payload.object.id}:${payload.object.version}`, packet);
+        }
+      }
+      wire.send(packet);
+    });
+  });
 
   try {
     await register(gmPage, 'Clipboard Guide', `clipboard-guide-${suffix}@example.test`);
@@ -527,7 +541,7 @@ test('GM can select, copy, and paste scene objects atomically', async ({ browser
     const sceneResponsePromise = gmPage.waitForResponse((response) => response.url().endsWith('/api/scenes') && response.request().method() === 'POST');
     await gmPage.getByRole('button', { name: /^Create/ }).click();
     const { scene } = await (await sceneResponsePromise).json() as { scene: { id: string; campaignId: string } };
-    const layers = (await requestJson(gmPage, `/api/scenes/${scene.id}/layers`)).body as Array<{ id: string; kind: string }>;
+    const layers = (await requestJson(gmPage, `/api/scenes/${scene.id}/layers`)).body as Array<{ id: string; kind: string; version: number }>;
     const objectsLayer = layers.find((layer) => layer.kind === 'OBJECTS')!;
     const sourceObjects: Array<{ id: string; version: number }> = [];
     for (const x of [220, 320]) {
@@ -644,6 +658,54 @@ test('GM can select, copy, and paste scene objects atomically', async ({ browser
     expect(repeated.request().postDataJSON()).toEqual({ action: 'delete', objects: [{ objectId: id, expectedVersion: revived.version }] });
     expect((await repeated.json() as { objects: typeof copied }).objects[0]!.version).toBe(revived.version + 1);
 
+    const objectsPath = `/api/scenes/${scene.id}/objects`;
+    const playerSnapshot = (check: (rows: typeof copied) => boolean) => playerPage.waitForResponse(async (response) =>
+      response.url().endsWith(objectsPath) && response.request().method() === 'GET' && response.ok() &&
+      check(await response.json() as typeof copied));
+    const source = sourceObjects[1]!;
+    const revision = (version: number, x: number) => requestJson(gmPage, `/api/objects/${source.id}`, 'PATCH', { expectedVersion: version, x });
+    const frameKey = `${source.id}:${source.version + 1}`;
+    const older = playerSnapshot((rows) => rows.some((object) => object.id === source.id && object.version === source.version + 1));
+    expect((await revision(source.version, 380)).status).toBe(200);
+    await older;
+    await expect.poll(() => objectFrames.has(frameKey)).toBe(true);
+    const oldFrame = objectFrames.get(frameKey)!;
+    const latest = (rows: typeof copied) => rows.filter((object) => object.id === source.id).length === 1 &&
+      rows.some((object) => object.id === source.id && object.version === source.version + 2);
+    const currentRevision = playerSnapshot(latest);
+    expect((await revision(source.version + 1, 440)).status).toBe(200);
+    await currentRevision;
+    const repeatedSnapshot = playerSnapshot(latest);
+    playerWire!.send(oldFrame);
+    playerWire!.send(oldFrame);
+    await repeatedSnapshot;
+
+    const hidden = playerSnapshot((rows) => rows.length === 0);
+    expect((await requestJson(gmPage, `/api/layers/${objectsLayer.id}`, 'PATCH', {
+      expectedVersion: objectsLayer.version, visibleToPlayers: false,
+    })).status).toBe(200);
+    await hidden;
+    const canvas = playerPage.locator('.table-canvas canvas');
+    const afterPaint = () => playerPage.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+    await afterPaint();
+    const hiddenCanvas = await canvas.screenshot();
+    const replayWhileHidden = playerSnapshot((rows) => rows.length === 0);
+    playerWire!.send(oldFrame);
+    await replayWhileHidden;
+    await afterPaint();
+    expect((await canvas.screenshot()).equals(hiddenCanvas)).toBe(true);
+
+    const shown = playerSnapshot(latest);
+    expect((await requestJson(gmPage, `/api/layers/${objectsLayer.id}`, 'PATCH', {
+      expectedVersion: objectsLayer.version + 1, visibleToPlayers: true,
+    })).status).toBe(200);
+    await shown;
+    const deletedFrame = objectFrames.get(`${id}:${revived.version}`);
+    expect(deletedFrame).toBeTruthy();
+    const afterTombstone = playerSnapshot((rows) => rows.every((object) => object.id !== id));
+    playerWire!.send(deletedFrame!);
+    await afterTombstone;
+
     const draftTitle = `History draft ${suffix}`;
     await gmPage.getByRole('button', { name: /Add scene/ }).first().click();
     await gmPage.getByLabel('Scene name').fill(draftTitle);
@@ -668,6 +730,22 @@ test('GM can select, copy, and paste scene objects atomically', async ({ browser
     await expect(gmPage.getByRole('heading', { name: secondTitle })).toBeVisible();
     await expect(undo).toBeDisabled();
     await expect(redo).toBeDisabled();
+    const campaigns = (await requestJson(gmPage, '/api/campaigns')).body as Array<{ campaign: { id: string; title: string } }>;
+    const second = campaigns.find((item) => item.campaign.title === secondTitle)!.campaign;
+    const newScene = (await requestJson(gmPage, '/api/scenes', 'POST', { campaignId: second.id, title: 'Next active scene' })).body as { scene: { id: string } };
+    const join = (await requestJson(gmPage, '/api/invitations', 'POST', { campaignId: second.id })).body as { invitation: string };
+    await playerPage.goto(new URL(`/?invite=${encodeURIComponent(join.invitation)}`, baseURL).toString());
+    await expect(playerPage.getByRole('heading', { name: secondTitle })).toBeVisible();
+    await expect(playerPage.locator('.scene-tab').filter({ hasText: 'Next active scene' })).toBeVisible();
+    await afterPaint();
+    const nextCanvas = await canvas.screenshot();
+    let staleReads = 0;
+    playerPage.on('request', (request) => { if (request.url().endsWith(objectsPath)) staleReads++; });
+    playerWire!.send(oldFrame);
+    await afterPaint();
+    expect((await canvas.screenshot()).equals(nextCanvas)).toBe(true);
+    expect(staleReads).toBe(0);
+    expect((await requestJson(playerPage, `/api/scenes/${newScene.scene.id}/objects`)).body).toEqual([]);
   } finally {
     await Promise.allSettled([gmContext.close(), playerContext.close()]);
   }

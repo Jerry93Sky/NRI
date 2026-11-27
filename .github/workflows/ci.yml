@@ -90,6 +90,10 @@ jobs:
         run: pnpm --filter @nri/server test:object-lifecycle
         env:
           NRI_API_URL: http://127.0.0.1:3000
+      - name: Test scoped scene content event delivery
+        run: pnpm --filter @nri/server test:realtime
+        env:
+          NRI_API_URL: http://127.0.0.1:3000
       - name: Start fresh API for browser tests
         run: |
           cd apps/server

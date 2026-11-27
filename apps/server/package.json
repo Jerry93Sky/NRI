@@ -15,6 +15,7 @@
     "smoke": "node scripts/multiplayer-smoke.mjs",
     "test:movement": "node scripts/transactional-movement.mjs",
     "test:object-lifecycle": "node scripts/transactional-object-lifecycle.mjs",
+    "test:realtime": "node scripts/secure-realtime.mjs",
     "test": "vitest run"
   },
   "dependencies": {
