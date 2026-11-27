@@ -42,3 +42,15 @@ export async function lockCampaignRoles(tx: Transaction, campaignId: string, use
   }
   return roles;
 }
+
+export async function lockCampaignActor(tx: Transaction, tokenHash: string, campaignId: string,
+  options: { otherUsers?: string[]; strength?: 'share' | 'no key update' } = {}) {
+  const session = await lockCommandSession(tx, tokenHash);
+  if (!session) return { error: 'UNAUTHENTICATED' } as const;
+  if (!await lockCampaign(tx, campaignId, options.strength)) return { error: 'FORBIDDEN' } as const;
+  const roles = await lockCampaignRoles(tx, campaignId, [session.userId, ...(options.otherUsers ?? [])]);
+  const role = roles.get(session.userId);
+  if (!role) return { error: 'FORBIDDEN' } as const;
+  if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
+  return { userId: session.userId, role, roles };
+}

@@ -80,6 +80,7 @@ export const diceRolls = pgTable('dice_rolls', {
 }, (t) => [index('dice_campaign_time_idx').on(t.campaignId, t.createdAt)]);
 export const initiatives = pgTable('initiative_trackers', {
   id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }).unique(),
+  sceneId: uuid('scene_id').references(() => scenes.id, { onDelete: 'set null' }),
   round: integer('round').notNull().default(1), activeIndex: integer('active_index').notNull().default(0), active: boolean('active').notNull().default(false), version: integer('version').notNull().default(1),
 });
 export const initiativeEntries = pgTable('initiative_entries', {

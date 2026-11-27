@@ -1,32 +1,68 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { adjustTokenResourceSchema, createTokenSchema, duplicateTokenSchema, duplicateTokensSchema, idSchema, updateTokenSchema } from '@nri/contracts';
 import { db } from '../../db/index.js';
 import { assets, auditEvents, scenes, tokens } from '../../db/schema.js';
-import { canReadSceneTokens } from '../../domain/sceneAccess.js';
+import { canReadSceneTokens, type CampaignSceneRole } from '../../domain/sceneAccess.js';
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
 import { digest, parseBody, requireUser, roleFor } from '../../security/access.js';
 import { publicToken } from '../../domain/projections.js';
-import { campaignMemberRoom } from '../../realtime/campaignRooms.js';
+import { publishTokenState } from '../../realtime/tokenEvents.js';
+import { publishInitiative } from '../../realtime/initiativeEvents.js';
 import { publishMovement } from '../../realtime/movementEvents.js';
 import { cookieName } from '../../config/runtime.js';
-import { commandSessionIsActive, lockCampaign, lockCampaignRoles, lockCommandSession } from '../../security/commandAccess.js';
+import { commandSessionIsActive, lockCampaign, lockCampaignRoles, lockCommandSession, type Transaction } from '../../security/commandAccess.js';
 import { updateTokenGroup } from './movement.js';
 
 const movementErrorStatus = { INVALID: 400, UNAUTHENTICATED: 401, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409 };
 
+type LockedTokenContext =
+  | { error: 'UNAUTHENTICATED' | 'NOT_FOUND' | 'FORBIDDEN' }
+  | { token: typeof tokens.$inferSelect; scene: Pick<typeof scenes.$inferSelect, 'id' | 'campaignId' | 'isActive'>;
+      role: CampaignSceneRole; roles: Map<string, CampaignSceneRole>; userId: string };
+
+async function lockTokenCommand(tx: Transaction, tokenHash: string, tokenId: string, requestedOwner?: string | null): Promise<LockedTokenContext> {
+  const session = await lockCommandSession(tx, tokenHash);
+  if (!session) return { error: 'UNAUTHENTICATED' } as const;
+  const [location] = await tx.select({ sceneId: scenes.id, campaignId: scenes.campaignId }).from(tokens)
+    .innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
+  if (!location) return { error: 'NOT_FOUND' } as const;
+  if (!await lockCampaign(tx, location.campaignId)) return { error: 'FORBIDDEN' } as const;
+  const roles = await lockCampaignRoles(tx, location.campaignId, requestedOwner ? [session.userId, requestedOwner] : [session.userId]);
+  const role = roles.get(session.userId);
+  if (!role) return { error: 'FORBIDDEN' } as const;
+  const [scene] = await tx.select({ id: scenes.id, campaignId: scenes.campaignId, isActive: scenes.isActive }).from(scenes)
+    .where(and(eq(scenes.id, location.sceneId), eq(scenes.campaignId, location.campaignId), isNull(scenes.archivedAt))).for('share').limit(1);
+  if (!scene) return { error: 'NOT_FOUND' } as const;
+  const [token] = await tx.select().from(tokens).where(and(eq(tokens.id, tokenId), eq(tokens.sceneId, scene.id))).for('no key update').limit(1);
+  if (!token) return { error: 'NOT_FOUND' } as const;
+  if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
+  return { token, scene, role, roles, userId: session.userId };
+}
+
 export function registerTokenRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/scenes/:sceneId/tokens', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
-    const { sceneId } = request.params as { sceneId: string };
-    const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
-    if (!scene || scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(scene.campaignId, user.id);
-    if (!role || !canReadSceneTokens(role, scene.isActive, scene.archivedAt !== null)) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const rows = await db.select().from(tokens).where(and(eq(tokens.sceneId, sceneId), isNull(tokens.deletedAt)));
-    return rows.filter((token) => !token.hidden || role === 'OWNER' || role === 'GM').map((token) => publicToken(token, role === 'OWNER' || role === 'GM', user.id));
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+    const tokenHash = digest(cookie);
+    const sceneId = parseBody(idSchema, (request.params as { sceneId: string }).sceneId);
+    const result = await db.transaction(async (tx) => {
+      const session = await lockCommandSession(tx, tokenHash);
+      if (!session) return { error: 'UNAUTHENTICATED' } as const;
+      const [location] = await tx.select({ campaignId: scenes.campaignId }).from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+      if (!location || !await lockCampaign(tx, location.campaignId)) return { error: 'NOT_FOUND' } as const;
+      const role = (await lockCampaignRoles(tx, location.campaignId, [session.userId])).get(session.userId);
+      const [scene] = await tx.select({ isActive: scenes.isActive }).from(scenes)
+        .where(and(eq(scenes.id, sceneId), eq(scenes.campaignId, location.campaignId), isNull(scenes.archivedAt))).for('share').limit(1);
+      if (!role || !scene || !canReadSceneTokens(role, scene.isActive, false)) return { error: 'NOT_FOUND' } as const;
+      const rows = await tx.select().from(tokens).where(and(eq(tokens.sceneId, sceneId), isNull(tokens.deletedAt)));
+      if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
+      return { projection: rows.filter((token) => !token.hidden || role !== 'PLAYER').map((token) => publicToken(token, role !== 'PLAYER', session.userId)) };
+    }, { isolationLevel: 'read committed' });
+    if ('error' in result) return reply.code(movementErrorStatus[result.error]).send({ error: result.error });
+    return result.projection;
   });
   app.post('/api/tokens', async (request, reply) => {
     const user = await requireUser(request, reply); if (!user) return;
@@ -42,9 +78,9 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
     }
     const [token] = await db.insert(tokens).values(input).returning();
     if (!token) throw new Error('Token creation failed');
-    const projection = publicToken(token, true); const playerProjection = publicToken(token);
-    const room = `campaign:${scene.campaignId}`;
-    ((token.hidden || !scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', token.hidden || !scene.isActive ? projection : playerProjection);
+    const projection = publicToken(token, true);
+    void publishTokenState(io, scene.campaignId, scene.id, [{ ...token, publication: 'create' }])
+      .catch(() => request.log.error('Committed token creation could not be published'));
     return reply.code(201).send({ token: projection });
   });
   app.post('/api/tokens/:tokenId/duplicate', async (request, reply) => {
@@ -81,8 +117,8 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
       return { token, campaignId: destination.campaignId, isActive: destination.isActive };
     });
     if ('error' in result) return reply.code(result.error === 'FORBIDDEN' ? 403 : result.error === 'CONFLICT' ? 409 : 404).send({ error: result.error });
-    const room = `campaign:${result.campaignId}`;
-    ((result.token.hidden || !result.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', result.token.hidden || !result.isActive ? publicToken(result.token, true) : publicToken(result.token));
+    void publishTokenState(io, result.campaignId, result.token.sceneId, [{ ...result.token, publication: 'create' }])
+      .catch(() => request.log.error('Committed token copy could not be published'));
     return reply.code(201).send({ token: publicToken(result.token, true) });
   });
   app.post('/api/scenes/:sceneId/tokens/duplicate', async (request, reply) => {
@@ -115,10 +151,8 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
       return { tokens: duplicates.map(({ id }) => byId.get(id)!), campaignId: destination.campaignId, isActive: destination.isActive };
     });
     if ('error' in result) return reply.code(result.error === 'FORBIDDEN' ? 403 : result.error === 'CONFLICT' ? 409 : 404).send({ error: result.error });
-    const room = `campaign:${result.campaignId}`;
-    for (const token of result.tokens) {
-      ((token.hidden || !result.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:created', token.hidden || !result.isActive ? publicToken(token, true) : publicToken(token));
-    }
+    void publishTokenState(io, result.campaignId, sceneId, result.tokens.map((token) => ({ ...token, publication: 'create' })))
+      .catch(() => request.log.error('Committed token copies could not be published'));
     return reply.code(201).send({ tokens: result.tokens.map((token) => publicToken(token, true)) });
   });
   app.get('/api/campaigns/:campaignId/token-trash', async (request, reply) => {
@@ -128,37 +162,36 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
     if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
     return db.select({ id: tokens.id, sceneId: tokens.sceneId, sceneTitle: scenes.title, name: tokens.name, version: tokens.version, deletedAt: tokens.deletedAt, sceneArchivedAt: scenes.archivedAt }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(scenes.campaignId, campaignId), sql`${tokens.deletedAt} IS NOT NULL`)).orderBy(desc(tokens.deletedAt));
   });
-  app.delete('/api/tokens/:tokenId', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
-    const { tokenId } = request.params as { tokenId: string };
-    const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
-    const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
-    if (!row || row.scene.archivedAt || row.token.deletedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(row.scene.campaignId, user.id);
-    if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    const [deleted] = await db.update(tokens).set({ deletedAt: new Date(), version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, input.expectedVersion), isNull(tokens.deletedAt))).returning({ id: tokens.id });
-    if (!deleted) return reply.code(409).send({ error: 'CONFLICT' });
-    await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.deleted', targetId: tokenId });
-    if (row.scene.isActive && !row.token.hidden) io.to(`campaign:${row.scene.campaignId}`).emit('token:hidden', { id: tokenId, sceneId: row.scene.id });
-    return reply.code(204).send();
-  });
-  app.post('/api/tokens/:tokenId/restore', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
-    const { tokenId } = request.params as { tokenId: string };
-    const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
-    const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
-    if (!row || row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(row.scene.campaignId, user.id);
-    if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    if (!row.token.deletedAt) return reply.code(409).send({ error: 'NOT_DELETED' });
-    const [restored] = await db.update(tokens).set({ deletedAt: null, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, input.expectedVersion), isNotNull(tokens.deletedAt))).returning();
-    if (!restored) return reply.code(409).send({ error: 'CONFLICT' });
-    await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.restored', targetId: tokenId });
-    const room = `campaign:${row.scene.campaignId}`;
-    if (row.scene.isActive && !restored.hidden) io.to(room).emit('token:created', publicToken(restored));
-    else io.to(`${room}:gm`).emit('token:created', publicToken(restored, true));
-    return { token: publicToken(restored, true) };
-  });
+  for (const action of ['delete', 'restore'] as const) {
+    const register = action === 'delete' ? app.delete.bind(app) : app.post.bind(app);
+    register(action === 'delete' ? '/api/tokens/:tokenId' : '/api/tokens/:tokenId/restore', async (request, reply) => {
+      const cookie = request.cookies[cookieName];
+      if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+      const tokenId = parseBody(idSchema, (request.params as { tokenId: string }).tokenId);
+      const { expectedVersion } = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
+      const result = await db.transaction(async (tx) => {
+        const context = await lockTokenCommand(tx, digest(cookie), tokenId);
+        if ('error' in context) return context;
+        const { token, scene, role, userId } = context;
+        if (action === 'delete' && token.deletedAt) return { error: 'NOT_FOUND' } as const;
+        if (role === 'PLAYER') return { error: 'FORBIDDEN' } as const;
+        if (action === 'restore' && !token.deletedAt) return { error: 'NOT_DELETED' } as const;
+        if (token.version !== expectedVersion) return { error: 'CONFLICT' } as const;
+        const [updated] = await tx.update(tokens).set({ deletedAt: action === 'delete' ? new Date() : null, version: expectedVersion + 1 })
+          .where(and(eq(tokens.id, tokenId), eq(tokens.version, expectedVersion))).returning();
+        if (!updated) throw new Error('Token lifecycle changed while locked');
+        await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: userId, action: action === 'delete' ? 'token.deleted' : 'token.restored', targetId: tokenId });
+        return { token: updated, scene };
+      });
+      if ('error' in result) return reply.code(result.error === 'NOT_DELETED' ? 409 : movementErrorStatus[result.error]).send({ error: result.error });
+      const { token, scene } = result;
+      void publishTokenState(io, scene.campaignId, scene.id, [{ ...token, publication: action === 'delete' ? 'delete' : 'create',
+        wasPublic: action === 'delete' && scene.isActive && !token.hidden, note: action === 'restore' }])
+        .catch(() => request.log.error('Committed token lifecycle could not be published'));
+      void publishInitiative(io, scene.campaignId).catch(() => request.log.error('Token initiative could not be published'));
+      return action === 'delete' ? reply.code(204).send() : { token: publicToken(token, true) };
+    });
+  }
   app.patch('/api/scenes/:sceneId/tokens/group', async (request, reply) => {
     const cookie = request.cookies[cookieName];
     if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
@@ -166,52 +199,72 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
     const result = await updateTokenGroup(digest(cookie), sceneId, request.body);
     if ('error' in result) return reply.code(movementErrorStatus[result.error]).send({ error: result.error });
     void publishMovement(io, result).catch(() => request.log.error('Committed token group update could not be published'));
+    if (result.changes.some(({ wasHidden, hidden }) => wasHidden !== hidden)) {
+      void publishInitiative(io, result.campaignId).catch(() => request.log.error('Token group initiative could not be published'));
+    }
     return { tokens: result.projections };
   });
   app.patch('/api/tokens/:tokenId', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
-    const { tokenId } = request.params as { tokenId: string };
-    const input = parseBody(updateTokenSchema, request.body);
-    const { expectedVersion, ...patch } = input;
-    const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
-    if (!row || row.scene.archivedAt || row.token.deletedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(row.scene.campaignId, user.id);
-    if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    if (patch.imageAssetId) {
-      const [asset] = await db.select({ id: assets.id }).from(assets).where(and(eq(assets.id, patch.imageAssetId), eq(assets.campaignId, row.scene.campaignId), eq(assets.category, 'TOKEN'))).limit(1);
-      if (!asset) return reply.code(400).send({ error: 'INVALID_ASSET' });
-    }
-    const [updated] = await db.update(tokens).set({ ...patch, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, expectedVersion))).returning();
-    if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
-    await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.updated', targetId: tokenId });
-    const room = `campaign:${row.scene.campaignId}`; const wasVisible = !row.token.hidden && row.scene.isActive; const isVisible = !updated.hidden && row.scene.isActive; const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
-    if (wasVisible && !isVisible) io.to(room).emit('token:hidden', { id: updated.id, sceneId: updated.sceneId });
-    else if (isVisible) io.to(room).emit(wasVisible ? 'token:updated' : 'token:created', playerProjection);
-    if (isVisible && updated.ownerUserId && (!wasVisible || updated.ownerNote !== row.token.ownerNote)) {
-      io.to(campaignMemberRoom(row.scene.campaignId, updated.ownerUserId)).emit('token:owner_note', { id: updated.id, ownerUserId: updated.ownerUserId, ownerNote: updated.ownerNote, version: updated.version });
-    }
-    io.to(`${room}:gm`).emit('token:updated', projection);
-    return { token: projection };
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+    const tokenHash = digest(cookie);
+    const tokenId = parseBody(idSchema, (request.params as { tokenId: string }).tokenId);
+    const { expectedVersion, ...patch } = parseBody(updateTokenSchema, request.body);
+    const result = await db.transaction(async (tx) => {
+      const context = await lockTokenCommand(tx, tokenHash, tokenId);
+      if ('error' in context) return context;
+      const { token, scene, role, userId } = context;
+      if (token.deletedAt) return { error: 'NOT_FOUND' } as const;
+      if (role === 'PLAYER') return { error: 'FORBIDDEN' } as const;
+      if (patch.imageAssetId) {
+        const [asset] = await tx.select({ id: assets.id }).from(assets).where(and(eq(assets.id, patch.imageAssetId), eq(assets.campaignId, scene.campaignId), eq(assets.category, 'TOKEN'))).limit(1);
+        if (!asset) return { error: 'INVALID_ASSET' } as const;
+      }
+      if (token.version !== expectedVersion) return { error: 'CONFLICT' } as const;
+      if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
+      const [updated] = await tx.update(tokens).set({ ...patch, version: expectedVersion + 1 })
+        .where(and(eq(tokens.id, tokenId), eq(tokens.version, expectedVersion))).returning();
+      if (!updated) throw new Error('Token properties changed while locked');
+      await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: userId, action: 'token.updated', targetId: tokenId });
+      return { updated, previous: token, scene };
+    });
+    if ('error' in result) return reply.code(result.error === 'INVALID_ASSET' ? 400 : movementErrorStatus[result.error]).send({ error: result.error });
+    const { previous, updated, scene } = result;
+    const reveals = previous.hidden && !updated.hidden;
+    void publishTokenState(io, scene.campaignId, scene.id, [{ ...updated, publication: reveals ? 'create' : 'update',
+      wasPublic: scene.isActive && !previous.hidden, note: reveals || previous.ownerNote !== updated.ownerNote }])
+      .catch(() => request.log.error('Committed token properties could not be published'));
+    if (previous.hidden !== updated.hidden) void publishInitiative(io, scene.campaignId).catch(() => request.log.error('Token visibility initiative could not be published'));
+    return { token: publicToken(updated, true) };
   });
   app.post('/api/tokens/:tokenId/resources/adjust', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
-    const { tokenId } = request.params as { tokenId: string };
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+    const tokenId = parseBody(idSchema, (request.params as { tokenId: string }).tokenId);
     const input = parseBody(adjustTokenResourceSchema, request.body);
-    const [row] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, tokenId)).limit(1);
-    if (!row || row.scene.archivedAt || row.token.deletedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(row.scene.campaignId, user.id);
-    if (!role || (!['OWNER', 'GM'].includes(role) && (row.token.hidden || !row.scene.isActive || row.token.ownerUserId !== user.id || !row.token.resources[input.resourceIndex].visible))) return reply.code(403).send({ error: 'FORBIDDEN' });
-    if (row.token.version !== input.expectedVersion) return reply.code(409).send({ error: 'CONFLICT' });
-    const resources = structuredClone(row.token.resources); const resource = resources[input.resourceIndex]; const current = resource.current + input.delta;
-    if (current < 0 || current > resource.maximum) return reply.code(409).send({ error: 'RESOURCE_LIMIT' });
-    resources[input.resourceIndex] = { ...resource, current };
-    const [updated] = await db.update(tokens).set({ resources, version: row.token.version + 1 }).where(and(eq(tokens.id, tokenId), eq(tokens.version, input.expectedVersion))).returning();
-    if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
-    await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'token.resource_adjusted', targetId: tokenId });
-    const room = `campaign:${row.scene.campaignId}`; const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
-    if (!updated.hidden && row.scene.isActive) io.to(room).emit('token:updated', playerProjection);
-    io.to(`${room}:gm`).emit('token:updated', projection);
-    return { token: role === 'OWNER' || role === 'GM' ? projection : playerProjection };
+    const result = await db.transaction(async (tx) => {
+      const context = await lockTokenCommand(tx, digest(cookie), tokenId);
+      if ('error' in context) return context;
+      const { token, scene, role, userId } = context;
+      if (token.deletedAt) return { error: 'NOT_FOUND' } as const;
+      if (role === 'PLAYER' && (token.hidden || !scene.isActive || token.ownerUserId !== userId || !token.resources[input.resourceIndex].visible)) return { error: 'FORBIDDEN' } as const;
+      if (token.version !== input.expectedVersion) return { error: 'CONFLICT' } as const;
+      const resources = structuredClone(token.resources);
+      const resource = resources[input.resourceIndex];
+      const current = resource.current + input.delta;
+      if (current < 0 || current > resource.maximum) return { error: 'RESOURCE_LIMIT' } as const;
+      resources[input.resourceIndex] = { ...resource, current };
+      const [updated] = await tx.update(tokens).set({ resources, version: input.expectedVersion + 1 })
+        .where(and(eq(tokens.id, tokenId), eq(tokens.version, input.expectedVersion))).returning();
+      if (!updated) throw new Error('Token resources changed while locked');
+      await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: userId, action: 'token.resource_adjusted', targetId: tokenId });
+      return { updated, scene, role };
+    });
+    if ('error' in result) return reply.code(result.error === 'RESOURCE_LIMIT' ? 409 : movementErrorStatus[result.error]).send({ error: result.error });
+    const { updated, scene, role } = result;
+    void publishTokenState(io, scene.campaignId, scene.id, [{ ...updated, publication: 'update' }])
+      .catch(() => request.log.error('Committed token resource could not be published'));
+    return { token: publicToken(updated, role !== 'PLAYER') };
   });
   app.post('/api/tokens/:tokenId/owner', async (request, reply) => {
     const cookie = request.cookies[cookieName];
@@ -220,34 +273,22 @@ export function registerTokenRoutes(app: FastifyInstance, io: Server) {
     const tokenId = parseBody(idSchema, (request.params as { tokenId: string }).tokenId);
     const input = parseBody(z.object({ ownerUserId: z.uuid().transform((id) => id.toLowerCase()).nullable() }), request.body);
     const result = await db.transaction(async (tx) => {
-      const session = await lockCommandSession(tx, tokenHash);
-      if (!session) return { error: 'UNAUTHENTICATED' } as const;
-      const [location] = await tx.select({ sceneId: scenes.id, campaignId: scenes.campaignId }).from(tokens)
-        .innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(tokens.id, tokenId), isNull(tokens.deletedAt))).limit(1);
-      if (!location) return { error: 'NOT_FOUND' } as const;
-      if (!await lockCampaign(tx, location.campaignId)) return { error: 'FORBIDDEN' } as const;
-      const roles = await lockCampaignRoles(tx, location.campaignId, input.ownerUserId ? [session.userId, input.ownerUserId] : [session.userId]);
-      const role = roles.get(session.userId);
-      if (role !== 'OWNER' && role !== 'GM') return { error: 'FORBIDDEN' } as const;
-      const [scene] = await tx.select().from(scenes).where(and(eq(scenes.id, location.sceneId), isNull(scenes.archivedAt))).for('share').limit(1);
-      if (!scene) return { error: 'NOT_FOUND' } as const;
+      const context = await lockTokenCommand(tx, tokenHash, tokenId, input.ownerUserId);
+      if ('error' in context) return context;
+      const { token, scene, role, roles, userId } = context;
+      if (token.deletedAt) return { error: 'NOT_FOUND' } as const;
+      if (role === 'PLAYER') return { error: 'FORBIDDEN' } as const;
       if (input.ownerUserId && !roles.has(input.ownerUserId)) return { error: 'INVALID_OWNER' } as const;
-      const [token] = await tx.select().from(tokens).where(and(eq(tokens.id, tokenId), eq(tokens.sceneId, scene.id), isNull(tokens.deletedAt))).for('no key update').limit(1);
-      if (!token) return { error: 'NOT_FOUND' } as const;
-      if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
       const [updated] = await tx.update(tokens).set({ ownerUserId: input.ownerUserId, version: token.version + 1 })
         .where(and(eq(tokens.id, tokenId), eq(tokens.version, token.version))).returning();
       if (!updated) throw new Error('Locked token changed before ownership was applied');
-      await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: session.userId, action: 'token.owner_changed', targetId: tokenId });
+      await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: userId, action: 'token.owner_changed', targetId: tokenId });
       return { updated, scene };
     }, { isolationLevel: 'read committed' });
     if ('error' in result) return reply.code(result.error === 'INVALID_OWNER' ? 400 : movementErrorStatus[result.error]).send({ error: result.error });
     const { updated, scene } = result;
-    const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
-    ((updated.hidden || !scene.isActive) ? io.to(`campaign:${scene.campaignId}:gm`) : io.to(`campaign:${scene.campaignId}`)).emit('token:updated', updated.hidden || !scene.isActive ? projection : playerProjection);
-    if (!updated.hidden && scene.isActive && updated.ownerUserId) {
-      io.to(campaignMemberRoom(scene.campaignId, updated.ownerUserId)).emit('token:owner_note', { id: updated.id, ownerUserId: updated.ownerUserId, ownerNote: updated.ownerNote, version: updated.version });
-    }
-    return { token: projection };
+    void publishTokenState(io, scene.campaignId, scene.id, [{ ...updated, publication: 'update', note: true }])
+      .catch(() => request.log.error('Committed token ownership could not be published'));
+    return { token: publicToken(updated, true) };
   });
 }

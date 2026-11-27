@@ -95,7 +95,7 @@ export function App() {
   const socket = useMemo<Socket>(() => io({ autoConnect: false, withCredentials: true, transports: ['websocket', 'polling'] }), []);
   const { scene, setScene, scenes, setScenes, openScene, reloadSceneContent, tokens, setTokens,
     layers, setLayers, objects, setObjects, activeLayerId, setActiveLayerId, members, messages, setMessages,
-    rolls, setRolls, initiative, setInitiative, connected, campaignIdRef } = useTabletopSync({
+    rolls, setRolls, initiative, setInitiative, connected, campaignIdRef, isCurrentScope } = useTabletopSync({
     user, campaign, socket, setCampaign, setCampaigns, setError, setUser,
   });
   useEffect(() => {
@@ -469,7 +469,7 @@ export function App() {
   }
   async function addToken() {
     if (!scene) return;
-    try { const data = await api<{ token: PublicToken }>('/api/tokens', { method: 'POST', body: JSON.stringify({ sceneId: scene.id, name: `Token ${tokens.length + 1}`, x: 3 + tokens.length % 5, y: 3, color: ['#c8794a', '#668d7b', '#b2a26a', '#9b738d'][tokens.length % 4] }) }); setTokens((items) => items.some((item) => item.id === data.token.id) ? items : [...items, data.token]); }
+    try { const data = await api<{ token: PublicToken }>('/api/tokens', { method: 'POST', body: JSON.stringify({ sceneId: scene.id, name: `Token ${tokens.length + 1}`, x: 3 + tokens.length % 5, y: 3, color: ['#c8794a', '#668d7b', '#b2a26a', '#9b738d'][tokens.length % 4] }) }); if (commandHistory.isCurrent()) setTokens((items) => items.some((item) => item.id === data.token.id) ? items : [...items, data.token]); }
     catch (e) { setError((e as Error).message); }
   }
   async function dropTokenAsset(assetId: string, worldX: number, worldY: number) {
@@ -483,6 +483,7 @@ export function App() {
     const y = Math.max(0, Math.min(maxY, scene.snapToGrid ? Math.round(rawY) : rawY));
     try {
       const result = await api<{ token: PublicToken }>('/api/tokens', { method: 'POST', body: JSON.stringify({ sceneId: scene.id, name: asset.name.slice(0, 48), x, y, imageAssetId: asset.id }) });
+      if (!commandHistory.isCurrent()) return;
       setTokens((items) => items.some((item) => item.id === result.token.id) ? items : [...items, result.token]);
       setAssets((items) => items.map((item) => item.id === asset.id ? { ...item, usageCount: item.usageCount + 1 } : item));
     } catch (e) { setError((e as Error).message); }
@@ -498,6 +499,7 @@ export function App() {
       const created = tokenClipboard.length === 1
         ? [await api<{ token: PublicToken }>(`/api/tokens/${tokenClipboard[0]!.id}/duplicate`, { method: 'POST', body: JSON.stringify({ sceneId: scene.id, ...duplicates[0] }) }).then((result) => result.token)]
         : (await api<{ tokens: PublicToken[] }>(`/api/scenes/${scene.id}/tokens/duplicate`, { method: 'POST', body: JSON.stringify({ sceneId: scene.id, tokens: duplicates }) })).tokens;
+      if (!commandHistory.isCurrent()) return;
       setTokens((items) => [...items, ...created.filter((token) => !items.some((item) => item.id === token.id))]);
       setSelectedTokenIds(created.map((token) => token.id));
       const copiedAssetCounts = new Map<string, number>();
@@ -511,7 +513,7 @@ export function App() {
     catch (e) { setError((e as Error).message); }
   }
   async function assignToken(token: PublicToken, ownerUserId: string) {
-    try { const result = await api<{ token: PublicToken }>(`/api/tokens/${token.id}/owner`, { method: 'POST', body: JSON.stringify({ ownerUserId: ownerUserId || null }) }); setTokens((items) => items.map((item) => item.id === token.id ? result.token : item)); }
+    try { const result = await api<{ token: PublicToken }>(`/api/tokens/${token.id}/owner`, { method: 'POST', body: JSON.stringify({ ownerUserId: ownerUserId || null }) }); if (commandHistory.isCurrent()) setTokens((items) => items.map((item) => item.id === token.id && result.token.version >= item.version ? result.token : item)); }
     catch (e) { setError((e as Error).message); }
   }
   function applyTokenUpdates(updates: PublicToken[]) {
@@ -583,8 +585,16 @@ export function App() {
   async function adjustTokenResource(token: PublicToken, resourceIndex: 0 | 1, delta: -1 | 1) {
     try {
       const result = await api<{ token: PublicToken }>(`/api/tokens/${token.id}/resources/adjust`, { method: 'POST', body: JSON.stringify({ resourceIndex, delta, expectedVersion: token.version }) });
-      setTokens((items) => items.map((item) => item.id === token.id ? result.token : item));
-    } catch (e) { setError((e as Error).message); if (scene) try { setTokens(await api<PublicToken[]>(`/api/scenes/${scene.id}/tokens`)); } catch { /* Keep the original resource error visible. */ } }
+      if (commandHistory.isCurrent()) setTokens((items) => items.map((item) => item.id === token.id && result.token.version >= item.version
+        ? { ...result.token, ...(item.ownerUserId === result.token.ownerUserId && item.ownerNote !== undefined ? { ownerNote: item.ownerNote } : {}) } : item));
+    } catch (e) {
+      if (!commandHistory.isCurrent()) return;
+      setError((e as Error).message);
+      if (scene) try {
+        const snapshot = await api<PublicToken[]>(`/api/scenes/${scene.id}/tokens`);
+        if (commandHistory.isCurrent()) setTokens(snapshot);
+      } catch { /* Keep the original resource error visible. */ }
+    }
   }
   async function uploadBackground(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; event.target.value = '';
@@ -670,7 +680,7 @@ export function App() {
   async function restoreToken(item: DeletedToken) {
     try {
       const result = await api<{ token: PublicToken }>(`/api/tokens/${item.id}/restore`, { method: 'POST', body: JSON.stringify({ expectedVersion: item.version }) });
-      if (scene?.id === item.sceneId) setTokens((items) => items.some((token) => token.id === result.token.id) ? items : [...items, result.token]);
+      if (commandHistory.isCurrent() && scene?.id === item.sceneId) setTokens((items) => items.some((token) => token.id === result.token.id) ? items : [...items, result.token]);
       setDeletedTokens((items) => items.filter((token) => token.id !== item.id));
     } catch (e) { setError((e as Error).message); }
   }
@@ -691,7 +701,7 @@ export function App() {
     setInitiativePending(true);
     try {
       const view = await api<InitiativeView>(`/api/campaigns/${campaignId}/initiative/${action}`, { method: 'POST', body: JSON.stringify(body) });
-      if (campaignIdRef.current === campaignId) setInitiative(view);
+      if (isCurrentScope()) setInitiative(view);
     } catch (error) {
       if (campaignIdRef.current === campaignId) setError((error as Error).message);
     } finally {
@@ -733,9 +743,9 @@ export function App() {
     event.preventDefault(); if (!campaign || !chatText.trim()) return;
     if (!connected) { setError(t('offline')); return; }
     const campaignId = campaign.campaign.id;
-    socket.emit('chat:send', { campaignId, body: chatText, recipientId: messageRecipient || null }, (result: { error?: string; message?: ChatItem }) => { if (result.message?.campaignId === campaignIdRef.current) setMessages((items) => items.some((item) => item.id === result.message!.id) ? items : [...items.slice(-99), result.message!]); if (result.error && campaignId === campaignIdRef.current) setError(result.error); }); setChatText('');
+    socket.emit('chat:send', { campaignId, body: chatText, recipientId: messageRecipient || null }, (result: { error?: string; message?: ChatItem }) => { if (isCurrentScope() && result.message?.campaignId === campaignIdRef.current) setMessages((items) => items.some((item) => item.id === result.message!.id) ? items : [...items.slice(-99), result.message!]); if (result.error && campaignId === campaignIdRef.current) setError(result.error); }); setChatText('');
   }
-  function rollDice() { if (!campaign) return; if (!connected) { setError(t('offline')); return; } const campaignId = campaign.campaign.id; socket.emit('dice:roll', { campaignId, expression: '1d20', hidden: hiddenRoll }, (result: { error?: string; roll?: RollItem }) => { if (result.roll?.campaignId === campaignIdRef.current) setRolls((items) => result.roll!.id && items.some((item) => item.id === result.roll!.id) ? items : [...items.slice(-19), result.roll!]); if (result.error && campaignId === campaignIdRef.current) setError(result.error); }); }
+  function rollDice() { if (!campaign) return; if (!connected) { setError(t('offline')); return; } const campaignId = campaign.campaign.id; socket.emit('dice:roll', { campaignId, expression: '1d20', hidden: hiddenRoll }, (result: { error?: string; roll?: RollItem }) => { if (isCurrentScope() && result.roll?.campaignId === campaignIdRef.current) setRolls((items) => result.roll!.id && items.some((item) => item.id === result.roll!.id) ? items : [...items.slice(-19), result.roll!]); if (result.error && campaignId === campaignIdRef.current) setError(result.error); }); }
 
   if (!user) return <main className="auth-shell"><div className="auth-card"><div className="brand-mark">N</div><p className="eyebrow">TABLETOP, REIMAGINED</p><h1>{t('subtitle')}</h1><p className="muted">A calm, flexible space for stories shared around a table.</p><form onSubmit={submitAuth} className="form-stack">
     {authMode === 'register' && <label>{t('displayName')}<input name="displayName" minLength={1} maxLength={48} required /></label>}

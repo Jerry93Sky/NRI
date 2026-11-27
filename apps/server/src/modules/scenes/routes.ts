@@ -10,6 +10,8 @@ import { parseBody, requireUser, roleFor } from '../../security/access.js';
 import { publicScene } from '../../domain/projections.js';
 import { defaultLayerRows } from '../../domain/defaultLayers.js';
 import { lockCampaign, lockCampaignRoles } from '../../security/commandAccess.js';
+import { invalidateSceneInitiative } from '../initiative/service.js';
+import { publishInitiative } from '../../realtime/initiativeEvents.js';
 
 export function registerSceneRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns/:campaignId/scenes', async (request, reply) => {
@@ -76,7 +78,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     const role = await roleFor(scene.campaignId, user.id);
     if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
     if (scene.archivedAt) return reply.code(409).send({ error: 'CONFLICT' });
-    let result: { scene: typeof scene; activated: typeof scene | null };
+    let result: { scene: typeof scene; activated: typeof scene | null; initiativeVersion: number | undefined };
     try {
       result = await db.transaction(async (tx) => {
         if (!await lockCampaign(tx, scene.campaignId, 'no key update')) throw new Error('CAMPAIGN_FORBIDDEN');
@@ -90,7 +92,8 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
           if (fallback) { const [next] = await tx.update(scenes).set({ isActive: true, version: fallback.version + 1 }).where(and(eq(scenes.id, fallback.id), eq(scenes.version, fallback.version))).returning(); if (!next) throw new Error('SCENE_CONFLICT'); activated = next; }
         }
         await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.archived', targetId: sceneId });
-        return { scene: updated, activated };
+        const initiativeVersion = await invalidateSceneInitiative(tx, scene.campaignId, sceneId, 'archive');
+        return { scene: updated, activated, initiativeVersion };
       });
     } catch (error) {
       if (error instanceof Error && error.message === 'CAMPAIGN_FORBIDDEN') return reply.code(403).send({ error: 'FORBIDDEN' });
@@ -98,6 +101,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       throw error;
     }
     if (scene.isActive) io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { campaignId: scene.campaignId, sceneId: result.activated?.id ?? null });
+    if (result.initiativeVersion !== undefined) void publishInitiative(io, scene.campaignId, result.initiativeVersion).catch(() => request.log.error('Scene initiative could not be published'));
     return { scene: result.scene };
   });
   app.post('/api/scenes', async (request, reply) => {
@@ -129,9 +133,9 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
     if (scene.version !== input.expectedVersion) return reply.code(409).send({ error: 'CONFLICT' });
     if (scene.isActive) return { scene };
-    let activated: typeof scene;
+    let result: { activated: typeof scene; initiativeVersion: number | undefined };
     try {
-      activated = await db.transaction(async (tx) => {
+      result = await db.transaction(async (tx) => {
         if (!await lockCampaign(tx, scene.campaignId, 'no key update')) throw new Error('CAMPAIGN_FORBIDDEN');
         const currentRole = (await lockCampaignRoles(tx, scene.campaignId, [user.id])).get(user.id);
         if (currentRole !== 'OWNER' && currentRole !== 'GM') throw new Error('CAMPAIGN_FORBIDDEN');
@@ -139,15 +143,17 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
         const [updated] = await tx.update(scenes).set({ isActive: true, published: true, version: scene.version + 1 }).where(and(eq(scenes.id, scene.id), eq(scenes.version, input.expectedVersion), isNull(scenes.archivedAt))).returning();
         if (!updated) throw new Error('SCENE_CONFLICT');
         await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.activated', targetId: sceneId });
-        return updated;
+        const initiativeVersion = await invalidateSceneInitiative(tx, scene.campaignId, sceneId, 'activate');
+        return { activated: updated, initiativeVersion };
       });
     } catch (error) {
       if (error instanceof Error && error.message === 'CAMPAIGN_FORBIDDEN') return reply.code(403).send({ error: 'FORBIDDEN' });
       if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
       throw error;
     }
-    io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { campaignId: scene.campaignId, sceneId: activated.id });
-    return { scene: activated };
+    io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { campaignId: scene.campaignId, sceneId: result.activated.id });
+    if (result.initiativeVersion !== undefined) void publishInitiative(io, scene.campaignId, result.initiativeVersion).catch(() => request.log.error('Scene initiative could not be published'));
+    return { scene: result.activated };
   });
   app.put('/api/scenes/:sceneId/restore', async (request, reply) => {
     const user = await requireUser(request, reply); if (!user) return;

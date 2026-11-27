@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { Socket } from 'socket.io-client';
 import type { PublicSceneLayer, PublicSceneObject, PublicToken } from '@nri/contracts';
 import { api } from '../../services/api';
@@ -50,7 +50,6 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [rolls, setRolls] = useState<RollItem[]>([]);
   const [initiative, updateInitiative] = useState<InitiativeView>({ tracker: null, entries: [] });
-  const setInitiative = useCallback((view: InitiativeView) => updateInitiative((current) => latestInitiative(current, view)), []);
   const [connected, setConnected] = useState(false);
   const campaignId = campaign?.campaign.id ?? null;
   const role = campaign?.role;
@@ -60,6 +59,13 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
   const scope = `${userId ?? ''}:${campaignId ?? ''}:${role ?? ''}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
+  const scopeIdentity = useMemo(() => Symbol(), [scope]);
+  const currentScopeIdentity = useRef(scopeIdentity);
+  currentScopeIdentity.current = scopeIdentity;
+  const isCurrentScope = useCallback(() => currentScopeIdentity.current === scopeIdentity, [scopeIdentity]);
+  const setInitiative = useCallback((view: InitiativeView) => {
+    if (isCurrentScope()) updateInitiative((current) => latestInitiative(current, view));
+  }, [isCurrentScope]);
   const sceneIdRef = useRef<string | null>(null);
   const sceneRequest = useRef(0);
   const contentRequest = useRef(0);
@@ -133,9 +139,16 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
   useEffect(() => {
     if (!campaignId || !userId) return;
     let active = true;
-    const current = () => active && scopeRef.current === scope;
+    const current = () => active && isCurrentScope();
     const canManage = role === 'OWNER' || role === 'GM';
     const report = (error: Error) => { if (current()) setError(error.message); };
+    let initiativeRequest = 0;
+    const refreshInitiative = () => {
+      const revision = ++initiativeRequest;
+      void api<InitiativeView>(`/api/campaigns/${campaignId}/initiative`).then((view) => {
+        if (current() && revision === initiativeRequest) setInitiative(view);
+      }).catch(report);
+    };
 
     const refreshScenes = async () => {
       const request = ++sceneRequest.current;
@@ -152,7 +165,7 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       void refreshScenes().catch(report);
       void api<Member[]>(`/api/campaigns/${campaignId}/members`).then((list) => { if (current()) setMembers(list); }).catch(report);
       void api<ChatItem[]>(`/api/campaigns/${campaignId}/messages`).then((list) => { if (current()) setMessages((prev) => mergeChat(prev, list)); }).catch(report);
-      void api<InitiativeView>(`/api/campaigns/${campaignId}/initiative`).then((view) => { if (current()) setInitiative(view); }).catch(report);
+      refreshInitiative();
     };
 
     const closeCampaign = (removedId: string) => {
@@ -202,7 +215,8 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       setTokens(change);
     };
     const onToken = (token: PublicToken) => {
-      if (!canManage && token.hidden) return;
+      // A delayed manager projection must not enter a Player store after a role change.
+      if (!canManage && (token.hidden !== undefined || token.gmNote !== undefined || token.ownerNote !== undefined)) return;
       applyTokenChange(token.sceneId, (items) => mergeToken(items, token, canManage));
     };
     const onTokenHidden = ({ id, sceneId }: { id: string; sceneId: string }) => {
@@ -211,12 +225,17 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
     const onOwnerNote = ({ id, ownerUserId, ownerNote, version }: { id: string; ownerUserId: string; ownerNote: string; version: number }) => {
       const sceneId = sceneIdRef.current;
       if (!sceneId || ownerUserId !== userId) return;
-      applyTokenChange(sceneId, (items) => items.map((item) => item.id === id && item.ownerUserId === userId && item.version <= version ? { ...item, ownerNote } : item));
+      applyTokenChange(sceneId, (items) => items.map((item) => item.id === id && item.ownerUserId === userId && item.version === version ? { ...item, ownerNote } : item));
     };
 
-    const onChat = (item: ChatItem) => { if (current() && item.campaignId === campaignId) setMessages((items) => mergeChat(items, [item])); };
+    const onChat = (item: ChatItem) => {
+      if (item.recipientId && item.senderId !== userId && item.recipientId !== userId) return;
+      if (current() && item.campaignId === campaignId) setMessages((items) => mergeChat(items, [item]));
+    };
     const onDice = (roll: RollItem) => {
-      if (current() && roll.campaignId === campaignId) setRolls((items) => roll.id && items.some((item) => item.id === roll.id) ? items : [...items.slice(-19), roll]);
+      if (current() && roll.campaignId === campaignId && (canManage || !roll.hidden)) {
+        setRolls((items) => roll.id && items.some((item) => item.id === roll.id) ? items : [...items.slice(-19), roll]);
+      }
     };
     const onPointer = (pointer: SharedPointer) => {
       if (current() && pointer.sceneId === sceneIdRef.current && pointer.userId !== userId) window.dispatchEvent(new CustomEvent('nri-shared-pointer', { detail: pointer }));
@@ -234,7 +253,10 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       setCampaigns((items) => items.map(apply));
     };
     const onSceneActivated = (event: { campaignId?: string }) => {
-      if (current() && (!event.campaignId || event.campaignId === campaignId)) void refreshScenes().catch(report);
+      if (current() && (!event.campaignId || event.campaignId === campaignId)) {
+        void refreshScenes().catch(report);
+        refreshInitiative();
+      }
     };
     const onMembershipChanged = (event: { campaignId?: string; userId: string; role: string }) => {
       if (!current() || (event.campaignId && event.campaignId !== campaignId)) return;
@@ -271,7 +293,7 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       reload({ sceneId });
     };
     const onInitiative = (view: InitiativeView & { campaignId?: string }) => {
-      if (current() && (!view.campaignId || view.campaignId === campaignId)) setInitiative(view);
+      if (current() && view.campaignId === campaignId) refreshInitiative();
     };
 
     const listeners = {
@@ -295,8 +317,8 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       for (const [event, handler] of Object.entries(listeners)) socket.off(event, handler);
       if (socket.connected) socket.emit('campaign:leave', campaignId);
     };
-  }, [scope, campaignId, role, userId, socket, clearScene, openScene, reloadSceneContent, setCampaign, setCampaigns, setError, setUser, setInitiative]);
+  }, [campaignId, role, userId, socket, clearScene, isCurrentScope, openScene, reloadSceneContent, setCampaign, setCampaigns, setError, setUser, setInitiative]);
 
   return { scenes, setScenes, scene, setScene, tokens, setTokens, layers, setLayers, objects, setObjects, activeLayerId, setActiveLayerId,
-    members, messages, setMessages, rolls, setRolls, initiative, setInitiative, connected, campaignIdRef, openScene, reloadSceneContent };
+    members, messages, setMessages, rolls, setRolls, initiative, setInitiative, connected, campaignIdRef, isCurrentScope, openScene, reloadSceneContent };
 }
