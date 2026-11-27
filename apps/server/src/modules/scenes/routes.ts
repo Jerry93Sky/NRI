@@ -57,7 +57,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       const sourceLayers = await tx.select().from(sceneLayers).where(eq(sceneLayers.sceneId, source.id)).orderBy(asc(sceneLayers.sortOrder));
       const copiedLayers = await tx.insert(sceneLayers).values(sourceLayers.map(({ id: _layerId, sceneId: _sceneId, ...layer }) => ({ ...layer, sceneId: scene.id, version: 1 }))).returning();
       const layerMap = new Map(sourceLayers.map((layer, index) => [layer.id, copiedLayers[index]!.id]));
-      const sourceObjects = await tx.select().from(sceneObjects).where(eq(sceneObjects.sceneId, source.id));
+      const sourceObjects = await tx.select().from(sceneObjects).where(and(eq(sceneObjects.sceneId, source.id), isNull(sceneObjects.deletedAt)));
       if (sourceObjects.length) await tx.insert(sceneObjects).values(sourceObjects.map(({ id: _objectId, sceneId: _sceneId, layerId, ...object }) => ({ ...object, sceneId: scene.id, layerId: layerMap.get(layerId)!, version: 1 })));
       const sourceTokens = await tx.select().from(tokens).where(and(eq(tokens.sceneId, source.id), isNull(tokens.deletedAt)));
       if (sourceTokens.length) await tx.insert(tokens).values(sourceTokens.map(({ id: _id, sceneId: _sceneId, ...token }) => ({ ...token, sceneId: scene.id })));

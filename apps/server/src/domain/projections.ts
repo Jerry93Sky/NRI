@@ -10,11 +10,12 @@ export function publicToken(token: typeof tokens.$inferSelect, includeHidden = f
 }
 
 export function sceneObjectProjection(object: typeof sceneObjects.$inferSelect, role: CampaignSceneRole, viewerUserId?: string) {
+  const { deletedAt: _deletedAt, ...projection } = object;
   if (role === 'PLAYER') {
-    const { createdBy: _createdBy, ...visibleObject } = object;
+    const { createdBy: _createdBy, ...visibleObject } = projection;
     return { ...visibleObject, ownedByMe: Boolean(viewerUserId && object.createdBy === viewerUserId) };
   }
-  return object;
+  return projection;
 }
 
 export const publicScene = (scene: typeof scenes.$inferSelect) => ({ id: scene.id, campaignId: scene.campaignId, title: scene.title, gridSize: scene.gridSize, width: scene.width, height: scene.height, gridColor: scene.gridColor, gridOpacity: scene.gridOpacity, gridOffsetX: scene.gridOffsetX, gridOffsetY: scene.gridOffsetY, gridEnabled: scene.gridEnabled, snapToGrid: scene.snapToGrid, unitsPerCell: scene.unitsPerCell, unitLabel: scene.unitLabel, backgroundAssetId: scene.backgroundAssetId, cameraX: scene.cameraX, cameraY: scene.cameraY, cameraZoom: scene.cameraZoom, version: scene.version });

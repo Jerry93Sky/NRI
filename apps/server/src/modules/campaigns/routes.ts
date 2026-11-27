@@ -68,7 +68,7 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
         if (sourceAssetRows.length !== prepared.length || sourceAssetRows.some((asset) => !prepared.some((file) => file.sourceId === asset.id))) throw new Error('Campaign assets changed while the copy was being prepared.');
         const sourceLayerRows = sourceSceneIds.length ? await tx.select().from(sceneLayers).where(inArray(sceneLayers.sceneId, sourceSceneIds)) : [];
         const sourceTokenRows = sourceSceneIds.length ? await tx.select().from(tokens).where(and(inArray(tokens.sceneId, sourceSceneIds), isNull(tokens.deletedAt))) : [];
-        const sourceObjectRows = sourceSceneIds.length ? await tx.select().from(sceneObjects).where(inArray(sceneObjects.sceneId, sourceSceneIds)) : [];
+        const sourceObjectRows = sourceSceneIds.length ? await tx.select().from(sceneObjects).where(and(inArray(sceneObjects.sceneId, sourceSceneIds), isNull(sceneObjects.deletedAt))) : [];
 
         const [campaign] = await tx.insert(campaigns).values({
           ownerId: user.id,
