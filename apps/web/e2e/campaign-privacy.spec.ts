@@ -613,9 +613,61 @@ test('GM can select, copy, and paste scene objects atomically', async ({ browser
     const current = (await requestJson(gmPage, `/api/scenes/${scene.id}/objects`)).body as Array<{ id: string; x: number; version: number }>;
     expect(current.find(({ id }) => id === restored[0]!.id)?.x).toBe(777);
     expect(current.find(({ id }) => id === restored[1]!.id)?.version).toBe(restored[1]!.version);
+    const redo = gmPage.getByRole('button', { name: 'Redo', exact: true });
+    await expect(undo).toBeEnabled();
+    await expect(redo).toBeDisabled();
 
     expect((await requestJson(gmPage, `/api/campaigns/${scene.campaignId}/members/${user.id}/role`, 'POST', { role: 'PLAYER' })).status).toBe(200);
     await expect(playerPage.getByRole('button', { name: 'Add token' })).toHaveCount(0);
+
+    const id = restored[1]!.id;
+    const remove = waitForHistory();
+    await gmPage.locator(`.scene-object-row[data-object-id="${id}"]`).getByRole('button', { name: 'Delete', exact: true }).click();
+    const removed = await remove;
+    expect(removed.status()).toBe(200);
+    const removedObject = (await removed.json() as { objects: typeof copied }).objects[0]!;
+    expect(removedObject.version).toBe(restored[1]!.version + 1);
+
+    const reverse = waitForHistory();
+    await undo.click();
+    const reversed = await reverse;
+    expect(reversed.status()).toBe(200);
+    expect(reversed.request().postDataJSON()).toEqual({ action: 'restore', objects: [{ objectId: id, expectedVersion: removedObject.version }] });
+    const revived = (await reversed.json() as { objects: typeof copied }).objects[0]!;
+    expect(revived.id).toBe(id);
+    expect(revived.version).toBe(removedObject.version + 1);
+
+    const removeAgain = waitForHistory();
+    await redo.click();
+    const repeated = await removeAgain;
+    expect(repeated.status()).toBe(200);
+    expect(repeated.request().postDataJSON()).toEqual({ action: 'delete', objects: [{ objectId: id, expectedVersion: revived.version }] });
+    expect((await repeated.json() as { objects: typeof copied }).objects[0]!.version).toBe(revived.version + 1);
+
+    const draftTitle = `History draft ${suffix}`;
+    await gmPage.getByRole('button', { name: /Add scene/ }).first().click();
+    await gmPage.getByLabel('Scene name').fill(draftTitle);
+    await gmPage.getByRole('button', { name: /^Create/ }).click();
+    await gmPage.locator('.scene-tab').filter({ hasText: draftTitle }).click();
+    await expect(undo).toBeDisabled();
+    await expect(redo).toBeDisabled();
+    await gmPage.locator('.scene-tab').filter({ hasText: activeTitle }).click();
+    await expect(undo).toBeDisabled();
+    const layerPanel = gmPage.locator('details.layer-tools');
+    if (!(await layerPanel.evaluate((element) => (element as HTMLDetailsElement).open))) await layerPanel.locator('summary').click();
+    await layerPanel.locator('.layer-select').filter({ hasText: 'Objects' }).click();
+
+    const nextDeletion = waitForHistory();
+    await gmPage.locator(`.scene-object-row[data-object-id="${sourceObjects[0]!.id}"]`).getByRole('button', { name: 'Delete', exact: true }).click();
+    expect((await nextDeletion).status()).toBe(200);
+    await expect(undo).toBeEnabled();
+    await gmPage.getByRole('button', { name: /Campaigns/ }).click();
+    const secondTitle = `History campaign ${suffix}`;
+    await gmPage.getByLabel('Campaign name').fill(secondTitle);
+    await gmPage.getByRole('button', { name: /^Create/ }).click();
+    await expect(gmPage.getByRole('heading', { name: secondTitle })).toBeVisible();
+    await expect(undo).toBeDisabled();
+    await expect(redo).toBeDisabled();
   } finally {
     await Promise.allSettled([gmContext.close(), playerContext.close()]);
   }
