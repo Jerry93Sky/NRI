@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createReadStream } from 'node:fs';
-import { cp, lstat, mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const root = process.cwd();
 const backupRoot = resolve(root, '.backups');
 const uploadRoot = resolve(root, process.env.UPLOAD_DIR ?? '.data/uploads');
 const mode = process.argv[2] ?? 'create';
+const validName = (name) => typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$/.test(name);
 
 function fail(message) { throw new Error(message); }
 
@@ -38,7 +39,11 @@ async function inventory(directory, prefix = '') {
 }
 
 async function verify(directory) {
+  const pathInfo = await lstat(directory);
+  if (!pathInfo.isDirectory() || pathInfo.isSymbolicLink()) fail('Backup must be a real directory.');
   const manifestPath = join(directory, 'manifest.json');
+  const manifestInfo = await lstat(manifestPath);
+  if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink()) fail('Backup manifest must be a regular file.');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   if (manifest.format !== 'nri-backup-v1' || !Array.isArray(manifest.files) || !manifest.files.length) {
     fail('Unsupported or empty backup manifest.');
@@ -46,6 +51,7 @@ async function verify(directory) {
   const actual = await inventory(directory);
   const expected = new Map(manifest.files.map((file) => [file.path, file]));
   if (expected.size !== manifest.files.length) fail('Manifest contains duplicate file paths.');
+  if (!(expected.get('database.dump')?.bytes > 0)) fail('Manifest lacks a non-empty database archive.');
   if (actual.length !== expected.size) fail('Backup file inventory does not match its manifest.');
   for (const file of actual) {
     const record = expected.get(file.path);
@@ -68,12 +74,55 @@ function run(command, args, options = {}) {
   });
 }
 
-if (mode === 'verify') {
+async function checkedRoot() {
+  const info = await lstat(backupRoot);
+  if (!info.isDirectory() || info.isSymbolicLink()) fail('The backup root must be a real directory.');
+  return realpath(backupRoot);
+}
+
+function retentionNumber(name, fallback, minimum) {
+  const value = Number(process.env[name] ?? fallback);
+  if (!Number.isSafeInteger(value) || value < minimum) fail(`${name} must be an integer of at least ${minimum}.`);
+  return value;
+}
+
+async function prune(apply) {
+  const directory = await checkedRoot();
+  const days = retentionNumber('NRI_BACKUP_RETENTION_DAYS', 30, 1);
+  const minimum = retentionNumber('NRI_BACKUP_KEEP_MINIMUM', 3, 1);
+  const candidates = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || !validName(entry.name) || /\.(?:reserve|incomplete-|pruning-)/.test(entry.name)) continue;
+    const target = join(directory, entry.name);
+    try {
+      const { manifest } = await verify(target);
+      const created = Date.parse(manifest.createdUtc);
+      if (Number.isFinite(created)) candidates.push({ target, created });
+    } catch { console.warn(`Skipped unverified backup directory ${entry.name}`); }
+  }
+  const cutoff = Date.now() - days * 86_400_000;
+  candidates.sort((left, right) => right.created - left.created);
+  for (const { target } of candidates.slice(minimum).filter(({ created }) => created < cutoff)) {
+    if (!apply) { console.info(`Would remove ${target}`); continue; }
+    const resolved = await realpath(target);
+    if (dirname(resolved) !== directory || resolved !== target) fail('Retention target escaped the backup root.');
+    const quarantine = `${target}.pruning-${randomUUID()}`;
+    await rename(resolved, quarantine);
+    if (dirname(await realpath(quarantine)) !== directory) fail('Retention quarantine escaped the backup root.');
+    await rm(quarantine, { recursive: true });
+    console.info(`Removed ${target}`);
+  }
+}
+
+if (mode === 'prune') {
+  if (process.argv.slice(3).some((arg) => arg !== '--apply')) fail('Usage: pnpm db:backup:prune [--apply]');
+  await prune(process.argv.includes('--apply'));
+} else if (mode === 'verify') {
   const name = process.argv[3];
-  if (!name || name.includes('/') || name.includes('\\') || name === '.' || name === '..') {
+  if (!validName(name)) {
     fail('Usage: pnpm db:backup:verify <backup-directory-name>');
   }
-  const target = resolve(backupRoot, name);
+  const target = join(await checkedRoot(), name);
   const verified = await verify(target);
   console.info(`Verified ${verified.count} files for ${verified.manifest.database} at ${target}`);
 } else if (mode === 'create') {
@@ -85,12 +134,14 @@ if (mode === 'verify') {
   const username = decodeURIComponent(url.username);
   if (!database || !username) fail('DATABASE_URL must include a database and username.');
   const name = process.argv[3] ?? `nri-${new Date().toISOString().replaceAll(':', '').replaceAll('.', '-')}-${randomUUID().slice(0, 8)}`;
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$/.test(name) || name === '.' || name === '..') fail('Backup name must be a simple directory name.');
+  if (!validName(name)) fail('Backup name must be a simple directory name.');
   const destination = resolve(backupRoot, name);
   const staging = `${destination}.incomplete-${randomUUID()}`;
   const reservation = `${destination}.reserve`;
   if (!destination.startsWith(`${backupRoot}${sep}`)) fail('Backup destination must be inside .backups.');
   await mkdir(backupRoot, { recursive: true });
+  const actualRoot = await checkedRoot();
+  if (actualRoot !== backupRoot) fail('The backup root resolves to an unexpected directory.');
   let stagingCreated = false;
   let reservationCreated = false;
   try {
@@ -109,6 +160,10 @@ if (mode === 'verify') {
       await run('pg_dump', dumpArgs, { env: pgEnv });
     } catch (error) {
       if (error.code !== 'ENOENT' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) throw error;
+      const published = (await run('docker', ['compose', 'port', 'db', '5432'], { capture: true })).trim();
+      if (!['127.0.0.1', '[::1]'].some((host) => published === `${host}:${url.port || 5432}`)) {
+        fail('Compose database port does not match DATABASE_URL. Use the PostgreSQL client tools for this database.');
+      }
       const { open } = await import('node:fs/promises');
       const dumpFile = await open(dumpPath, 'w');
       try {
@@ -141,9 +196,9 @@ if (mode === 'verify') {
     console.info(`Created and verified ${checked.count} files at ${destination}`);
     console.info('Writes must remain quiesced until this completes; resume them only after verifying the backup.');
   } catch (error) {
-    if (stagingCreated) await rm(staging, { recursive: true, force: true });
+    if (stagingCreated && dirname(await realpath(staging)) === actualRoot) await rm(staging, { recursive: true, force: true });
     throw error;
   } finally {
     if (reservationCreated) await rmdir(reservation);
   }
-} else fail('Usage: pnpm db:backup [backup-directory-name] | pnpm db:backup:verify <backup-directory-name>');
+} else fail('Usage: pnpm db:backup [name] | pnpm db:backup:verify <name> | pnpm db:backup:prune [--apply]');

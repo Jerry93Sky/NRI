@@ -14,6 +14,7 @@
     "db:seed:playable-amber": "corepack pnpm@12.23.0 --filter @nri/server db:seed:playable-amber",
     "db:backup": "node --env-file-if-exists=.env scripts/backup.mjs create",
     "db:backup:verify": "node --env-file-if-exists=.env scripts/backup.mjs verify",
+    "db:backup:prune": "node --env-file-if-exists=.env scripts/backup.mjs prune",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down"
   }
