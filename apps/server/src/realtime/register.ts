@@ -1,0 +1,124 @@
+import { Server } from 'socket.io';
+import { randomInt } from 'node:crypto';
+import { and, eq, isNull } from 'drizzle-orm';
+import { z } from 'zod';
+import { canMoveToken, diceSchema, moveTokenSchema, parseDiceExpression } from '@nri/contracts';
+import { db } from '../db/index.js';
+import { diceRolls, messages, scenes, tokens } from '../db/schema.js';
+import type { FastifyInstance } from 'fastify';
+import { cookieName, webOrigins } from '../config/runtime.js';
+import { parseBody, roleFor, userForCookie } from '../security/access.js';
+import { publicToken } from '../domain/projections.js';
+
+export function registerRealtime(server: FastifyInstance['server']) {
+  const io = new Server(server, { serveClient: false, maxHttpBufferSize: 64 * 1024, cors: { origin: webOrigins, credentials: true }, allowRequest: (request, callback) => { const origin = request.headers.origin; callback(null, !origin || webOrigins.includes(origin)); } });
+  io.use(async (socket, next) => {
+    try {
+      const rawCookie = socket.handshake.headers.cookie ?? '';
+      const token = rawCookie.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
+      const user = await userForCookie(token ? decodeURIComponent(token) : undefined);
+      if (!user) return next(new Error('UNAUTHENTICATED'));
+      socket.data.user = { id: user.id, displayName: user.displayName };
+      next();
+    } catch { next(new Error('UNAUTHENTICATED')); }
+  });
+  io.on('connection', (socket) => {
+    const user = socket.data.user as { id: string; displayName: string };
+    let lastPointerAt = 0;
+    void socket.join(`user:${user.id}`);
+    socket.on('campaign:join', async (campaignId: string, callback?: (result: unknown) => void) => {
+      if (typeof campaignId !== 'string' || !z.uuid().safeParse(campaignId).success) return callback?.({ error: 'INVALID' });
+      const role = await roleFor(campaignId, user.id);
+      if (!role) return callback?.({ error: 'FORBIDDEN' });
+      const room = `campaign:${campaignId}`;
+      await socket.join(room);
+      if (role === 'OWNER' || role === 'GM') await socket.join(`${room}:gm`);
+      callback?.({ ok: true, role });
+      socket.to(room).emit('presence:joined', { userId: user.id, displayName: user.displayName });
+    });
+    socket.on('campaign:leave', async (campaignId: string) => {
+      if (typeof campaignId !== 'string' || !z.uuid().safeParse(campaignId).success) return;
+      await socket.leave(`campaign:${campaignId}`);
+      await socket.leave(`campaign:${campaignId}:gm`);
+    });
+    socket.on('scene:pointer', async (raw: unknown, callback?: (result: unknown) => void) => {
+      try {
+        const input = z.object({ campaignId: z.uuid(), sceneId: z.uuid(), x: z.number().finite().min(0).max(16384), y: z.number().finite().min(0).max(16384) }).parse(raw);
+        if (!socket.rooms.has(`campaign:${input.campaignId}`)) return callback?.({ error: 'FORBIDDEN' });
+        const now = Date.now();
+        if (now - lastPointerAt < 50) return callback?.({ error: 'RATE_LIMITED' });
+        lastPointerAt = now;
+        const role = await roleFor(input.campaignId, user.id);
+        const [scene] = await db.select().from(scenes).where(and(eq(scenes.id, input.sceneId), eq(scenes.campaignId, input.campaignId))).limit(1);
+        if (!role || !scene || scene.archivedAt || (role === 'PLAYER' && !scene.isActive)) return callback?.({ error: 'FORBIDDEN' });
+        if (input.x > scene.width || input.y > scene.height) return callback?.({ error: 'INVALID' });
+        const room = scene.isActive ? `campaign:${input.campaignId}` : `campaign:${input.campaignId}:gm`;
+        socket.to(room).emit('scene:pointer', { sceneId: scene.id, pointerId: socket.id, userId: user.id, displayName: user.displayName, x: input.x, y: input.y });
+        callback?.({ ok: true });
+      } catch { callback?.({ error: 'INVALID' }); }
+    });
+    socket.on('token:move', async (raw: unknown, callback?: (result: unknown) => void) => {
+      try {
+        const input = parseBody(moveTokenSchema, raw);
+        const [token] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, input.tokenId)).limit(1);
+        if (!token || token.token.deletedAt) return callback?.({ error: 'NOT_FOUND' });
+        const room = `campaign:${token.scene.campaignId}`;
+        if (!socket.rooms.has(room)) return callback?.({ error: 'FORBIDDEN' });
+        const role = await roleFor(token.scene.campaignId, user.id);
+        if (!role || token.scene.archivedAt || (!['OWNER', 'GM'].includes(role) && !token.scene.isActive)) return callback?.({ error: 'FORBIDDEN' });
+        if (!canMoveToken(role, user.id, token.token.ownerUserId, token.token.hidden) || token.token.locked) return callback?.({ error: 'FORBIDDEN' });
+        const [updated] = await db.update(tokens).set({ x: input.x, y: input.y, version: token.token.version + 1 }).where(and(eq(tokens.id, input.tokenId), eq(tokens.version, input.expectedVersion))).returning();
+        if (!updated) {
+          const [current] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(tokens.id, input.tokenId), isNull(tokens.deletedAt))).limit(1);
+          const currentRole = current ? await roleFor(current.scene.campaignId, user.id) : null;
+          const stillAllowed = Boolean(current && currentRole && !current.scene.archivedAt && (currentRole === 'OWNER' || currentRole === 'GM' || current.scene.isActive) && !current.token.locked && canMoveToken(currentRole, user.id, current.token.ownerUserId, current.token.hidden));
+          const latest = stillAllowed && current && currentRole ? publicToken(current.token, currentRole === 'OWNER' || currentRole === 'GM', user.id) : undefined;
+          return callback?.({ error: 'CONFLICT', ...(latest ? { token: latest } : {}) });
+        }
+        const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
+        callback?.({ ok: true, token: role === 'OWNER' || role === 'GM' ? projection : playerProjection });
+        ((updated.hidden || !token.scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:moved', updated.hidden || !token.scene.isActive ? projection : playerProjection);
+      } catch { callback?.({ error: 'INVALID' }); }
+    });
+    socket.on('chat:send', async (raw: unknown, callback?: (result: unknown) => void) => {
+      try {
+        const input = z.object({ campaignId: z.uuid(), body: z.string().trim().min(1).max(2000), recipientId: z.uuid().nullable().optional() }).parse(raw);
+        const role = await roleFor(input.campaignId, user.id);
+        if (!role || !socket.rooms.has(`campaign:${input.campaignId}`)) return callback?.({ error: 'FORBIDDEN' });
+        if (input.recipientId) {
+          const recipientRole = await roleFor(input.campaignId, input.recipientId);
+          if (!recipientRole || (role === 'PLAYER' && !['OWNER', 'GM'].includes(recipientRole))) return callback?.({ error: 'FORBIDDEN' });
+        }
+        const [message] = await db.insert(messages).values({ campaignId: input.campaignId, senderId: user.id, recipientId: input.recipientId ?? null, body: input.body }).returning();
+        if (!message) throw new Error('Message creation failed');
+        const event = { id: message.id, campaignId: input.campaignId, senderId: user.id, displayName: user.displayName, body: message.body, createdAt: message.createdAt, private: Boolean(input.recipientId) };
+        callback?.({ ok: true, message: event });
+        if (!input.recipientId) io.to(`campaign:${input.campaignId}`).emit('chat:message', event);
+        else {
+          io.to(`user:${user.id}`).emit('chat:private', event);
+          io.to(`user:${input.recipientId}`).emit('chat:private', event);
+        }
+      } catch { callback?.({ error: 'INVALID' }); }
+    });
+    socket.on('dice:roll', async (raw: unknown, callback?: (result: unknown) => void) => {
+      try {
+        const input = z.object({ campaignId: z.uuid(), ...diceSchema.shape }).parse(raw);
+        const role = await roleFor(input.campaignId, user.id);
+        if (!socket.rooms.has(`campaign:${input.campaignId}`) || !role || (input.hidden && role === 'PLAYER')) return callback?.({ error: 'FORBIDDEN' });
+        const parsed = parseDiceExpression(input.expression);
+        if (!parsed) return callback?.({ error: 'INVALID' });
+        const { count, sides, modifier } = parsed;
+        const rolls = Array.from({ length: count }, () => randomInt(1, sides + 1));
+        const result = rolls.reduce((sum, value) => sum + value, modifier);
+        const [saved] = await db.insert(diceRolls).values({ campaignId: input.campaignId, userId: user.id, expression: input.expression, result, detail: JSON.stringify({ rolls, modifier }), hidden: input.hidden }).returning();
+        const event = { id: saved?.id, campaignId: input.campaignId, userId: user.id, displayName: user.displayName, expression: input.expression, rolls, modifier, result, hidden: input.hidden };
+        callback?.({ ok: true, roll: event });
+        io.to(input.hidden ? `campaign:${input.campaignId}:gm` : `campaign:${input.campaignId}`).emit('dice:result', event);
+      } catch { callback?.({ error: 'INVALID' }); }
+    });
+    socket.on('disconnect', () => {
+      for (const room of socket.rooms) if (room.startsWith('user:')) void socket.leave(room);
+    });
+  });
+  return io;
+}
