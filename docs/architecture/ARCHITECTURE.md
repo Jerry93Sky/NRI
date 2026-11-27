@@ -45,6 +45,8 @@ The service validates the whole batch before a single set-based write scoped to 
 
 ## Security and operations
 
+Ordinary object create/copy/edit/move and layer create/edit/delete use transactional authorization in the same order as object lifecycle. The post-commit publisher reuses `withSceneAudience` for batched session, campaign, role and scene locks. Object and layer rules stay in the scene-content publisher. Exact-revision upserts, ID-only removals after a lost public projection, and role-filtered snapshot refresh suffice for the current client. The only publication retry is a second lock attempt if a formerly public object moved outside the discovered set of layers while the publisher acquired its locks.
+
 The security review tracks projection and media ACLs by role. The closed-alpha Compose configuration has locally verified HTTPS and shutdown paths. Operators manage deployment secrets, network restrictions and backups. [Security review](../security/V0.1.1_REVIEW.md) · [Production deployment](../operations/PRODUCTION_DEPLOYMENT.md)
 
 ## Planned module boundaries
@@ -132,7 +134,7 @@ sequenceDiagram
 
 ### V0.1.1 guardrails
 
-- Extend current-recipient authorization to regular scene-object create/edit and layer events next. Test publication with a role or visibility change after commit. Track lost acknowledgements for non-idempotent chat and dice separately.
+- Review and harden the current-session delivery of private chat, hidden dice and GM initiative next. Verify revocation and demotion at the publication boundary. Track lost acknowledgements for non-idempotent chat and dice separately.
 - Preserve current IDs, stored campaigns, projections, optimistic versions and existing API payloads. V0.1.1 token coordinates and scene geometry use different current units. V0.2 owns the explicit conversion and geometry versioning, following its measured baseline.
 - Treat the current dice expression, initiative tracker and bounded token resource fields as legacy tabletop capabilities. Future rule packages can opt into other models. Keep future snapshots free of assumptions about mandatory turn order, classes or hit points.
 - Future package metadata, character and world schemas, evaluator and editors start with their named releases. The current refactor has enough work in authorization, projections, concurrency, reconnect, lifecycle and manual acceptance. [Release checkpoints](../product/LONG_TERM_IMPLEMENTATION_PLAN.md)

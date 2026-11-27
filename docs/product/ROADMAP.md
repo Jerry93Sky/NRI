@@ -27,3 +27,11 @@
 | V1.1+ | Marketplace and ecosystem | V1.0 and separate commerce/provenance approval | Catalog, publication, entitlements and takedown tested end to end |
 
 V0.3 introduces a small built-in package format and the evaluation contract needed for schema-derived sheets. V0.4 extends that contract, V0.4.1 opens the registry to approved imports, and V0.4.2 adds visual authoring. Map Studio follows a later product release even though V0.2 must define reusable geometry. The World Core runs with reference laws before the World Rules Studio UI exists. Political and economic models remain separately optional at runtime.
+
+## Proposed placement of product concepts
+
+| Concept | Proposed placement |
+| --- | --- |
+| [Dark Tavern RPG](../design/DARK_TAVERN_DESIGN_VISION.md) | Owner-reviewed visual milestone after V0.1.1, coordinated with V0.2 without changing its tactical gates |
+| [Sound & Atmosphere](../architecture/SCENE_AUDIO.md) | Optional V0.5 Campaign Studio follow-up after scene privacy. Spatial and reactive audio follow geometry and rule/simulation integration |
+| [Adventure Atlas](../architecture/ADVENTURE_ATLAS.md) | Linked maps and discovery after V0.2 and V0.5. Map authoring stays with V0.7, and split-party exploration needs a later location model |

@@ -42,6 +42,8 @@ The active [V0.1.1 acceptance gates](../releases/V0.1.1_ACCEPTANCE_REPORT.md) st
 
 ## Architectural tensions and actions
 
+The owner-requested [Dark Tavern direction](../design/DARK_TAVERN_DESIGN_VISION.md), [scene audio concept](../architecture/SCENE_AUDIO.md) and [Adventure Atlas concept](../architecture/ADVENTURE_ATLAS.md) are planned design work. The visual milestone needs both-role usability and an asset budget. Audio needs permission-scoped streaming and recovery evidence. Atlas needs discovery separate from activation and a media test proving hidden raster pixels and metadata never reach a Player. Follow the proposed [roadmap placement](ROADMAP.md#proposed-placement-of-product-concepts) after the current release gates.
+
 | Risk | Decision and next validation |
 | --- | --- |
 | Characters depend on rules before the full engine ships | Define the narrow V0.3 format and evaluation interfaces against two original systems. Extend in V0.4 and test compatibility with old pins before user import |

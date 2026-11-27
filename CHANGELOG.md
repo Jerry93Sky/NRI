@@ -15,6 +15,8 @@ All notable project changes will be recorded here.
 - Add 23 PostgreSQL movement regression scenarios to CI, including lock-ordered authorization races, private conflict projections and rollback without realtime events.
 - Make scene-object delete/restore and permanent own-drawing cleanup transactional. Synchronize scene, layer and object checks with competing writes and authorize lifecycle event recipients after commit.
 - Add 28 PostgreSQL object lifecycle scenarios and extend Chromium coverage for versioned Undo/Redo and history isolation across workspaces.
+- Authorize ordinary object and layer events after commit. Suppress stale upserts, send ID-only removals and reload current authorized snapshots on layer changes. Add a 24-event audit, 20 PostgreSQL regressions and Chromium replay checks.
+- Record loopback P50/P95, payload sizes and SQL for 1–50 objects and up to eight sockets. Document the planned Dark Tavern RPG, Sound & Atmosphere and Adventure Atlas concepts.
 
 - Split Fastify assembly, feature routes, realtime session and room management, and privacy projections into modules. Isolated frontend scene synchronization and a shared versioned history.
 - Disconnect socket sessions on logout and rotation. Update room access on role changes, archive campaigns without leaving live subscriptions, and restrict owner-note delivery to the current member.

@@ -35,14 +35,18 @@ REST endpoints implement scene activation and editing, token creation/ownership,
 | `dice:result` | Campaign room for public rolls and GM room for hidden rolls |
 | `initiative:updated` | Campaign room, player-safe projection |
 | `initiative:gm_updated` | GM room, full projection |
-| `scene:layer_created`, `scene:layer_updated`, `scene:layer_deleted` | Visible layers are sent to the active scene campaign room; all layer changes are also sent to the GM room |
-| `scene:layer_hidden` | Campaign room receives only `{sceneId, layerId}` when a formerly visible layer becomes private; layer name/details remain GM-only |
-| `scene:object_created`, `scene:object_updated`, `scene:object_deleted` | Public visible active-scene objects go to campaign room; GM-only, hidden, draft-scene and private transitions stay in GM room; public objects leaving visibility emit a remove event |
+| `scene:layer_created`, `scene:layer_updated`, `scene:layer_deleted` | Current campaign audience. Players receive current public metadata on an active scene and ID-only deletion of formerly public layers |
+| `scene:layer_hidden` | Eligible Players receive only `{sceneId, layerId}` when the formerly public layer is still inaccessible. Managers can receive the current private layer update |
+| `scene:object_created`, `scene:object_updated`, `scene:object_deleted` | Current campaign audience. Player upserts require a current visible object on a readable layer and active scene. Manager upserts can include private data. Loss of public visibility sends Player removal with IDs only |
 | `scene:pointer` | Transient coordinates and server-derived user identity; active scene pointers go to campaign room, while GM draft pointers go to the GM room only. Clients expire markers after 1.6 seconds; pointers are not persisted |
 
 Players receive the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive or archived scenes are denied. Hidden token fields, note fields, scene items and initiative use role-specific projections. Owner-note events go to the assigned owner's joined campaign member room while the token is visible in the active scene. The ordinary token projection updates the former owner. Players may adjust visible resource tracks on owned tokens. Player object snapshots omit deleted objects, GM layers, other non-visible layers and invisible objects.
 
 ## Concurrency and recovery limits
+
+Scene-content UI treats positive events as invalidations of the scoped REST snapshot. It discards superseded responses, coalesces refreshes queued together and immediately removes known objects/layers on a removal event. A layer reveal reloads the authorized layer and object snapshots. Older revisions, duplicates and events from another workspace cannot restore records from packet payloads. Snapshot readers lock current session, membership and scene while selecting their projections. The client also drops any object whose layer is absent from the paired layer response.
+
+The scene publisher keeps database authorization and entity locks until Socket.IO enqueue, checks local subscription and expiry at each send and then releases the locks. Revocation after enqueue cannot cancel transport already in progress. There is no retained queue or global event order. If a publication cannot obtain a stable affected-layer set in its bounded retry, the next snapshot reconciles the result. [Audit matrix](../security/REALTIME_EVENT_MATRIX.md)
 
 `PATCH /api/scenes/:sceneId/object-lifecycle` accepts `{action, objects: [{objectId, expectedVersion}]}` and returns `{objects}` with committed versions. Group conflicts keep the code-only response. A missing target or a target outside the requested scene returns `NOT_FOUND` to an authorized manager. Players receive `FORBIDDEN` from the group endpoint before it looks up any object. A hidden or missing target on the Player point-delete path receives `NOT_FOUND`. Restore preserves IDs and visibility flags.
 

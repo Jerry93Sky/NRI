@@ -33,6 +33,8 @@ V0.1.1 is the active stabilization release. The [acceptance report](../releases/
 
 ## Campaign and world choices
 
+The default visual direction is Dark Tavern RPG, with a map-first tabletop, original or licensed tokens and optional decoration independent of game state. Campaign atmosphere adds reusable audio profiles. Adventure Atlas connects authorized maps, discoveries and scenes while keeping reveal separate from travel. These concepts require separate release decisions after stabilization. [Dark Tavern](../design/DARK_TAVERN_DESIGN_VISION.md) · [Scene audio](../architecture/SCENE_AUDIO.md) · [Adventure Atlas](../architecture/ADVENTURE_ATLAS.md)
+
 Character rules and world laws have separate versioned configurations. A campaign can run a rules-neutral tabletop, use only character rules, or attach a World Instance with its own calendar and selected subsystems. Fantasy, science fiction, historical, modern and custom settings choose their own concepts and depth, including worlds without magic, states or monetary economies.
 
 The GM controls advancement and automation. A simulation step proposes a result from saved state, configured laws and recorded randomness. The GM can preview and approve, edit, defer or reject proposals under campaign policy. Secrets stay within their audiences. Any conceptual borrowing from the earlier London work creates no runtime dependency.

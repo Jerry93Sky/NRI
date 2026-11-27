@@ -12,6 +12,7 @@ NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns
 - Grid calibration, images, tokens and private notes, layers and objects, grouped actions, drawing, ruler, pointer and selection. Version-aware Undo/Redo covers movement, supported properties and the object lifecycle.
 - Single movement and group token updates share a PostgreSQL transaction for authorization, version checks and atomic writes. Movement events are published after commit.
 - Scene object deletion and restoration are atomic and check current permissions, layers and versions. Restore preserves object IDs, and delivery checks current recipient access.
+- Object creation, editing and movement between layers, and layer changes use current delivery permissions. The client refreshes its authorized snapshot when content is hidden or removed. [Event inventory](docs/security/REALTIME_EVENT_MATRIX.md)
 - Public/private chat, public and hidden rolls, initiative, reconnect and API restart recovery. Session and role changes update active realtime access.
 - **Amber Crossing: The Lantern Vault** with original assets, campaign copy and the [owner acceptance guide](docs/releases/V0.1.1_MANUAL_ACCEPTANCE.md).
 - Isolated verification of the [HTTPS alpha stack](docs/operations/PRODUCTION_DEPLOYMENT.md), [SHA-256 backup/restore and retention](docs/operations/BACKUP_RESTORE.md), and [load profiles A/B/C](docs/performance/LOAD_TEST_REPORT.md).
