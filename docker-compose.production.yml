@@ -1,0 +1,80 @@
+name: nri-alpha
+
+x-api-env: &api-env
+  DATABASE_URL: ${DATABASE_URL:?Set the alpha database URL}
+  SESSION_SECRET: ${SESSION_SECRET:?Set a unique alpha session secret}
+  WEB_ORIGIN: ${WEB_ORIGIN:?Set the public HTTPS origin}
+
+services:
+  db:
+    image: postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nri
+      POSTGRES_DB: nri_alpha
+      POSTGRES_PASSWORD: ${NRI_DATABASE_PASSWORD:?Set a unique PostgreSQL password}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "nri", "-d", "nri_alpha"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  migrate:
+    image: nri-alpha-api:local
+    profiles: ["maintenance"]
+    environment: *api-env
+    command: ["node", "dist/migrate.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    image: nri-alpha-api:local
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: api
+    restart: unless-stopped
+    init: true
+    environment:
+      <<: *api-env
+      TRUST_PROXY: "1"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - uploads:/app/.data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    stop_grace_period: 25s
+
+  proxy:
+    image: nri-alpha-proxy:local
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: proxy
+    restart: unless-stopped
+    ports:
+      - "${NRI_HTTPS_BIND:-127.0.0.1}:${NRI_HTTPS_PORT:-443}:443"
+    volumes:
+      - type: bind
+        source: ${NRI_TLS_DIR:?Set the directory containing the TLS key and certificate}
+        target: /etc/nginx/tls
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres:
+  uploads:

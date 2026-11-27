@@ -5,4 +5,8 @@ node_modules
 **/coverage
 .data
 .env
+.env.*
+.backups
+**/test-results
+**/playwright-report
 *.log
