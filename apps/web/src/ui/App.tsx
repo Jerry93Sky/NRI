@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { useTranslation } from 'react-i18next';
@@ -6,11 +6,11 @@ import type { PublicToken, TokenResource } from '@nri/contracts';
 import { calculateCellSize } from './canvasMath';
 import { api } from '../services/api';
 import { useTabletopSync } from '../features/tabletop/useTabletopSync';
+import { pickChanged, useCommandHistory, versionsOf, type Versions } from '../features/tabletop/useCommandHistory';
 import type { AssetFolder, Campaign, CampaignAsset, ChatItem, DeletedToken, InitiativeView, RollItem, Scene, User } from '../features/tabletop/models';
 import type { PublicSceneObject as SceneObject, PublicSceneLayer as SceneLayer } from '@nri/contracts';
 
-type TokenPosition = { tokenId: string; x: number; y: number };
-type TokenMoveHistory = { positions: TokenPosition[]; expectedVersions: Record<string, number> };
+type GroupPatch = Partial<Pick<PublicToken, 'x' | 'y' | 'color' | 'hidden' | 'locked' | 'showName' | 'opacity' | 'zIndex'>>;
 const TableCanvas = lazy(() => import('./TableCanvas').then(({ TableCanvas: component }) => ({ default: component })));
 
 
@@ -19,8 +19,6 @@ export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
-  const [tokenMoveUndo, setTokenMoveUndo] = useState<TokenMoveHistory[]>([]);
-  const [tokenMoveRedo, setTokenMoveRedo] = useState<TokenMoveHistory[]>([]);
   const [selectedTokenIds, setSelectedTokenIds] = useState<string[]>([]);
   const [tokenClipboard, setTokenClipboard] = useState<PublicToken[]>([]);
   const [assets, setAssets] = useState<CampaignAsset[]>([]);
@@ -47,6 +45,8 @@ export function App() {
   const [drawingWidth, setDrawingWidth] = useState(3);
   const [hiddenRoll, setHiddenRoll] = useState(false);
   const [initiativeScores, setInitiativeScores] = useState<Record<string, string>>({});
+  const [initiativePending, setInitiativePending] = useState(false);
+  const initiativeRequest = useRef(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   useEffect(() => setHiddenRoll(false), [campaign?.campaign.id, campaign?.role]);
 
@@ -99,16 +99,21 @@ export function App() {
     user, campaign, socket, setCampaign, setCampaigns, setError, setUser,
   });
   useEffect(() => {
-    setSelectedTokenIds([]); setTokenMoveUndo([]); setTokenMoveRedo([]); setSelectedObjectId(''); setSelectedObjectIds([]); setObjectClipboard([]); setPointerActive(false);
+    setSelectedTokenIds([]); setSelectedObjectId(''); setSelectedObjectIds([]); setObjectClipboard([]); setPointerActive(false);
   }, [scene?.id, campaign?.role]);
   useEffect(() => {
     setTokenClipboard([]); setAssets([]); setAssetFolders([]); setDeletedTokens([]); setArchivedScenes([]); setAssetLibraryOpen(false); setTokenTrashOpen(false); setShowArchivedScenes(false);
   }, [campaign?.campaign.id, campaign?.role]);
   const role = campaign?.role ?? 'PLAYER';
   const canManage = role === 'OWNER' || role === 'GM';
+  const commandHistory = useCommandHistory([user?.id, campaign?.campaign.id, role, scene?.id].join(':'), (reason) => {
+    setError(t('historyFailed', { reason: reason === 'CONFLICT' ? t('historyConflict') : reason }));
+  });
   const canDraw = canManage || (campaign?.campaign.playersCanDraw === true && scene?.isActive === true);
   useEffect(() => { if (!canDraw) setDrawMode(false); }, [canDraw]);
   const drawingLayer = layers.find((layer) => layer.id === activeLayerId);
+  const layerSortOrder = useMemo(() => Object.fromEntries(layers.map((layer) => [layer.id, layer.sortOrder])), [layers]);
+  const canEditObject = useCallback((object: SceneObject) => object.layerId === activeLayerId && !object.locked && !drawingLayer?.locked && (canManage || (canDraw && object.ownedByMe === true)), [activeLayerId, drawingLayer?.locked, canManage, canDraw]);
   const visibleAssets = useMemo(() => assets.filter((asset) => (assetCategoryFilter === 'ALL' || asset.category === assetCategoryFilter) && (assetFolderFilter === 'ALL' || (assetFolderFilter === 'ROOT' ? asset.folderId === null : asset.folderId === assetFolderFilter)) && asset.name.toLocaleLowerCase().includes(assetSearch.trim().toLocaleLowerCase())).sort((a, b) => assetSort === 'SIZE' ? b.size - a.size : a.name.localeCompare(b.name)), [assets, assetCategoryFilter, assetFolderFilter, assetSearch, assetSort]);
 
   useEffect(() => {
@@ -138,7 +143,15 @@ export function App() {
     const onTableKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
       const isFormTarget = target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
-      if (isFormTarget || event.altKey) return;
+      if (isFormTarget || event.altKey || event.isComposing) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && scene) {
+        const available = event.shiftKey ? commandHistory.canRedo : commandHistory.canUndo;
+        if (available) {
+          event.preventDefault();
+          if (!event.repeat) void commandHistory.apply(event.shiftKey ? 'redo' : 'undo');
+        }
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && scene && (role === 'OWNER' || role === 'GM')) {
         const key = event.key.toLowerCase();
         if (key === 'c') {
@@ -161,7 +174,7 @@ export function App() {
     };
     window.addEventListener('keydown', onTableKeyDown);
     return () => window.removeEventListener('keydown', onTableKeyDown);
-  }, [role, selectedObjectIds, objects, objectClipboard, scene, activeLayerId, layers, selectedTokenIds, tokens, tokenClipboard]);
+  }, [role, selectedObjectIds, objects, objectClipboard, scene, activeLayerId, layers, selectedTokenIds, tokens, tokenClipboard, commandHistory]);
 
   useEffect(() => { void api<{ user: User }>('/api/auth/me').then((result) => setUser(result.user)).catch(() => {}); return () => { socket.disconnect(); }; }, [socket]);
   useEffect(() => {
@@ -264,7 +277,8 @@ export function App() {
       const width = scene.gridSize * 2; const height = scene.gridSize * 2;
       const points = kind === 'LINE' ? [{ x: 0, y: height / 2 }, { x: width, y: height / 2 }] : undefined;
       const { object } = await api<{ object: SceneObject }>(`/api/scenes/${scene.id}/objects`, { method: 'POST', body: JSON.stringify({ layerId: activeLayerId, kind, assetId, text, x: Math.round(scene.width / 2 - scene.gridSize), y: Math.round(scene.height / 2 - scene.gridSize), width, height, color: drawingColor, strokeWidth: drawingWidth, points }) });
-      setObjects((items) => [...items, object]);
+      applyObjectUpdates([object]);
+      recordObjectCreation([object]);
       if (assetId) setAssets((items) => items.map((asset) => asset.id === assetId ? { ...asset, usageCount: asset.usageCount + 1 } : asset));
     } catch (e) { setError((e as Error).message); }
   }
@@ -288,7 +302,8 @@ export function App() {
     const x = Math.min(...xs); const y = Math.min(...ys); const width = Math.max(8, Math.max(...xs) - x); const height = Math.max(8, Math.max(...ys) - y);
     try {
       const { object } = await api<{ object: SceneObject }>(`/api/scenes/${scene.id}/objects`, { method: 'POST', body: JSON.stringify({ layerId: activeLayerId, kind: 'FREEHAND', x, y, width, height, color: drawingColor, strokeWidth: drawingWidth, points: points.map((point) => ({ x: point.x - x, y: point.y - y })) }) });
-      setObjects((items) => [...items, object]);
+      applyObjectUpdates([object]);
+      if (canManage) recordObjectCreation([object]);
     } catch (e) { setError((e as Error).message); }
   }
   async function setPlayerDrawingPermission(enabled: boolean) {
@@ -301,10 +316,59 @@ export function App() {
       setCampaign((item) => item ? update(item, result.playersCanDraw) : item); setCampaigns((items) => items.map((item) => update(item, result.playersCanDraw)));
     } catch (e) { setCampaign((item) => item ? update(item, !enabled) : item); setCampaigns((items) => items.map((item) => update(item, !enabled))); setError((e as Error).message); }
   }
+  function applyObjectUpdates(updated: SceneObject[]) {
+    if (!commandHistory.isCurrent()) return;
+    setObjects((items) => {
+      const byId = new Map(items.map((item) => [item.id, item]));
+      for (const object of updated) if ((byId.get(object.id)?.version ?? 0) <= object.version) byId.set(object.id, object);
+      return [...byId.values()];
+    });
+  }
+
+  function applyObjectLifecycle(sceneId: string, ids: string[], action: 'delete' | 'restore') {
+    return async (versions: Versions) => {
+      const result = await api<{ objects: SceneObject[] }>(`/api/scenes/${sceneId}/object-lifecycle`, {
+        method: 'PATCH',
+        body: JSON.stringify({ action, objects: ids.map((objectId) => ({ objectId, expectedVersion: versions[objectId] })) }),
+      });
+      if (commandHistory.isCurrent()) {
+        if (action === 'restore') applyObjectUpdates(result.objects);
+        else {
+          setObjects((items) => items.filter((item) => !ids.includes(item.id)));
+          setSelectedObjectId((id) => ids.includes(id) ? '' : id);
+          setSelectedObjectIds((items) => items.filter((id) => !ids.includes(id)));
+        }
+      }
+      return versionsOf(result.objects);
+    };
+  }
+
+  function recordObjectCreation(created: SceneObject[]) {
+    if (!created.length) return;
+    const sceneId = created[0]!.sceneId;
+    const ids = created.map(({ id }) => id);
+    commandHistory.record({
+      before: {}, after: versionsOf(created),
+      undo: applyObjectLifecycle(sceneId, ids, 'delete'), redo: applyObjectLifecycle(sceneId, ids, 'restore'),
+    });
+  }
+
   async function updateSceneObject(object: SceneObject, patch: Partial<SceneObject>) {
+    const apply = (changes: Partial<SceneObject>) => async (versions: Versions) => {
+      const { object: updated } = await api<{ object: SceneObject }>(`/api/objects/${object.id}`, {
+        method: 'PATCH', body: JSON.stringify({ ...changes, expectedVersion: versions[object.id] }),
+      });
+      applyObjectUpdates([updated]);
+      return updated;
+    };
     try {
-      const { object: updated } = await api<{ object: SceneObject }>(`/api/objects/${object.id}`, { method: 'PATCH', body: JSON.stringify({ ...patch, expectedVersion: object.version }) });
-      setObjects((items) => items.map((item) => item.id === updated.id ? updated : item));
+      const before = versionsOf([object]);
+      const updated = await apply(patch)(before);
+      const changed = canManage && object.visible !== updated.visible ? { ...patch, visible: updated.visible } : patch;
+      commandHistory.record({ before, after: versionsOf([updated]),
+        undo: async (versions) => versionsOf([await apply(pickChanged(object, changed))(versions)]),
+        redo: async (versions) => versionsOf([await apply(pickChanged(updated, changed))(versions)]),
+      });
     } catch (e) { setError((e as Error).message); }
   }
   async function duplicateSceneObject(object: SceneObject) {
@@ -317,7 +381,8 @@ export function App() {
   async function createSceneObjectCopy(source: SceneObject, layerId: string) {
     if (!scene) throw new Error('SCENE_REQUIRED');
     const { object: copy } = await api<{ object: SceneObject }>(`/api/scenes/${scene.id}/objects`, { method: 'POST', body: JSON.stringify({ layerId, kind: source.kind, x: source.x + scene.gridSize / 2, y: source.y + scene.gridSize / 2, width: source.width, height: source.height, rotation: source.rotation, opacity: source.opacity, zIndex: source.zIndex + 1, assetId: source.assetId, color: source.color, strokeWidth: source.strokeWidth, points: source.points, text: source.text, visible: source.visible, locked: false }) });
-    setObjects((items) => [...items, copy]);
+    applyObjectUpdates([copy]);
+    recordObjectCreation([copy]);
     if (copy.assetId) setAssets((items) => items.map((asset) => asset.id === copy.assetId ? { ...asset, usageCount: asset.usageCount + 1 } : asset));
     return copy;
   }
@@ -335,7 +400,8 @@ export function App() {
         method: 'POST',
         body: JSON.stringify({ layerId: targetLayer.id, objects: objectClipboard.map((object) => ({ objectId: object.id, expectedVersion: object.version, x: object.x + scene.gridSize / 2, y: object.y + scene.gridSize / 2 })) }),
       });
-      setObjects((items) => [...items, ...copies]);
+      applyObjectUpdates(copies);
+      recordObjectCreation(copies);
       setSelectedObjectId(copies.at(-1)?.id ?? ''); setSelectedObjectIds(copies.map((object) => object.id)); setObjectClipboard(copies);
       const assetCounts = new Map<string, number>();
       for (const copy of copies) if (copy.assetId) assetCounts.set(copy.assetId, (assetCounts.get(copy.assetId) ?? 0) + 1);
@@ -344,7 +410,20 @@ export function App() {
     catch (e) { setError((e as Error).message); }
   }
   async function deleteSceneObject(object: SceneObject) {
-    try { await api(`/api/objects/${object.id}`, { method: 'DELETE', body: JSON.stringify({ expectedVersion: object.version }) }); setObjects((items) => items.filter((item) => item.id !== object.id)); if (selectedObjectId === object.id) setSelectedObjectId(''); setSelectedObjectIds((current) => current.filter((id) => id !== object.id)); if (object.assetId) setAssets((items) => items.map((asset) => asset.id === object.assetId ? { ...asset, usageCount: Math.max(0, asset.usageCount - 1) } : asset)); }
+    try {
+      if (canManage) {
+        const redo = applyObjectLifecycle(object.sceneId, [object.id], 'delete');
+        const before = versionsOf([object]);
+        commandHistory.record({ before, after: await redo(before),
+          undo: applyObjectLifecycle(object.sceneId, [object.id], 'restore'), redo,
+        });
+        return;
+      }
+      await api(`/api/objects/${object.id}`, { method: 'DELETE', body: JSON.stringify({ expectedVersion: object.version }) });
+      setObjects((items) => items.filter((item) => item.id !== object.id));
+      setSelectedObjectId((id) => id === object.id ? '' : id);
+      setSelectedObjectIds((items) => items.filter((id) => id !== object.id));
+    }
     catch (e) { setError((e as Error).message); }
   }
   async function clearMyDrawings() {
@@ -430,44 +509,62 @@ export function App() {
     try { const result = await api<{ token: PublicToken }>(`/api/tokens/${token.id}/owner`, { method: 'POST', body: JSON.stringify({ ownerUserId: ownerUserId || null }) }); setTokens((items) => items.map((item) => item.id === token.id ? result.token : item)); }
     catch (e) { setError((e as Error).message); }
   }
+  function applyTokenUpdates(updates: PublicToken[]) {
+    if (!commandHistory.isCurrent()) return;
+    const byId = new Map(updates.map((token) => [token.id, token]));
+    setTokens((items) => items.map((item) => {
+      const next = byId.get(item.id);
+      return next && next.version >= item.version ? { ...item, ...next } : item;
+    }));
+  }
+
   async function updateToken(token: PublicToken, patch: Partial<PublicToken>) {
-    try { const result = await api<{ token: PublicToken }>(`/api/tokens/${token.id}`, { method: 'PATCH', body: JSON.stringify({ ...patch, expectedVersion: token.version }) }); setTokens((items) => items.map((item) => item.id === token.id ? result.token : item)); }
-    catch (e) { setError((e as Error).message); if (scene) try { setTokens(await api<PublicToken[]>(`/api/scenes/${scene.id}/tokens`)); } catch { /* Keep the original update error visible. */ } }
-  }
-  async function updateTokenGroup(patch: Partial<Pick<PublicToken, 'color' | 'hidden' | 'locked' | 'showName' | 'opacity' | 'zIndex'>>) {
-    if (!scene) return;
-    const selected = tokens.filter((token) => selectedTokenIds.includes(token.id));
-    if (selected.length < 2) return;
+    const apply = (changes: Partial<PublicToken>) => async (versions: Versions) => {
+      const { token: updated } = await api<{ token: PublicToken }>("/api/tokens/" + token.id, {
+        method: 'PATCH', body: JSON.stringify({ ...changes, expectedVersion: versions[token.id] }),
+      });
+      applyTokenUpdates([updated]);
+      return updated;
+    };
     try {
-      const result = await api<{ tokens: PublicToken[] }>(`/api/scenes/${scene.id}/tokens/group`, { method: 'PATCH', body: JSON.stringify({ updates: selected.map((token) => ({ tokenId: token.id, expectedVersion: token.version, patch })) }) });
-      setTokens((items) => items.map((token) => result.tokens.find((next) => next.id === token.id) ?? token));
-    } catch (e) { setError((e as Error).message); if (scene) try { setTokens(await api<PublicToken[]>(`/api/scenes/${scene.id}/tokens`)); } catch { /* Keep the original update error visible. */ } }
+      const before = versionsOf([token]);
+      const updated = await apply(patch)(before);
+      commandHistory.record({ before, after: versionsOf([updated]),
+        undo: async (versions) => versionsOf([await apply(pickChanged(token, patch))(versions)]),
+        redo: async (versions) => versionsOf([await apply(pickChanged(updated, patch))(versions)]),
+      });
+    } catch (error) { setError((error as Error).message); }
   }
-  async function moveTokenGroup(tokenIds: string[], deltaX: number, deltaY: number) {
-    if (!scene) return;
-    const selected = tokens.filter((token) => tokenIds.includes(token.id));
-    if (selected.length < 2 || selected.length > 50) return;
+
+  async function applyGroupChanges(selected: PublicToken[], changes: (token: PublicToken) => GroupPatch) {
+    if (!scene || selected.length < 2 || selected.length > 50) return;
+    const sceneId = scene.id;
+    const patches = selected.map((token) => ({ tokenId: token.id, patch: changes(token) }));
+    const inverse = selected.map((token, index) => ({ tokenId: token.id, patch: pickChanged(token, patches[index]!.patch) }));
+    const apply = (items: typeof patches) => async (versions: Versions) => {
+      const result = await api<{ tokens: PublicToken[] }>("/api/scenes/" + sceneId + "/tokens/group", {
+        method: 'PATCH',
+        body: JSON.stringify({ updates: items.map((item) => ({ ...item, expectedVersion: versions[item.tokenId] })) }),
+      });
+      applyTokenUpdates(result.tokens);
+      return versionsOf(result.tokens);
+    };
     try {
-      const before = selected.map(({ id, x, y }) => ({ tokenId: id, x, y }));
-      const result = await api<{ tokens: PublicToken[] }>(`/api/scenes/${scene.id}/tokens/group`, { method: 'PATCH', body: JSON.stringify({ updates: selected.map((token) => ({ tokenId: token.id, expectedVersion: token.version, patch: { x: token.x + deltaX, y: token.y + deltaY } })) }) });
-      setTokens((items) => items.map((token) => result.tokens.find((next) => next.id === token.id) ?? token));
-      setTokenMoveUndo((history) => [...history.slice(-19), { positions: before, expectedVersions: Object.fromEntries(result.tokens.map((token) => [token.id, token.version])) }]); setTokenMoveRedo([]);
-    } catch (e) { setError((e as Error).message); try { setTokens(await api<PublicToken[]>(`/api/scenes/${scene.id}/tokens`)); } catch { /* Keep the original update error visible. */ } }
+      const before = versionsOf(selected);
+      const redo = apply(patches);
+      const after = await redo(before);
+      commandHistory.record({ before, after, undo: apply(inverse), redo });
+    } catch (error) { setError((error as Error).message); }
   }
-  async function applyTokenMoveHistory(source: 'undo' | 'redo') {
-    if (!scene) return;
-    const sourceStack = source === 'undo' ? tokenMoveUndo : tokenMoveRedo;
-    const action = sourceStack.at(-1); if (!action) return;
-    const before = action.positions.map(({ tokenId }) => tokens.find((token) => token.id === tokenId)).filter((token): token is PublicToken => Boolean(token));
-    if (before.length !== action.positions.length) { setError('NOT_FOUND'); return; }
-    try {
-      const result = await api<{ tokens: PublicToken[] }>(`/api/scenes/${scene.id}/tokens/group`, { method: 'PATCH', body: JSON.stringify({ updates: action.positions.map((position) => ({ tokenId: position.tokenId, expectedVersion: action.expectedVersions[position.tokenId], patch: { x: position.x, y: position.y } })) }) });
-      const inverse: TokenMoveHistory = { positions: before.map(({ id, x, y }) => ({ tokenId: id, x, y })), expectedVersions: Object.fromEntries(result.tokens.map((token) => [token.id, token.version])) };
-      setTokens((items) => items.map((token) => result.tokens.find((next) => next.id === token.id) ?? token));
-      if (source === 'undo') { setTokenMoveUndo((history) => history.slice(0, -1)); setTokenMoveRedo((history) => [...history.slice(-19), inverse]); }
-      else { setTokenMoveRedo((history) => history.slice(0, -1)); setTokenMoveUndo((history) => [...history.slice(-19), inverse]); }
-    } catch (e) { setError((e as Error).message); try { setTokens(await api<PublicToken[]>(`/api/scenes/${scene.id}/tokens`)); } catch { /* Keep the original update error visible. */ } }
+
+  function updateTokenGroup(patch: GroupPatch) {
+    return applyGroupChanges(tokens.filter((token) => selectedTokenIds.includes(token.id)), () => patch);
   }
+
+  function moveTokenGroup(tokenIds: string[], deltaX: number, deltaY: number) {
+    return applyGroupChanges(tokens.filter((token) => tokenIds.includes(token.id)), (token) => ({ x: token.x + deltaX, y: token.y + deltaY }));
+  }
+
   async function updateTokenResource(token: PublicToken, index: 0 | 1, patch: Partial<TokenResource>) {
     const resources = token.resources.map((resource, resourceIndex) => {
       const current = resource ?? { label: `Resource ${resourceIndex + 1}`, current: 0, maximum: 0 };
@@ -582,31 +679,51 @@ export function App() {
       } catch (e) { setError((e as Error).message); setConfirmAction(null); }
     });
   }
-  async function startInitiative() {
+  async function submitInitiative(action: 'start' | 'advance' | 'stop', body: object) {
+    if (!campaign || initiativeRequest.current) return;
+    const campaignId = campaign.campaign.id;
+    initiativeRequest.current = true;
+    setInitiativePending(true);
+    try {
+      const view = await api<InitiativeView>(`/api/campaigns/${campaignId}/initiative/${action}`, { method: 'POST', body: JSON.stringify(body) });
+      if (campaignIdRef.current === campaignId) setInitiative(view);
+    } catch (error) {
+      if (campaignIdRef.current === campaignId) setError((error as Error).message);
+    } finally {
+      initiativeRequest.current = false;
+      setInitiativePending(false);
+    }
+  }
+  function startInitiative() {
     if (!campaign || !scene) return;
     const entries = tokens.map((token) => ({ tokenId: token.id, label: token.name, score: Number(initiativeScores[token.id] ?? 0) }));
-    if (!entries.length || entries.some((entry) => !Number.isFinite(entry.score))) { setError('Add a token and a valid initiative score.'); return; }
-    try { setInitiative(await api<InitiativeView>(`/api/campaigns/${campaign.campaign.id}/initiative/start`, { method: 'POST', body: JSON.stringify({ sceneId: scene.id, entries }) })); }
-    catch (e) { setError((e as Error).message); }
+    if (!entries.length || entries.some((entry) => !Number.isInteger(entry.score))) { setError(t('initiativeInvalid')); return; }
+    return submitInitiative('start', { sceneId: scene.id, entries });
   }
-  async function advanceInitiative() {
-    if (!campaign || !initiative.tracker) return;
-    try { setInitiative(await api<InitiativeView>(`/api/campaigns/${campaign.campaign.id}/initiative/advance`, { method: 'POST', body: JSON.stringify({ expectedVersion: initiative.tracker.version }) })); }
-    catch (e) { setError((e as Error).message); }
+  function advanceInitiative() {
+    if (initiative.tracker) return submitInitiative('advance', { expectedVersion: initiative.tracker.version });
   }
-  async function stopInitiative() {
-    if (!campaign || !initiative.tracker) return;
-    try { setInitiative(await api<InitiativeView>(`/api/campaigns/${campaign.campaign.id}/initiative/stop`, { method: 'POST', body: JSON.stringify({ expectedVersion: initiative.tracker.version }) })); }
-    catch (e) { setError((e as Error).message); }
+  function stopInitiative() {
+    if (initiative.tracker) return submitInitiative('stop', { expectedVersion: initiative.tracker.version });
   }
-  function moveToken(token: PublicToken, x: number, y: number) {
-    if (!connected) { setError(t('offline')); return; }
-    socket.emit('token:move', { tokenId: token.id, x, y, expectedVersion: token.version }, (result: { error?: string; token?: PublicToken }) => {
-      const next = result?.token;
-      if (next) setTokens((items) => items.map((item) => item.id === token.id && item.version <= next.version ? { ...item, ...next } : item));
-      else if (result?.error) setError(result.error === 'CONFLICT' ? 'This token changed elsewhere. Refreshing…' : result.error);
-    });
+  async function moveToken(token: PublicToken, x: number, y: number) {
+    const move = (nextX: number, nextY: number) => async (versions: Versions) => {
+      if (!socket.connected) throw new Error(t('offline'));
+      const result = await socket.timeout(5000).emitWithAck('token:move', { tokenId: token.id, x: nextX, y: nextY, expectedVersion: versions[token.id] }) as { error?: string; token?: PublicToken };
+      if (result.token) applyTokenUpdates([result.token]);
+      if (!result.token || result.error) throw new Error(result.error ?? 'MOVE_FAILED');
+      return versionsOf([result.token]);
+    };
+    try {
+      if (!connected) throw new Error(t('offline'));
+      if (x === token.x && y === token.y) return;
+      const before = versionsOf([token]);
+      const redo = move(x, y);
+      const after = await redo(before);
+      commandHistory.record({ before, after, undo: move(token.x, token.y), redo });
+    } catch (error) { setError((error as Error).message); }
   }
+
   function sendChat(event: React.FormEvent) {
     event.preventDefault(); if (!campaign || !chatText.trim()) return;
     if (!connected) { setError(t('offline')); return; }
@@ -623,7 +740,7 @@ export function App() {
 
   return <main className="app-shell" data-theme={theme}><header className="topbar"><button className="brand" onClick={() => setCampaign(null)}><span className="brand-mark small">N</span><span>NRI</span></button><div className="topbar-right">{campaign && <span className={`live-status ${connected ? 'online' : ''}`}><i />{t(connected ? 'connection' : 'offline')}</span>}<span className="user-chip">{user.displayName}</span><button className="icon-button" aria-label={t(theme === 'dark' ? 'switchToLight' : 'switchToDark')} onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}>{t(theme === 'dark' ? 'lightTheme' : 'darkTheme')}</button><button className="icon-button" title="Language" onClick={() => void i18n.changeLanguage(i18n.language === 'en' ? 'ru' : 'en')}>{i18n.language.toUpperCase()}</button><button className="quiet-button" onClick={() => void api('/api/auth/logout', { method: 'POST' }).finally(() => { setUser(null); setCampaign(null); socket.disconnect(); })}>{t('signOut')}</button></div></header>
     {!campaign ? <section className="campaign-home"><div className="welcome"><p className="eyebrow">YOUR ADVENTURE STARTS HERE</p><h1>{t('campaigns')}</h1><p className="muted">Gather your group and make a little room for the unexpected.</p></div><div className="campaign-layout"><div className="campaign-list">{campaigns.map((item) => <div key={item.campaign.id} className="campaign-entry"><button className="campaign-card" onClick={() => setCampaign(item)}><span className="campaign-art"><span>✳</span></span><span><strong>{item.campaign.title}</strong><small>{item.campaign.description || item.role}</small></span><span className="card-arrow">↗</span></button>{['OWNER', 'GM'].includes(item.role) && <button className="quiet-button campaign-copy" disabled={busy} onClick={() => void duplicateCampaign(item)}>{t('duplicateCampaign')}</button>}</div>)}{campaigns.length === 0 && <p className="empty-state">{t('noCampaigns')}</p>}</div><form className="create-card" onSubmit={createCampaign}><p className="eyebrow">START SOMETHING NEW</p><h2>{t('newCampaign')}</h2><label>{t('title')}<input name="title" maxLength={80} required /></label><label>{t('description')}<textarea name="description" maxLength={500} rows={3} /></label><button className="button primary" disabled={busy}>{t('create')} <span>↗</span></button></form></div></section> : <section className="table-layout">
-      <header className="table-heading"><div><button className="back-link" onClick={() => setCampaign(null)}>← {t('back')}</button><h1>{campaign.campaign.title}</h1><p>{campaign.campaign.description}</p></div><div className="table-actions"><button className="button secondary" onClick={() => void toggleFullscreen()}>{t(fullscreen ? 'exitFullscreen' : 'enterFullscreen')}</button>{canManage && <><button className="quiet-button" disabled={!tokenMoveUndo.length} onClick={() => void applyTokenMoveHistory('undo')}>{t('undoMove')}</button><button className="quiet-button" disabled={!tokenMoveRedo.length} onClick={() => void applyTokenMoveHistory('redo')}>{t('redoMove')}</button><button className="button secondary" onClick={() => void invite()}>{t('invite')} <span>↗</span></button><button className="button secondary" onClick={() => { setSceneTitle(''); setSceneDialog('create'); }}>＋ {t('addScene')}</button><button className="button secondary" onClick={() => void openAssetLibrary()}>{t('assetLibrary')}</button><button className="button secondary" onClick={() => void openTokenTrash()}>{t('tokenTrash')}</button><button className="button secondary" onClick={() => mapInput.current?.click()} disabled={!scene}>⇧ {t('uploadMap')}</button><input ref={mapInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={uploadBackground} /><button className="button primary" onClick={() => void addToken()} disabled={!scene}>＋ {t('addToken')}</button></>}</div></header>
+      <header className="table-heading"><div><button className="back-link" onClick={() => setCampaign(null)}>← {t('back')}</button><h1>{campaign.campaign.title}</h1><p>{campaign.campaign.description}</p></div><div className="table-actions"><button className="button secondary" onClick={() => void toggleFullscreen()}>{t(fullscreen ? 'exitFullscreen' : 'enterFullscreen')}</button><button className="quiet-button" disabled={!commandHistory.canUndo} onClick={() => void commandHistory.apply('undo')}>{t('undoMove')}</button><button className="quiet-button" disabled={!commandHistory.canRedo} onClick={() => void commandHistory.apply('redo')}>{t('redoMove')}</button>{canManage && <><button className="button secondary" onClick={() => void invite()}>{t('invite')} <span>↗</span></button><button className="button secondary" onClick={() => { setSceneTitle(''); setSceneDialog('create'); }}>＋ {t('addScene')}</button><button className="button secondary" onClick={() => void openAssetLibrary()}>{t('assetLibrary')}</button><button className="button secondary" onClick={() => void openTokenTrash()}>{t('tokenTrash')}</button><button className="button secondary" onClick={() => mapInput.current?.click()} disabled={!scene}>⇧ {t('uploadMap')}</button><input ref={mapInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={uploadBackground} /><button className="button primary" onClick={() => void addToken()} disabled={!scene}>＋ {t('addToken')}</button></>}</div></header>
       {canManage && <label className="quiet-button"><input type="checkbox" checked={Boolean(campaign.campaign.playersCanDraw)} onChange={(event) => void setPlayerDrawingPermission(event.target.checked)} />{t('playersCanDraw')}</label>}
       {!canManage && scene && <div className="player-drawing-tools">{canDraw && <><label>{t('drawingColor')} <input aria-label={t('drawingColor')} type="color" value={drawingColor} onChange={(event) => setDrawingColor(event.target.value)} /></label><label>{t('drawingWidth')} <input aria-label={t('drawingWidth')} type="range" min="1" max="16" value={drawingWidth} onChange={(event) => setDrawingWidth(Number(event.target.value))} /></label><button className={drawMode ? 'button primary' : 'button secondary'} aria-pressed={drawMode} disabled={!drawingLayer || drawingLayer.kind !== 'OBJECTS' || drawingLayer.locked || !drawingLayer.visibleToPlayers} onClick={() => { setDrawMode((enabled) => !enabled); setRulerActive(false); setPointerActive(false); }}>{t(drawMode ? 'finishDrawing' : 'drawFreehand')}</button></>}{objects.filter((object) => object.kind === 'FREEHAND' && object.ownedByMe).map((object) => <button className="quiet-button" key={object.id} onClick={() => void deleteSceneObject(object)}>{t('deleteMyDrawing')}</button>)}<button className="quiet-button" disabled={!objects.some((object) => object.kind === 'FREEHAND' && object.ownedByMe)} onClick={() => void clearMyDrawings()}>{t('clearMyDrawings')}</button></div>}      <div className="scene-workbench"><div className="scene-tabs">{scenes.map((item) => <div className={`scene-tab-wrap ${scene?.id === item.id ? 'selected' : ''}`} key={item.id} onContextMenu={(event) => { event.preventDefault(); if (canManage) setSceneMenu({ x: event.clientX, y: event.clientY, scene: item }); }}><button className="scene-tab" onClick={() => void openScene(item)}><span className="scene-thumbnail" style={item.backgroundAssetId ? { backgroundImage: `url(/api/assets/${item.backgroundAssetId})` } : undefined} /><span className="scene-tab-copy">{item.title}<small className={item.isActive ? 'scene-live' : 'scene-draft'}>{canManage ? t(item.isActive ? 'live' : 'draft') : t('scene')}</small></span></button>{canManage && <button className="scene-menu-trigger" aria-label={`Actions for ${item.title}`} onClick={(event) => setSceneMenu({ x: event.currentTarget.getBoundingClientRect().left, y: event.currentTarget.getBoundingClientRect().bottom, scene: item })}>•••</button>}</div>)}{!scenes.length && <span className="muted">Create a scene to set up the table.</span>}</div>{canManage && scene && <div className="scene-actions"><button className="quiet-button" onClick={() => { setSceneTitle(scene.title); setSceneDialog('rename'); }}>{t('renameScene')}</button><button className="quiet-button" onClick={() => void duplicateScene(scene)}>{t('duplicateScene')}</button><button className="quiet-button" onClick={() => setSceneDialog('grid')}>{t('gridSettings')}</button><button className="quiet-button" disabled={scene.isActive} onClick={() => activateScene(scene)}>{scene.isActive ? t('activeForPlayers') : t('setActive')}</button><button className="quiet-button" onClick={() => void reorderScene(scene, -1)}>←</button><button className="quiet-button" onClick={() => void reorderScene(scene, 1)}>→</button><button className="quiet-button" onClick={() => void archiveScene(scene)}>{t('archive')}</button><button className="quiet-button" onClick={() => void loadArchivedScenes()}>{showArchivedScenes ? t('hideArchived') : t('archived')}</button></div>}{canManage && showArchivedScenes && archivedScenes.length > 0 && <div className="archived-scenes">{archivedScenes.map((item) => <span key={item.id}>{item.title}<button className="quiet-button" onClick={() => void restoreScene(item)}>{t('restore')}</button></span>)}</div>}</div>
       {canManage && scene && <details className="layer-tools"><summary>{t('layers')} · {objects.length} {t('sceneObjects')}</summary><div className="layer-tools-body"><div className="layer-list">{layers.map((layer) => <div className={`layer-row ${activeLayerId === layer.id ? 'selected' : ''}`} key={layer.id}><button className="layer-select" onClick={() => { setActiveLayerId(layer.id); setSelectedObjectId(''); setSelectedObjectIds([]); }}>{layer.name}<small>{layer.kind}</small></button><label><input type="checkbox" checked={layer.visibleToPlayers} disabled={layer.kind === 'GM'} onChange={(event) => void updateSceneLayer(layer, { visibleToPlayers: event.target.checked })} />{t('visibleForPlayers')}</label><button className="quiet-button" title={t('raiseLayer')} onClick={() => void updateSceneLayer(layer, { sortOrder: layer.sortOrder + 1 })}>↑</button><button className="quiet-button" title={t('lowerLayer')} onClick={() => void updateSceneLayer(layer, { sortOrder: layer.sortOrder - 1 })}>↓</button><button className="quiet-button" onClick={() => void updateSceneLayer(layer, { locked: !layer.locked })}>{t(layer.locked ? 'unlock' : 'lock')}</button>{layer.kind === 'CUSTOM' && <button className="quiet-button" onClick={() => void deleteCustomLayer(layer)}>×</button>}</div>)}<button className="quiet-button add-layer" onClick={() => void addCustomLayer()}>＋ {t('addCustomLayer')}</button></div><div className="layer-object-tools"><div className="draw-style-controls"><label>{t('drawingColor')} <input type="color" value={drawingColor} onChange={(event) => setDrawingColor(event.target.value)} /></label><label>{t('drawingWidth')} <input type="range" min="1" max="16" step="1" value={drawingWidth} onChange={(event) => setDrawingWidth(Number(event.target.value))} /></label></div><div className="object-tool-actions"><button className="button secondary" disabled={!activeLayerId || layers.find((layer) => layer.id === activeLayerId)?.locked || layers.find((layer) => layer.id === activeLayerId)?.kind === 'BACKGROUND'} onClick={() => void addSceneObject('RECTANGLE')}>{t('addRectangle')}</button><button className="button secondary" disabled={!activeLayerId || layers.find((layer) => layer.id === activeLayerId)?.locked || layers.find((layer) => layer.id === activeLayerId)?.kind === 'BACKGROUND'} onClick={() => void addSceneObject('ELLIPSE')}>{t('addEllipse')}</button><button className="button secondary" disabled={!activeLayerId || layers.find((layer) => layer.id === activeLayerId)?.locked || layers.find((layer) => layer.id === activeLayerId)?.kind === 'BACKGROUND'} onClick={() => void addSceneObject('LINE')}>{t('addLine')}</button><button className="button secondary" disabled={!activeLayerId || layers.find((layer) => layer.id === activeLayerId)?.locked || layers.find((layer) => layer.id === activeLayerId)?.kind === 'BACKGROUND'} onClick={addTextObject}>{t('addText')}</button><button className={drawMode ? 'button primary' : 'button secondary'} aria-pressed={drawMode} disabled={!activeLayerId || layers.find((layer) => layer.id === activeLayerId)?.locked || layers.find((layer) => layer.id === activeLayerId)?.kind === 'BACKGROUND'} onClick={() => { setDrawMode((enabled) => !enabled); setRulerActive(false); setSelectionMode(false); setPointerActive(false); }}>{t(drawMode ? 'finishDrawing' : 'drawFreehand')}</button></div><div className="object-clipboard-actions"><button className="quiet-button" disabled={selectedObjectIds.length === 0} onClick={() => { const selected = objects.filter((object) => selectedObjectIds.includes(object.id)); if (selected.length) setObjectClipboard(selected); }}>{t('copyObject')}</button><button className="quiet-button" disabled={objectClipboard.length === 0 || !activeLayerId || layers.find((layer) => layer.id === activeLayerId)?.locked || layers.find((layer) => layer.id === activeLayerId)?.kind === 'BACKGROUND'} onClick={() => void pasteSceneObject()}>{t('pasteObject')}</button></div><div className="scene-object-list">{objects.filter((object) => object.layerId === activeLayerId).map((object) => <div className={`scene-object-row ${selectedObjectIds.includes(object.id) ? 'selected' : ''}`} key={object.id} data-object-id={object.id}><button className="quiet-button object-select" aria-label={t('multiSelectObjects')} aria-pressed={selectedObjectIds.includes(object.id)} onClick={(event) => { const multi = event.shiftKey || event.ctrlKey || event.metaKey; setSelectedObjectId(object.id); setSelectedObjectIds((current) => { if (!multi) return [object.id]; if (current.includes(object.id)) return current.filter((id) => id !== object.id); return [...current, object.id].slice(-50); }); }}>{t(object.kind.toLowerCase())}</button>{object.kind === 'TEXT' && <button className="quiet-button" title={t('editText')} onClick={() => editTextObject(object)}>✎</button>}<button className="quiet-button" title={t(object.visible ? 'hideObject' : 'showObject')} onClick={() => void updateSceneObject(object, { visible: !object.visible })}>{object.visible ? '◉' : '◎'}</button><button className="quiet-button" title={t('rotateObject')} onClick={() => void updateSceneObject(object, { rotation: (object.rotation + 15) % 360 })}>↻</button><input aria-label={t('objectColor')} type="color" value={object.color ?? '#c8794a'} onChange={(event) => void updateSceneObject(object, { color: event.target.value })} /><input aria-label={t('objectOpacity')} type="range" min="0" max="1" step="0.05" value={object.opacity} onChange={(event) => void updateSceneObject(object, { opacity: Number(event.target.value) })} /><button className="quiet-button" title={t('raiseObject')} onClick={() => void updateSceneObject(object, { zIndex: object.zIndex + 1 })}>↑</button><button className="quiet-button" title={t('lowerObject')} onClick={() => void updateSceneObject(object, { zIndex: object.zIndex - 1 })}>↓</button><select aria-label={t('moveToLayer')} value={object.layerId} onChange={(event) => void updateSceneObject(object, { layerId: event.target.value })}>{layers.map((layer) => <option key={layer.id} value={layer.id} disabled={layer.locked}>{layer.name}</option>)}</select><button className="quiet-button" title={t('duplicateObject')} onClick={() => void duplicateSceneObject(object)}>⧉</button><button className="quiet-button" onClick={() => void updateSceneObject(object, { locked: !object.locked })}>{t(object.locked ? 'unlock' : 'lock')}</button><button className="quiet-button" onClick={() => void deleteSceneObject(object)}>{t('deleteObject')}</button></div>)}{objects.every((object) => object.layerId !== activeLayerId) && <span className="muted">{t('noObjects')}</span>}</div></div></div></details>}
@@ -631,13 +748,13 @@ export function App() {
         <section className="table-main">
           {scene ? (
             <Suspense fallback={<div className="canvas-loading">Loading tabletop…</div>}>
-              <TableCanvas tokens={tokens} objects={objects} canManage={canManage} selectedTokenIds={selectedTokenIds} onMoveGroup={moveTokenGroup} activeLayerId={activeLayerId} layerSortOrder={Object.fromEntries(layers.map((layer) => [layer.id, layer.sortOrder]))} canEditObject={(object) => object.layerId === activeLayerId && !object.locked && !layers.find((layer) => layer.id === object.layerId)?.locked} onEditObject={(id, patch) => { const object = objects.find((item) => item.id === id); if (object) void updateSceneObject(object, patch); }} gridSize={scene.gridSize} gridColor={scene.gridColor} gridOpacity={scene.gridOpacity} gridOffsetX={scene.gridOffsetX} gridOffsetY={scene.gridOffsetY} gridEnabled={scene.gridEnabled} snapToGrid={scene.snapToGrid} backgroundUrl={scene.backgroundAssetId ? '/api/assets/' + scene.backgroundAssetId : undefined} sceneId={scene.id} sceneWidth={scene.width} sceneHeight={scene.height} cameraX={scene.cameraX} cameraY={scene.cameraY} cameraZoom={scene.cameraZoom} unitsPerCell={scene.unitsPerCell} unitLabel={scene.unitLabel} onMove={moveToken} fitLabel={t('fitScene')} rulerActive={rulerActive} rulerLabel={t(rulerActive ? 'finishRuler' : 'measureDistance')} selectionMode={canManage && selectionMode} selectionLabel={t(selectionMode ? 'finishSelection' : 'selectArea')} onSelectTokens={setSelectedTokenIds} pointerActive={pointerActive} pointerLabel={t(pointerActive ? 'stopPointer' : 'sharePointer')} onSharePointer={(x, y) => { if (scene) socket.emit('scene:pointer', { campaignId: scene.campaignId, sceneId: scene.id, x, y }); }} calibrationActive={calibrationActive} gridPreviewSize={gridPreviewSize} gridPreviewOffsetX={gridPreviewOffsetX} gridPreviewOffsetY={gridPreviewOffsetY} onCalibrationComplete={finishGridCalibration} drawMode={canDraw && drawMode && drawingLayer?.kind === 'OBJECTS' && !drawingLayer.locked && drawingLayer.visibleToPlayers} onCreateDrawing={(points) => void addFreehandDrawing(points)} canEdit={(token) => canManage || token.ownerUserId === user.id} onDropTokenAsset={dropTokenAsset} />
+              <TableCanvas tokens={tokens} objects={objects} canManage={canManage} selectedTokenIds={selectedTokenIds} onMoveGroup={moveTokenGroup} activeLayerId={activeLayerId} layerSortOrder={layerSortOrder} canEditObject={canEditObject} onEditObject={(id, patch) => { const object = objects.find((item) => item.id === id); if (object) void updateSceneObject(object, patch); }} gridSize={scene.gridSize} gridColor={scene.gridColor} gridOpacity={scene.gridOpacity} gridOffsetX={scene.gridOffsetX} gridOffsetY={scene.gridOffsetY} gridEnabled={scene.gridEnabled} snapToGrid={scene.snapToGrid} backgroundUrl={scene.backgroundAssetId ? '/api/assets/' + scene.backgroundAssetId : undefined} sceneId={scene.id} sceneWidth={scene.width} sceneHeight={scene.height} cameraX={scene.cameraX} cameraY={scene.cameraY} cameraZoom={scene.cameraZoom} unitsPerCell={scene.unitsPerCell} unitLabel={scene.unitLabel} onMove={moveToken} fitLabel={t('fitScene')} rulerActive={rulerActive} rulerLabel={t(rulerActive ? 'finishRuler' : 'measureDistance')} selectionMode={canManage && selectionMode} selectionLabel={t(selectionMode ? 'finishSelection' : 'selectArea')} onSelectTokens={setSelectedTokenIds} pointerActive={pointerActive} pointerLabel={t(pointerActive ? 'stopPointer' : 'sharePointer')} onSharePointer={(x, y) => { if (scene) socket.emit('scene:pointer', { campaignId: scene.campaignId, sceneId: scene.id, x, y }); }} calibrationActive={calibrationActive} gridPreviewSize={gridPreviewSize} gridPreviewOffsetX={gridPreviewOffsetX} gridPreviewOffsetY={gridPreviewOffsetY} onCalibrationComplete={finishGridCalibration} onRendererError={() => setError(t('rendererFailed'))} drawMode={canDraw && drawMode && drawingLayer?.kind === 'OBJECTS' && !drawingLayer.locked && drawingLayer.visibleToPlayers} onCreateDrawing={(points) => void addFreehandDrawing(points)} canEdit={(token) => canManage || token.ownerUserId === user.id} onDropTokenAsset={dropTokenAsset} />
             </Suspense>
           ) : (
             <div className="empty-table"><div className="brand-mark">✳</div><h2>{t('guide')}</h2><p>{t('guideText')}</p>{canManage && <button className="button primary" onClick={() => setSceneDialog('create')}>{t('addScene')}</button>}</div>
           )}
           <div className="canvas-toolbar"><span>{scene?.title ?? t('mapLabel')}</span><span className="zoom-hint">{calibrationActive ? t('calibrationPrompt') : t('canvasHelp')}</span>{calibrationActive && <button className="quiet-button calibration-cancel" onClick={() => setCalibrationActive(false)}>{t('cancel')}</button>}</div>
-        </section><aside className={`right-rail ${rightRailCollapsed ? 'collapsed' : ''}`}><div className="rail-header"><span className="online-dot" /><span className="rail-title">{t('players')}</span>{!rightRailCollapsed && <span className="role-badge">{role}</span>}<button className="quiet-button rail-toggle" aria-label={t(rightRailCollapsed ? 'expandPanel' : 'collapsePanel')} title={t(rightRailCollapsed ? 'expandPanel' : 'collapsePanel')} onClick={() => setRightRailCollapsed((value) => !value)}>{rightRailCollapsed ? '‹' : '›'}</button></div>{!rightRailCollapsed && <><label className="rail-width-control">{t('panelWidth')}<input type="range" min="220" max="480" step="10" value={rightRailWidth} onChange={(event) => setRightRailWidth(Number(event.target.value))} /></label><section className="rail-section"><div className="section-title"><span>✦</span> {t('guide')}</div><p className="guide-copy">{t('guideText')}</p></section>{canManage && <section className="rail-section token-owners"><div className="section-title">♙ {t('tokenProperties')}</div><div className="token-group-tools"><span>{t('selectedTokens', { count: selectedTokenIds.length })}</span><button className="quiet-button" onClick={() => setSelectedTokenIds(tokens.slice(0, 50).map((token) => token.id))}>{t('selectAllTokens')}</button><button className="quiet-button" onClick={() => setSelectedTokenIds([])}>{t('clearTokenSelection')}</button><button className="quiet-button" disabled={selectedTokenIds.length === 0} onClick={() => { const selected = tokens.filter((item) => selectedTokenIds.includes(item.id)); if (selected.length) { setTokenClipboard(selected); setObjectClipboard([]); } }}>{t('copyToken')}</button><button className="quiet-button" disabled={tokenClipboard.length === 0} onClick={() => void pasteToken()}>{t('pasteToken')}</button><button className="quiet-button" disabled={selectedTokenIds.length < 2} onClick={() => void updateTokenGroup({ locked: true })}>{t('groupLock')}</button><button className="quiet-button" disabled={selectedTokenIds.length < 2} onClick={() => void updateTokenGroup({ locked: false })}>{t('groupUnlock')}</button><button className="quiet-button" disabled={selectedTokenIds.length < 2} onClick={() => void updateTokenGroup({ hidden: true })}>{t('groupHide')}</button><button className="quiet-button" disabled={selectedTokenIds.length < 2} onClick={() => void updateTokenGroup({ hidden: false })}>{t('groupShow')}</button></div>{tokens.map((token) => <details className="token-property-card" key={`${token.id}-${token.version}`}><summary><input type="checkbox" checked={selectedTokenIds.includes(token.id)} aria-label={t('selectToken', { name: token.name })} onClick={(event) => event.stopPropagation()} onChange={(event) => setSelectedTokenIds((ids) => event.target.checked ? ids.length >= 50 ? ids : [...ids, token.id] : ids.filter((id) => id !== token.id))} /><span>{token.name}</span></summary><label>{t('tokenName')}<input defaultValue={token.name} maxLength={48} onBlur={(event) => { if (event.target.value.trim() && event.target.value !== token.name) void updateToken(token, { name: event.target.value }); }} /></label><label>{t('tokenColor')}<input type="color" defaultValue={token.color} onBlur={(event) => { if (event.target.value !== token.color) void updateToken(token, { color: event.target.value }); }} /></label><label>{t('tokenImage')}<select value={token.imageAssetId ?? ''} onChange={(event) => void updateToken(token, { imageAssetId: event.target.value || null })}><option value="">{t('noTokenImage')}</option>{assets.filter((asset) => asset.category === 'TOKEN').map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label><label>{t('tokenBorder')}<input type="color" defaultValue={token.borderColor} onBlur={(event) => { if (event.target.value !== token.borderColor) void updateToken(token, { borderColor: event.target.value }); }} /></label><div className="token-size-fields"><label>{t('tokenWidth')}<input type="number" min="0.25" max="100" step="0.25" defaultValue={token.width} onBlur={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value !== token.width) void updateToken(token, { width: value }); }} /></label><label>{t('tokenHeight')}<input type="number" min="0.25" max="100" step="0.25" defaultValue={token.height} onBlur={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value !== token.height) void updateToken(token, { height: value }); }} /></label></div><label>{t('tokenRotation')}<input type="number" min="-360000" max="360000" step="15" defaultValue={token.rotation} onBlur={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value !== token.rotation) void updateToken(token, { rotation: value }); }} /></label><label>{t('tokenOpacity')}<input type="range" min="0" max="1" step="0.05" defaultValue={token.opacity} onBlur={(event) => { const value = Number(event.target.value); if (value !== token.opacity) void updateToken(token, { opacity: value }); }} /></label><label>{t('tokenOrder')}<input type="number" min="-100000" max="100000" defaultValue={token.zIndex} onBlur={(event) => { const value = Number(event.target.value); if (Number.isInteger(value) && value !== token.zIndex) void updateToken(token, { zIndex: value }); }} /></label><label><input type="checkbox" checked={token.showName} onChange={(event) => void updateToken(token, { showName: event.target.checked })} />{t('showTokenName')}</label><label><input type="checkbox" checked={token.locked} onChange={(event) => void updateToken(token, { locked: event.target.checked })} />{t(token.locked ? 'unlock' : 'lock')}</label><label><input type="checkbox" checked={Boolean(token.hidden)} onChange={(event) => void updateToken(token, { hidden: event.target.checked })} />{t('hideToken')}</label><label>{t('tokenOwner')}<select aria-label={`${t('tokenOwner')} ${token.name}`} value={token.ownerUserId ?? ''} onChange={(event) => void assignToken(token, event.target.value)}><option value="">GM controlled</option>{members.filter((member) => member.role === 'PLAYER').map((member) => <option value={member.userId} key={member.userId}>{member.displayName}</option>)}</select></label><button className="quiet-button token-delete-button" onClick={() => requestDeleteToken(token)}>{t('deleteToken')}</button><label>{t('gmNote')}<textarea maxLength={4000} defaultValue={token.gmNote ?? ''} onBlur={(event) => { if (event.target.value !== token.gmNote) void updateToken(token, { gmNote: event.target.value }); }} /></label><label>{t('ownerNote')}<textarea maxLength={4000} defaultValue={token.ownerNote ?? ''} onBlur={(event) => { if (event.target.value !== token.ownerNote) void updateToken(token, { ownerNote: event.target.value }); }} /></label>{token.resources.map((resource, index) => <fieldset className="token-resource-editor" key={index}><legend>{t('resource')} {index + 1}</legend><label>{t('resourceName')}<input defaultValue={resource?.label ?? `${t('resource')} ${index + 1}`} maxLength={24} onBlur={(event) => { if (event.target.value.trim() && event.target.value !== resource?.label) void updateTokenResource(token, index as 0 | 1, { label: event.target.value }); }} /></label><div className="token-size-fields"><label>{t('currentValue')}<input type="number" min="0" max="9999" step="1" defaultValue={resource?.current ?? 0} onBlur={(event) => { const value = Number(event.target.value); if (Number.isInteger(value) && value !== resource?.current) void updateTokenResource(token, index as 0 | 1, { current: value }); }} /></label><label>{t('maximumValue')}<input type="number" min="0" max="9999" step="1" defaultValue={resource?.maximum ?? 0} onBlur={(event) => { const value = Number(event.target.value); if (Number.isInteger(value) && value !== resource?.maximum) void updateTokenResource(token, index as 0 | 1, { maximum: value }); }} /></label></div><label><input type="checkbox" checked={Boolean(resource?.visible)} onChange={(event) => void updateTokenResource(token, index as 0 | 1, { visible: event.target.checked })} />{t('visibleForPlayers')}</label><div className="token-resource-quick"><button className="quiet-button" disabled={!resource || resource.current <= 0} onClick={() => void adjustTokenResource(token, index as 0 | 1, -1)}>−</button><span>{resource?.current ?? 0} / {resource?.maximum ?? 0}</span><button className="quiet-button" disabled={!resource || resource.current >= resource.maximum} onClick={() => void adjustTokenResource(token, index as 0 | 1, 1)}>＋</button></div></fieldset>)}</details>)}</section>}{!canManage && tokens.some((token) => token.ownerUserId === user.id && token.ownerNote) && <section className="rail-section token-owner-notes"><div className="section-title">{t('tokenNotes')}</div>{tokens.filter((token) => token.ownerUserId === user.id && token.ownerNote).map((token) => <article key={token.id}><strong>{token.name}</strong><p>{token.ownerNote}</p></article>)}</section>}{tokens.some((token) => canManage || token.ownerUserId === user.id) && <section className="rail-section token-resource-controls"><div className="section-title">{t('resourceTracks')}</div>{tokens.filter((token) => canManage || token.ownerUserId === user.id).map((token) => <div className="owned-token-resources" key={token.id}><strong>{token.name}</strong>{token.resources.map((resource, index) => resource && <div className="token-resource-quick" key={index}><span>{resource.label}</span><button className="quiet-button" disabled={resource.current <= 0} onClick={() => void adjustTokenResource(token, index as 0 | 1, -1)}>−</button><span>{resource.current} / {resource.maximum}</span><button className="quiet-button" disabled={resource.current >= resource.maximum} onClick={() => void adjustTokenResource(token, index as 0 | 1, 1)}>＋</button></div>)}</div>)}</section>}{scene && <section className="rail-section initiative-section"><div className="section-title">⚑ Initiative</div>{initiative.tracker?.active ? <><p className="guide-copy">Round {initiative.tracker.round}</p><div className="initiative-list">{initiative.entries.map((entry) => <div className={initiative.tracker?.currentEntryId === entry.id ? "initiative-row active" : "initiative-row"} key={entry.id}><span>{entry.label}</span><strong>{entry.score}</strong></div>)}</div>{canManage && <div className="initiative-actions"><button className="button secondary" onClick={() => void advanceInitiative()}>Next turn ↗</button><button className="quiet-button" onClick={() => void stopInitiative()}>Stop</button></div>}</> : canManage ? <><p className="guide-copy">Set each token's initiative score, then start the tracker.</p>{tokens.map((token) => <label className="initiative-score" key={token.id}>{token.name}<input type="number" min="-9999" max="9999" value={initiativeScores[token.id] ?? "0"} onChange={(event) => setInitiativeScores((scores) => ({ ...scores, [token.id]: event.target.value }))} /></label>)}<button className="button secondary" disabled={!tokens.length} onClick={() => void startInitiative()}>Start initiative</button></> : <p className="guide-copy">Initiative is not active.</p>}</section>}<section className="rail-section roll-section"><div className="section-title">◉ Dice</div>{canManage && <label className="secret-roll-toggle"><input type="checkbox" aria-label={t('secretRoll')} checked={hiddenRoll} onChange={(event) => setHiddenRoll(event.target.checked)} />{t('secretRoll')}</label>}<button className="roll-button" onClick={rollDice}>d20 <span>{t('roll')} ↗</span></button>{rolls.slice(-4).reverse().map((roll, i) => <div className="roll-row" key={`${roll.id ?? i}-${i}`}><span>{roll.displayName} rolled {roll.expression}{roll.hidden && <small> · {t('secretRoll')}</small>}</span><strong>{roll.result}</strong></div>)}</section><section className="rail-section chat-section"><div className="section-title">◌ {t('chat')}</div><select className="message-recipient" aria-label="Message recipient" value={messageRecipient} onChange={(event) => setMessageRecipient(event.target.value)}><option value="">Everyone</option>{members.filter((member) => member.userId !== user.id && (canManage || member.role === 'OWNER' || member.role === 'GM')).map((member) => <option key={member.userId} value={member.userId}>Private · {member.displayName}</option>)}</select><div className="chat-messages">{messages.map((message) => <div className={`chat-message ${message.private ? 'private' : ''}`} key={message.id}><strong>{message.private ? '🔒 ' : ''}{message.displayName}</strong><p>{message.body}</p></div>)}</div><form className="chat-compose" onSubmit={sendChat}><input value={chatText} onChange={(e) => setChatText(e.target.value)} maxLength={2000} placeholder="Write a message…" /><button aria-label={t('send')}>↗</button></form></section></>}</aside></div>
+        </section><aside className={`right-rail ${rightRailCollapsed ? 'collapsed' : ''}`}><div className="rail-header"><span className="online-dot" /><span className="rail-title">{t('players')}</span>{!rightRailCollapsed && <span className="role-badge">{role}</span>}<button className="quiet-button rail-toggle" aria-label={t(rightRailCollapsed ? 'expandPanel' : 'collapsePanel')} title={t(rightRailCollapsed ? 'expandPanel' : 'collapsePanel')} onClick={() => setRightRailCollapsed((value) => !value)}>{rightRailCollapsed ? '‹' : '›'}</button></div>{!rightRailCollapsed && <><label className="rail-width-control">{t('panelWidth')}<input type="range" min="220" max="480" step="10" value={rightRailWidth} onChange={(event) => setRightRailWidth(Number(event.target.value))} /></label><section className="rail-section"><div className="section-title"><span>✦</span> {t('guide')}</div><p className="guide-copy">{t('guideText')}</p></section>{canManage && <section className="rail-section token-owners"><div className="section-title">♙ {t('tokenProperties')}</div><div className="token-group-tools"><span>{t('selectedTokens', { count: selectedTokenIds.length })}</span><button className="quiet-button" onClick={() => setSelectedTokenIds(tokens.slice(0, 50).map((token) => token.id))}>{t('selectAllTokens')}</button><button className="quiet-button" onClick={() => setSelectedTokenIds([])}>{t('clearTokenSelection')}</button><button className="quiet-button" disabled={selectedTokenIds.length === 0} onClick={() => { const selected = tokens.filter((item) => selectedTokenIds.includes(item.id)); if (selected.length) { setTokenClipboard(selected); setObjectClipboard([]); } }}>{t('copyToken')}</button><button className="quiet-button" disabled={tokenClipboard.length === 0} onClick={() => void pasteToken()}>{t('pasteToken')}</button><button className="quiet-button" disabled={selectedTokenIds.length < 2} onClick={() => void updateTokenGroup({ locked: true })}>{t('groupLock')}</button><button className="quiet-button" disabled={selectedTokenIds.length < 2} onClick={() => void updateTokenGroup({ locked: false })}>{t('groupUnlock')}</button><button className="quiet-button" disabled={selectedTokenIds.length < 2} onClick={() => void updateTokenGroup({ hidden: true })}>{t('groupHide')}</button><button className="quiet-button" disabled={selectedTokenIds.length < 2} onClick={() => void updateTokenGroup({ hidden: false })}>{t('groupShow')}</button></div>{tokens.map((token) => <details className="token-property-card" key={`${token.id}-${token.version}`}><summary><input type="checkbox" checked={selectedTokenIds.includes(token.id)} aria-label={t('selectToken', { name: token.name })} onClick={(event) => event.stopPropagation()} onChange={(event) => setSelectedTokenIds((ids) => event.target.checked ? ids.length >= 50 ? ids : [...ids, token.id] : ids.filter((id) => id !== token.id))} /><span>{token.name}</span></summary><label>{t('tokenName')}<input defaultValue={token.name} maxLength={48} onBlur={(event) => { if (event.target.value.trim() && event.target.value !== token.name) void updateToken(token, { name: event.target.value }); }} /></label><label>{t('tokenColor')}<input type="color" defaultValue={token.color} onBlur={(event) => { if (event.target.value !== token.color) void updateToken(token, { color: event.target.value }); }} /></label><label>{t('tokenImage')}<select value={token.imageAssetId ?? ''} onChange={(event) => void updateToken(token, { imageAssetId: event.target.value || null })}><option value="">{t('noTokenImage')}</option>{assets.filter((asset) => asset.category === 'TOKEN').map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></label><label>{t('tokenBorder')}<input type="color" defaultValue={token.borderColor} onBlur={(event) => { if (event.target.value !== token.borderColor) void updateToken(token, { borderColor: event.target.value }); }} /></label><div className="token-size-fields"><label>{t('tokenWidth')}<input type="number" min="0.25" max="100" step="0.25" defaultValue={token.width} onBlur={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value !== token.width) void updateToken(token, { width: value }); }} /></label><label>{t('tokenHeight')}<input type="number" min="0.25" max="100" step="0.25" defaultValue={token.height} onBlur={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value !== token.height) void updateToken(token, { height: value }); }} /></label></div><label>{t('tokenRotation')}<input type="number" min="-360000" max="360000" step="15" defaultValue={token.rotation} onBlur={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value !== token.rotation) void updateToken(token, { rotation: value }); }} /></label><label>{t('tokenOpacity')}<input type="range" min="0" max="1" step="0.05" defaultValue={token.opacity} onBlur={(event) => { const value = Number(event.target.value); if (value !== token.opacity) void updateToken(token, { opacity: value }); }} /></label><label>{t('tokenOrder')}<input type="number" min="-100000" max="100000" defaultValue={token.zIndex} onBlur={(event) => { const value = Number(event.target.value); if (Number.isInteger(value) && value !== token.zIndex) void updateToken(token, { zIndex: value }); }} /></label><label><input type="checkbox" checked={token.showName} onChange={(event) => void updateToken(token, { showName: event.target.checked })} />{t('showTokenName')}</label><label><input type="checkbox" checked={token.locked} onChange={(event) => void updateToken(token, { locked: event.target.checked })} />{t(token.locked ? 'unlock' : 'lock')}</label><label><input type="checkbox" checked={Boolean(token.hidden)} onChange={(event) => void updateToken(token, { hidden: event.target.checked })} />{t('hideToken')}</label><label>{t('tokenOwner')}<select aria-label={`${t('tokenOwner')} ${token.name}`} value={token.ownerUserId ?? ''} onChange={(event) => void assignToken(token, event.target.value)}><option value="">GM controlled</option>{members.filter((member) => member.role === 'PLAYER').map((member) => <option value={member.userId} key={member.userId}>{member.displayName}</option>)}</select></label><button className="quiet-button token-delete-button" onClick={() => requestDeleteToken(token)}>{t('deleteToken')}</button><label>{t('gmNote')}<textarea maxLength={4000} defaultValue={token.gmNote ?? ''} onBlur={(event) => { if (event.target.value !== token.gmNote) void updateToken(token, { gmNote: event.target.value }); }} /></label><label>{t('ownerNote')}<textarea maxLength={4000} defaultValue={token.ownerNote ?? ''} onBlur={(event) => { if (event.target.value !== token.ownerNote) void updateToken(token, { ownerNote: event.target.value }); }} /></label>{token.resources.map((resource, index) => <fieldset className="token-resource-editor" key={index}><legend>{t('resource')} {index + 1}</legend><label>{t('resourceName')}<input defaultValue={resource?.label ?? `${t('resource')} ${index + 1}`} maxLength={24} onBlur={(event) => { if (event.target.value.trim() && event.target.value !== resource?.label) void updateTokenResource(token, index as 0 | 1, { label: event.target.value }); }} /></label><div className="token-size-fields"><label>{t('currentValue')}<input type="number" min="0" max="9999" step="1" defaultValue={resource?.current ?? 0} onBlur={(event) => { const value = Number(event.target.value); if (Number.isInteger(value) && value !== resource?.current) void updateTokenResource(token, index as 0 | 1, { current: value }); }} /></label><label>{t('maximumValue')}<input type="number" min="0" max="9999" step="1" defaultValue={resource?.maximum ?? 0} onBlur={(event) => { const value = Number(event.target.value); if (Number.isInteger(value) && value !== resource?.maximum) void updateTokenResource(token, index as 0 | 1, { maximum: value }); }} /></label></div><label><input type="checkbox" checked={Boolean(resource?.visible)} onChange={(event) => void updateTokenResource(token, index as 0 | 1, { visible: event.target.checked })} />{t('visibleForPlayers')}</label><div className="token-resource-quick"><button className="quiet-button" disabled={!resource || resource.current <= 0} onClick={() => void adjustTokenResource(token, index as 0 | 1, -1)}>−</button><span>{resource?.current ?? 0} / {resource?.maximum ?? 0}</span><button className="quiet-button" disabled={!resource || resource.current >= resource.maximum} onClick={() => void adjustTokenResource(token, index as 0 | 1, 1)}>＋</button></div></fieldset>)}</details>)}</section>}{!canManage && tokens.some((token) => token.ownerUserId === user.id && token.ownerNote) && <section className="rail-section token-owner-notes"><div className="section-title">{t('tokenNotes')}</div>{tokens.filter((token) => token.ownerUserId === user.id && token.ownerNote).map((token) => <article key={token.id}><strong>{token.name}</strong><p>{token.ownerNote}</p></article>)}</section>}{tokens.some((token) => canManage || token.ownerUserId === user.id) && <section className="rail-section token-resource-controls"><div className="section-title">{t('resourceTracks')}</div>{tokens.filter((token) => canManage || token.ownerUserId === user.id).map((token) => <div className="owned-token-resources" key={token.id}><strong>{token.name}</strong>{token.resources.map((resource, index) => resource && <div className="token-resource-quick" key={index}><span>{resource.label}</span><button className="quiet-button" disabled={resource.current <= 0} onClick={() => void adjustTokenResource(token, index as 0 | 1, -1)}>−</button><span>{resource.current} / {resource.maximum}</span><button className="quiet-button" disabled={resource.current >= resource.maximum} onClick={() => void adjustTokenResource(token, index as 0 | 1, 1)}>＋</button></div>)}</div>)}</section>}{scene && <section className="rail-section initiative-section"><div className="section-title">⚑ {t('initiative')}</div>{initiative.tracker?.active ? <><p className="guide-copy">{t('initiativeRound', { round: initiative.tracker.round })}</p><div className="initiative-list">{initiative.entries.map((entry) => <div className={initiative.tracker?.currentEntryId === entry.id ? "initiative-row active" : "initiative-row"} key={entry.id}><span>{entry.label}</span><strong>{entry.score}</strong></div>)}</div>{canManage && <div className="initiative-actions"><button className="button secondary" disabled={initiativePending} onClick={() => void advanceInitiative()}>{t('initiativeNext')} ↗</button><button className="quiet-button" disabled={initiativePending} onClick={() => void stopInitiative()}>{t('initiativeStop')}</button></div>}</> : canManage ? <><p className="guide-copy">{t('initiativeHint')}</p>{tokens.map((token) => <label className="initiative-score" key={token.id}>{token.name}<input type="number" min="-9999" max="9999" value={initiativeScores[token.id] ?? "0"} onChange={(event) => setInitiativeScores((scores) => ({ ...scores, [token.id]: event.target.value }))} /></label>)}<button className="button secondary" disabled={initiativePending || !tokens.length} onClick={() => void startInitiative()}>{t('initiativeStart')}</button></> : <p className="guide-copy">{t('initiativeInactive')}</p>}</section>}<section className="rail-section roll-section"><div className="section-title">◉ Dice</div>{canManage && <label className="secret-roll-toggle"><input type="checkbox" aria-label={t('secretRoll')} checked={hiddenRoll} onChange={(event) => setHiddenRoll(event.target.checked)} />{t('secretRoll')}</label>}<button className="roll-button" onClick={rollDice}>d20 <span>{t('roll')} ↗</span></button>{rolls.slice(-4).reverse().map((roll, i) => <div className="roll-row" key={`${roll.id ?? i}-${i}`}><span>{roll.displayName} rolled {roll.expression}{roll.hidden && <small> · {t('secretRoll')}</small>}</span><strong>{roll.result}</strong></div>)}</section><section className="rail-section chat-section"><div className="section-title">◌ {t('chat')}</div><select className="message-recipient" aria-label={t('chatRecipient')} value={messageRecipient} onChange={(event) => setMessageRecipient(event.target.value)}><option value="">{t('chatEveryone')}</option>{members.filter((member) => member.userId !== user.id && (canManage || member.role === 'OWNER' || member.role === 'GM')).map((member) => <option key={member.userId} value={member.userId}>Private · {member.displayName}</option>)}</select><div className="chat-messages">{messages.map((message) => <div className={`chat-message ${message.private ? 'private' : ''}`} key={message.id}><strong>{message.private ? '🔒 ' : ''}{message.displayName}</strong><p>{message.body}</p></div>)}</div><form className="chat-compose" onSubmit={sendChat}><input value={chatText} onChange={(e) => setChatText(e.target.value)} maxLength={2000} placeholder={t('chatPlaceholder')} /><button aria-label={t('send')}>↗</button></form></section></>}</aside></div>
       {error && <button className="toast-error" onClick={() => setError('')}>{error} ×</button>}
       {notice && <button className="toast-notice" onClick={() => setNotice('')}>{notice} ×</button>}
       {tokenTrashOpen && <div className="modal-backdrop" onClick={() => setTokenTrashOpen(false)}><section className="dialog-card" onClick={(event) => event.stopPropagation()}><header><div><p className="eyebrow">{t('tokenTrash')}</p><h2>{campaign.campaign.title}</h2></div><button className="quiet-button" onClick={() => setTokenTrashOpen(false)}>×</button></header><div className="token-trash-list">{deletedTokens.map((item) => <article key={item.id}><div><strong>{item.name}</strong><small>{item.sceneTitle}</small></div><button className="button secondary" disabled={Boolean(item.sceneArchivedAt)} onClick={() => void restoreToken(item)}>{t('restoreToken')}</button></article>)}{deletedTokens.length === 0 && <p className="empty-state">{t('tokenTrashEmpty')}</p>}</div></section></div>}

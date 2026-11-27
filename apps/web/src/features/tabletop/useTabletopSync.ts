@@ -34,6 +34,11 @@ function mergeToken(items: PublicToken[], next: PublicToken, canManage: boolean)
   return items.map((item) => item.id === next.id ? token : item);
 }
 
+function latestInitiative(current: InitiativeView, next: InitiativeView) {
+  if (current.tracker && (!next.tracker || current.tracker.version > next.tracker.version)) return current;
+  return next;
+}
+
 export function useTabletopSync({ user, campaign, socket, setCampaign, setCampaigns, setError, setUser }: Options) {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [scene, updateScene] = useState<Scene | null>(null);
@@ -44,7 +49,8 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
   const [activeLayerId, setActiveLayerId] = useState('');
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [rolls, setRolls] = useState<RollItem[]>([]);
-  const [initiative, setInitiative] = useState<InitiativeView>({ tracker: null, entries: [] });
+  const [initiative, updateInitiative] = useState<InitiativeView>({ tracker: null, entries: [] });
+  const setInitiative = useCallback((view: InitiativeView) => updateInitiative((current) => latestInitiative(current, view)), []);
   const [connected, setConnected] = useState(false);
   const campaignId = campaign?.campaign.id ?? null;
   const role = campaign?.role;
@@ -119,7 +125,7 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
     setMessages([]);
     setRolls([]);
     setMembers([]);
-    setInitiative({ tracker: null, entries: [] });
+    updateInitiative({ tracker: null, entries: [] });
     setConnected(false);
   }, [scope, clearScene]);
 
@@ -264,7 +270,7 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       for (const [event, handler] of Object.entries(listeners)) socket.off(event, handler);
       if (socket.connected) socket.emit('campaign:leave', campaignId);
     };
-  }, [scope, campaignId, role, userId, socket, clearScene, openScene, reloadSceneContent, setCampaign, setCampaigns, setError, setUser]);
+  }, [scope, campaignId, role, userId, socket, clearScene, openScene, reloadSceneContent, setCampaign, setCampaigns, setError, setUser, setInitiative]);
 
   return { scenes, setScenes, scene, setScene, tokens, setTokens, layers, setLayers, objects, setObjects, activeLayerId, setActiveLayerId,
     members, messages, setMessages, rolls, setRolls, initiative, setInitiative, connected, campaignIdRef, openScene, reloadSceneContent };

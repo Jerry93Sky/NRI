@@ -9,6 +9,7 @@ type Props = {
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number; unitsPerCell: number; unitLabel: string;
   onMove: (token: PublicToken, x: number, y: number) => void; onMoveGroup: (tokenIds: string[], deltaX: number, deltaY: number) => void; selectedTokenIds: string[]; canEdit: (token: PublicToken) => boolean; onDropTokenAsset: (assetId: string, x: number, y: number) => void; fitLabel: string; rulerActive: boolean; rulerLabel: string; selectionMode: boolean; selectionLabel: string; onSelectTokens: (ids: string[]) => void; pointerActive: boolean; pointerLabel: string; onSharePointer: (x: number, y: number) => void; drawMode: boolean; onCreateDrawing: (points: Array<{ x: number; y: number }>) => void;
   calibrationActive: boolean; gridPreviewSize: number | null; gridPreviewOffsetX: number | null; gridPreviewOffsetY: number | null; onCalibrationComplete: (start: { x: number; y: number }, end: { x: number; y: number }) => void;
+  onRendererError: () => void;
 };
 
 export function TableCanvas(props: Props) {
@@ -33,12 +34,17 @@ export function TableCanvas(props: Props) {
     const pieces = new Container();
     const pointerDisplay = new Container();
     const tokenTextures = new Map<string, Texture>();
+    const tokenNodes = new Map<string, { node: Container; key: string; texture: Texture | undefined }>();
     const pendingTokenTextures = new Set<string>();
     const objectTextures = new Map<string, Texture>();
     const pendingObjectTextures = new Set<string>();
     const trackedAssetUrls = new Set<string>();
     const pendingAssetLoads = new Map<string, number>();
     const unloadingAssetUrls = new Map<string, Promise<void>>();
+    let priorProps: Props | undefined;
+    let backgroundRevision = 0;
+    let objectTexturesChanged = false;
+    let tokenTexturesChanged = false;
     let refresh = () => {};
     const loadTexture = async (url: string) => {
       await unloadingAssetUrls.get(url);
@@ -134,6 +140,7 @@ export function TableCanvas(props: Props) {
                 }
                 objectTextures.set(assetId, texture);
                 pendingObjectTextures.delete(assetId);
+                objectTexturesChanged = true;
                 refresh();
               }).catch(() => { pendingObjectTextures.delete(assetId); releaseUnusedAssetTextures(); });
             }
@@ -177,20 +184,40 @@ export function TableCanvas(props: Props) {
       }
     };
     const redrawMap = async () => {
+      const revision = ++backgroundRevision;
       mapLayer.removeChildren().forEach((child) => child.destroy({ children: true }));
       const sourceUrl = latest.current.backgroundUrl;
       if (!sourceUrl) return;
       try {
         const texture = await loadTexture(sourceUrl);
-        if (cancelled || latest.current.backgroundUrl !== sourceUrl) { releaseUnusedAssetTextures(); return; }
+        if (cancelled || revision !== backgroundRevision) { releaseUnusedAssetTextures(); return; }
         const image = new Sprite(texture); image.width = latest.current.sceneWidth; image.height = latest.current.sceneHeight;
         mapLayer.addChild(image);
       } catch { /* A missing or revoked asset leaves the neutral canvas visible. */ releaseUnusedAssetTextures(); }
     };
     const redrawTokens = () => {
-      pieces.removeChildren().forEach((child) => child.destroy({ children: true }));
-      latest.current.tokens.toSorted((a, b) => a.zIndex - b.zIndex || a.y - b.y || a.x - b.x).forEach((token) => {
-        const size = latest.current.gridSize;
+      const { tokens, gridSize: size } = latest.current;
+      const present = new Set(tokens.map(({ id }) => id));
+      for (const [id, { node }] of tokenNodes) {
+        if (present.has(id)) continue;
+        node.destroy({ children: true });
+        tokenNodes.delete(id);
+      }
+      tokens.toSorted((a, b) => a.zIndex - b.zIndex || a.y - b.y || a.x - b.x).forEach((token, index) => {
+        const tokenId = token.id;
+        const key = JSON.stringify([size, token.width, token.height, token.color, token.borderColor, token.imageAssetId, token.showName, token.name, token.resources]);
+        const currentTexture = token.imageAssetId ? tokenTextures.get(token.imageAssetId) : undefined;
+        const entry = tokenNodes.get(tokenId);
+        if (entry?.key === key && entry.texture === currentTexture) {
+          const { node } = entry;
+          if (node.cursor !== 'grabbing') node.position.set(token.x * size, token.y * size);
+          node.rotation = token.rotation * Math.PI / 180;
+          node.alpha = token.opacity;
+          if (node.cursor !== 'grabbing') node.cursor = latest.current.canEdit(token) && !token.locked ? 'grab' : 'default';
+          if (pieces.children[index] !== node) pieces.setChildIndex(node, index);
+          return;
+        }
+        entry?.node.destroy({ children: true });
         const node = new Container(); node.position.set(token.x * size, token.y * size); node.rotation = token.rotation * Math.PI / 180; node.alpha = token.opacity;
         const width = size * token.width; const height = size * token.height;
         const disc = new Graphics().ellipse(0, 0, width * 0.42, height * 0.42).fill(token.color).stroke({ color: Number.parseInt(token.borderColor.slice(1), 16), alpha: 0.9, width: Math.max(1, size * 0.04) });
@@ -211,6 +238,7 @@ export function TableCanvas(props: Props) {
               }
               tokenTextures.set(token.imageAssetId!, loaded);
               pendingTokenTextures.delete(token.imageAssetId!);
+              tokenTexturesChanged = true;
               refresh();
             }).catch(() => { pendingTokenTextures.delete(token.imageAssetId!); releaseUnusedAssetTextures(); });
           }
@@ -221,6 +249,8 @@ export function TableCanvas(props: Props) {
         if (resourceText) { const resourceLabel = new Text({ text: resourceText, style: { fontFamily: 'Arial', fontSize: Math.max(8, size * 0.16), fill: 0xd8c6a9, align: 'center' } }); resourceLabel.anchor.set(0.5, 0); resourceLabel.y = height * 0.45 + Math.max(10, size * 0.24); node.addChild(resourceLabel); }
         node.eventMode = 'static'; node.cursor = latest.current.canEdit(token) && !token.locked ? 'grab' : 'default';
         node.on('pointerdown', (event) => {
+          const token = latest.current.tokens.find((item) => item.id === tokenId);
+          if (!token) return;
           if (latest.current.pointerActive) { event.stopPropagation(); return; }
           if (!latest.current.canEdit(token) || token.locked) return;
           event.stopPropagation(); node.cursor = 'grabbing';
@@ -234,13 +264,17 @@ export function TableCanvas(props: Props) {
             app.stage.off('globalpointermove', move); app.stage.off('pointerup', up); app.stage.off('pointerupoutside', up); node.cursor = 'grab';
             const { gridSize: cellSize, snapToGrid: snap } = latest.current;
             const x = node.x / cellSize; const y = node.y / cellSize;
+            node.position.copyFrom(origin);
+            groupNodes.forEach((child, index) => child.position.copyFrom(groupOrigins[index]!));
             const nextX = snap ? Math.round(x) : Number(x.toFixed(2)); const nextY = snap ? Math.round(y) : Number(y.toFixed(2));
             if (groupTokens.length > 1) { const deltaX = (snap ? Math.round(nextX - token.x) : Number((nextX - token.x).toFixed(2))); const deltaY = (snap ? Math.round(nextY - token.y) : Number((nextY - token.y).toFixed(2))); if (deltaX || deltaY) latest.current.onMoveGroup(groupTokens.map((item) => item.id), deltaX, deltaY); }
             else if (nextX !== token.x || nextY !== token.y) latest.current.onMove(token, nextX, nextY);
           };
           app.stage.on('globalpointermove', move); app.stage.on('pointerup', up); app.stage.on('pointerupoutside', up);
         });
-        node.label = token.id; pieces.addChild(node);
+        node.label = token.id;
+        pieces.addChildAt(node, index);
+        tokenNodes.set(tokenId, { node, key, texture: currentTexture });
       });
     };
     const rulerPoints: Array<{ x: number; y: number }> = [];
@@ -284,10 +318,41 @@ export function TableCanvas(props: Props) {
       rulerDisplay.addChild(label);
     };
     refresh = () => {
-      if (latest.current.sceneId !== previousSceneId) { previousSceneId = latest.current.sceneId; rulerPoints.length = 0; clearSelectionBox(); clearRemotePointers(); restoreCamera(); }
-      if (!latest.current.rulerActive) rulerPoints.length = 0;
-      if (!latest.current.selectionMode) clearSelectionBox();
-      redrawGrid(); redrawRuler(); redrawObjects(); redrawTokens(); redrawPointers(); void redrawMap(); releaseUnusedAssetTextures();
+      const props = latest.current;
+      const prior = priorProps;
+      const sceneChanged = props.sceneId !== previousSceneId;
+      if (sceneChanged) {
+        previousSceneId = props.sceneId;
+        rulerPoints.length = 0;
+        clearSelectionBox();
+        clearRemotePointers();
+        app.stage.removeAllListeners('globalpointermove');
+        app.stage.removeAllListeners('pointerup');
+        app.stage.removeAllListeners('pointerupoutside');
+        for (const { node } of tokenNodes.values()) node.destroy({ children: true });
+        tokenNodes.clear();
+      }
+      if (sceneChanged || props.cameraX !== prior?.cameraX || props.cameraY !== prior?.cameraY || props.cameraZoom !== prior?.cameraZoom) restoreCamera();
+      if (!props.rulerActive) rulerPoints.length = 0;
+      if (!props.selectionMode) clearSelectionBox();
+
+      const sizeChanged = props.sceneWidth !== prior?.sceneWidth || props.sceneHeight !== prior?.sceneHeight;
+      const gridChanged = sceneChanged || sizeChanged || props.gridSize !== prior?.gridSize
+        || props.gridColor !== prior?.gridColor || props.gridOpacity !== prior?.gridOpacity || props.gridEnabled !== prior?.gridEnabled
+        || props.gridOffsetX !== prior?.gridOffsetX || props.gridOffsetY !== prior?.gridOffsetY
+        || props.gridPreviewSize !== prior?.gridPreviewSize || props.gridPreviewOffsetX !== prior?.gridPreviewOffsetX
+        || props.gridPreviewOffsetY !== prior?.gridPreviewOffsetY;
+      if (gridChanged) redrawGrid();
+      if (gridChanged || props.rulerActive !== prior?.rulerActive || props.unitsPerCell !== prior?.unitsPerCell || props.unitLabel !== prior?.unitLabel) redrawRuler();
+      if (props.objects !== prior?.objects || props.canEditObject !== prior?.canEditObject || props.layerSortOrder !== prior?.layerSortOrder
+        || props.canManage !== prior?.canManage || objectTexturesChanged || sceneChanged) redrawObjects();
+      if (props.tokens !== prior?.tokens || props.canManage !== prior?.canManage || props.canEdit !== prior?.canEdit
+        || props.gridSize !== prior?.gridSize || tokenTexturesChanged || sceneChanged) redrawTokens();
+      if (sceneChanged || props.backgroundUrl !== prior?.backgroundUrl || sizeChanged) void redrawMap();
+      objectTexturesChanged = false;
+      tokenTexturesChanged = false;
+      priorProps = props;
+      releaseUnusedAssetTextures();
     };
     const fit = () => fitScene();
     const calibrationPoints: Array<{ x: number; y: number }> = [];
@@ -384,7 +449,7 @@ export function TableCanvas(props: Props) {
       });
       app.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     };
-    void start();
+    void start().catch(() => { if (!cancelled) latest.current.onRendererError(); });
     return () => {
       cancelled = true;
       window.removeEventListener('nri-fit-scene', fit);
@@ -400,7 +465,7 @@ export function TableCanvas(props: Props) {
   useEffect(() => {
     const canvas = host.current?.querySelector('canvas');
     if (canvas) canvas.dispatchEvent(new Event('nri-refresh'));
-  }, [tokens, props.objects, props.canManage, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY, props.rulerActive, props.unitsPerCell, props.unitLabel, props.selectionMode, props.pointerActive]);
+  }, [tokens, props.objects, props.canManage, props.canEditObject, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY, props.rulerActive, props.unitsPerCell, props.unitLabel, props.selectionMode, props.pointerActive]);
 
   return <div className={`table-canvas ${props.pointerActive ? 'pointer-active' : ''}`} ref={host}><div className="canvas-controls">{props.canManage && <button aria-label={props.selectionLabel} aria-pressed={props.selectionMode} onClick={() => window.dispatchEvent(new Event('nri-toggle-selection'))}>{props.selectionLabel}</button>}<button aria-label={props.pointerLabel} aria-pressed={props.pointerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-pointer'))}>{props.pointerLabel}</button><button aria-label={props.rulerLabel} aria-pressed={props.rulerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-ruler'))}>{props.rulerLabel}</button><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div>{(props.rulerActive || props.selectionMode || props.pointerActive) && <span className="ruler-hint">{props.pointerActive ? props.pointerLabel : props.selectionMode ? props.selectionLabel : props.rulerLabel}</span>}</div>;
 }
