@@ -1,15 +1,22 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { z } from 'zod';
-import { createSceneLayerSchema, createSceneObjectSchema, duplicateSceneObjectsSchema, sceneObjectLifecycleSchema, updateSceneLayerSchema, updateSceneObjectSchema } from '@nri/contracts';
+import { createSceneLayerSchema, createSceneObjectSchema, duplicateSceneObjectsSchema, idSchema, updateSceneLayerSchema, updateSceneObjectSchema } from '@nri/contracts';
 import { db } from '../../db/index.js';
-import { assets, auditEvents, campaigns, memberships, sceneLayers, sceneObjects, scenes } from '../../db/schema.js';
+import { assets, auditEvents, campaigns, sceneLayers, sceneObjects, scenes } from '../../db/schema.js';
 import { canReadSceneLayer, canReadSceneTokens } from '../../domain/sceneAccess.js';
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
-import { parseBody, requireUser, roleFor } from '../../security/access.js';
+import { digest, parseBody, requireUser, roleFor } from '../../security/access.js';
 import { sceneObjectProjection } from '../../domain/projections.js';
 import { baseLayerKinds } from '../../domain/defaultLayers.js';
+import { cookieName } from '../../config/runtime.js';
+import { commandSessionIsActive, lockCommandSession } from '../../security/commandAccess.js';
+import { lockObjectLayers, lockObjectScene, lockSceneObjects } from '../objects/access.js';
+import { changeObjectLifecycle, clearOwnDrawings, deleteSceneObject } from '../objects/lifecycle.js';
+import { publishObjectLifecycle } from '../../realtime/objectLifecycleEvents.js';
+
+const lifecycleStatus = { INVALID: 400, UNAUTHENTICATED: 401, NOT_FOUND: 404, FORBIDDEN: 403, CONFLICT: 409, LAYER_LOCKED: 409, OBJECT_LOCKED: 409 };
 
 export function registerSceneContentRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/scenes/:sceneId/layers', async (request, reply) => {
@@ -39,20 +46,38 @@ export function registerSceneContentRoutes(app: FastifyInstance, io: Server) {
     return reply.code(201).send({ layer });
   });
   app.patch('/api/layers/:layerId', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
-    const { layerId } = request.params as { layerId: string };
-    const input = parseBody(updateSceneLayerSchema, request.body);
-    const [row] = await db.select({ layer: sceneLayers, scene: scenes }).from(sceneLayers).innerJoin(scenes, eq(sceneLayers.sceneId, scenes.id)).where(eq(sceneLayers.id, layerId)).limit(1);
-    if (!row) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(row.scene.campaignId, user.id);
-    if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    if (row.layer.kind === 'BACKGROUND' && input.locked === false) return reply.code(400).send({ error: 'BACKGROUND_LAYER_LOCKED' });
-    const { expectedVersion, ...patch } = input;
-    if (row.layer.kind === 'GM' && patch.visibleToPlayers === true) return reply.code(400).send({ error: 'GM_LAYER_PRIVATE' });
-    const [updated] = await db.update(sceneLayers).set({ ...patch, version: row.layer.version + 1 }).where(and(eq(sceneLayers.id, layerId), eq(sceneLayers.version, expectedVersion))).returning();
-    if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
-    await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'scene.layer_updated', targetId: layerId });
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+    const tokenHash = digest(cookie);
+    const layerId = parseBody(idSchema, (request.params as { layerId: string }).layerId);
+    const { expectedVersion, ...patch } = parseBody(updateSceneLayerSchema, request.body);
+    const result = await db.transaction(async (tx) => {
+      const session = await lockCommandSession(tx, tokenHash);
+      if (!session) return { error: 'UNAUTHENTICATED' } as const;
+      const [location] = await tx.select({ sceneId: sceneLayers.sceneId }).from(sceneLayers).where(eq(sceneLayers.id, layerId)).limit(1);
+      if (!location) return { error: 'NOT_FOUND' } as const;
+      const context = await lockObjectScene(tx, location.sceneId, session.userId);
+      if ('error' in context) return context;
+      const { scene, role } = context;
+      if (role === 'PLAYER') return { error: 'FORBIDDEN' } as const;
+      const [layer] = await tx.select().from(sceneLayers)
+        .where(and(eq(sceneLayers.id, layerId), eq(sceneLayers.sceneId, scene.id))).for('no key update').limit(1);
+      if (!layer) return { error: 'NOT_FOUND' } as const;
+      if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
+      if (layer.kind === 'BACKGROUND' && patch.locked === false) return { error: 'BACKGROUND_LAYER_LOCKED' } as const;
+      if (layer.kind === 'GM' && patch.visibleToPlayers === true) return { error: 'GM_LAYER_PRIVATE' } as const;
+      if (layer.version !== expectedVersion) return { error: 'CONFLICT' } as const;
+      const [updated] = await tx.update(sceneLayers).set({ ...patch, version: expectedVersion + 1 })
+        .where(and(eq(sceneLayers.id, layerId), eq(sceneLayers.version, expectedVersion))).returning();
+      if (!updated) throw new Error('Locked scene layer changed before edit');
+      await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: session.userId, action: 'scene.layer_updated', targetId: layerId });
+      return { layer, scene, updated };
+    }, { isolationLevel: 'read committed' });
+    if ('error' in result) {
+      const status = result.error === 'BACKGROUND_LAYER_LOCKED' || result.error === 'GM_LAYER_PRIVATE' ? 400 : lifecycleStatus[result.error];
+      return reply.code(status).send({ error: result.error });
+    }
+    const { updated, ...row } = result;
     const room = `campaign:${row.scene.campaignId}`;
     let publicProjection = false;
     if (row.scene.isActive && row.layer.visibleToPlayers) {
@@ -65,27 +90,38 @@ export function registerSceneContentRoutes(app: FastifyInstance, io: Server) {
     return { layer: updated };
   });
   app.delete('/api/layers/:layerId', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
-    const { layerId } = request.params as { layerId: string };
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+    const tokenHash = digest(cookie);
+    const layerId = parseBody(idSchema, (request.params as { layerId: string }).layerId);
     const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
-    const [row] = await db.select({ layer: sceneLayers, scene: scenes }).from(sceneLayers).innerJoin(scenes, eq(sceneLayers.sceneId, scenes.id)).where(eq(sceneLayers.id, layerId)).limit(1);
-    if (!row) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(row.scene.campaignId, user.id);
-    if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    if (baseLayerKinds.includes(row.layer.kind as typeof baseLayerKinds[number])) return reply.code(409).send({ error: 'BASE_LAYER_REQUIRED' });
-    const outcome = await db.transaction(async (tx) => {
-      const [layer] = await tx.select({ id: sceneLayers.id }).from(sceneLayers)
-        .where(and(eq(sceneLayers.id, layerId), eq(sceneLayers.version, input.expectedVersion))).for('update');
-      if (!layer) return 'CONFLICT';
+    const result = await db.transaction(async (tx) => {
+      const session = await lockCommandSession(tx, tokenHash);
+      if (!session) return { error: 'UNAUTHENTICATED' } as const;
+      const [location] = await tx.select({ sceneId: sceneLayers.sceneId }).from(sceneLayers).where(eq(sceneLayers.id, layerId)).limit(1);
+      if (!location) return { error: 'NOT_FOUND' } as const;
+      const context = await lockObjectScene(tx, location.sceneId, session.userId);
+      if ('error' in context) return context;
+      const { scene, role } = context;
+      if (role === 'PLAYER') return { error: 'FORBIDDEN' } as const;
+      const [layer] = await tx.select().from(sceneLayers)
+        .where(and(eq(sceneLayers.id, layerId), eq(sceneLayers.sceneId, scene.id))).for('update').limit(1);
+      if (!layer) return { error: 'NOT_FOUND' } as const;
+      if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
+      if (baseLayerKinds.includes(layer.kind as typeof baseLayerKinds[number])) return { error: 'BASE_LAYER_REQUIRED' } as const;
+      if (layer.version !== input.expectedVersion) return { error: 'CONFLICT' } as const;
       const [object] = await tx.select({ id: sceneObjects.id }).from(sceneObjects)
         .where(and(eq(sceneObjects.layerId, layerId), isNull(sceneObjects.deletedAt))).limit(1);
-      if (object) return 'LAYER_NOT_EMPTY';
+      if (object) return { error: 'LAYER_NOT_EMPTY' } as const;
       await tx.delete(sceneObjects).where(and(eq(sceneObjects.layerId, layerId), isNotNull(sceneObjects.deletedAt)));
       await tx.delete(sceneLayers).where(eq(sceneLayers.id, layerId));
-      return null;
-    });
-    if (outcome) return reply.code(409).send({ error: outcome });
+      return { layer, scene };
+    }, { isolationLevel: 'read committed' });
+    if ('error' in result) {
+      const status = result.error === 'BASE_LAYER_REQUIRED' || result.error === 'LAYER_NOT_EMPTY' ? 409 : lifecycleStatus[result.error];
+      return reply.code(status).send({ error: result.error });
+    }
+    const row = result;
     const room = `campaign:${row.scene.campaignId}`;
     if (row.scene.isActive && row.layer.visibleToPlayers) io.to(room).emit('scene:layer_deleted', { sceneId: row.scene.id, layerId });
     else io.to(`${room}:gm`).emit('scene:layer_deleted', { sceneId: row.scene.id, layerId });
@@ -102,28 +138,13 @@ export function registerSceneContentRoutes(app: FastifyInstance, io: Server) {
     return rows.filter(({ object, layer }) => role !== 'PLAYER' || (object.visible && canReadSceneLayer(role, scene.isActive, false, layer.visibleToPlayers, layer.kind))).map(({ object }) => sceneObjectProjection(object, role, user.id));
   });
   app.delete('/api/scenes/:sceneId/my-drawings', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { sceneId } = request.params as { sceneId: string };
-    const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
-    if (!scene || scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(scene.campaignId, user.id);
-    if (!role) return reply.code(403).send({ error: 'FORBIDDEN' });
-    if (role === 'PLAYER' && !scene.isActive) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const removed = await db.transaction(async (tx) => {
-      const owned = await tx.select().from(sceneObjects).where(and(eq(sceneObjects.sceneId, sceneId), eq(sceneObjects.createdBy, user.id), eq(sceneObjects.kind, 'FREEHAND'), isNull(sceneObjects.deletedAt))).for('update');
-      if (owned.length === 0) return [];
-      const layerRows = await tx.select().from(sceneLayers).where(inArray(sceneLayers.id, owned.map((object) => object.layerId)));
-      const layerById = new Map(layerRows.map((layer) => [layer.id, layer]));
-      const deleted = await tx.delete(sceneObjects).where(and(eq(sceneObjects.sceneId, sceneId), inArray(sceneObjects.id, owned.map((object) => object.id)), eq(sceneObjects.createdBy, user.id))).returning({ id: sceneObjects.id, layerId: sceneObjects.layerId, visible: sceneObjects.visible });
-      if (deleted.length) await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.own_drawings_cleared', targetId: sceneId, detail: String(deleted.length) });
-      return deleted.map((object) => ({ ...object, layer: layerById.get(object.layerId) }));
-    });
-    const room = `campaign:${scene.campaignId}`;
-    for (const object of removed) {
-      if (scene.isActive && object.visible && object.layer?.visibleToPlayers && object.layer.kind !== 'GM') io.to(room).emit('scene:object_deleted', { sceneId, objectId: object.id });
-      else io.to(`${room}:gm`).emit('scene:object_deleted', { sceneId, objectId: object.id });
-    }
-    return { deletedCount: removed.length };
+    const result = await clearOwnDrawings(digest(cookie), sceneId);
+    if ('error' in result) return reply.code(lifecycleStatus[result.error]).send({ error: result.error });
+    void publishObjectLifecycle(io, result.publication).catch(() => request.log.error('Committed drawing cleanup could not be published'));
+    return { deletedCount: result.objects.length };
   });
   app.post('/api/scenes/:sceneId/objects', async (request, reply) => {
     const user = await requireUser(request, reply); if (!user) return;
@@ -161,18 +182,17 @@ export function registerSceneContentRoutes(app: FastifyInstance, io: Server) {
     const { sceneId } = request.params as { sceneId: string };
     const input = parseBody(duplicateSceneObjectsSchema, request.body);
     const result = await db.transaction(async (tx) => {
-      const [scene] = await tx.select().from(scenes).where(eq(scenes.id, sceneId)).for('update').limit(1);
-      if (!scene || scene.archivedAt) return { error: 'NOT_FOUND' as const };
-      const [membership] = await tx.select({ role: memberships.role }).from(memberships)
-        .where(and(eq(memberships.campaignId, scene.campaignId), eq(memberships.userId, user.id))).limit(1);
-      if (!membership || !['OWNER', 'GM'].includes(membership.role)) return { error: 'FORBIDDEN' as const };
-      const [layer] = await tx.select().from(sceneLayers).where(and(eq(sceneLayers.id, input.layerId), eq(sceneLayers.sceneId, sceneId))).for('update').limit(1);
+      const context = await lockObjectScene(tx, sceneId, user.id);
+      if ('error' in context) return context;
+      const { scene, role } = context;
+      if (role === 'PLAYER') return { error: 'FORBIDDEN' as const };
+      const layer = (await lockObjectLayers(tx, scene.id, [input.layerId])).get(input.layerId.toLowerCase());
       if (!layer) return { error: 'INVALID_LAYER' as const };
       if (layer.locked) return { error: 'LAYER_LOCKED' as const };
       if (layer.kind === 'BACKGROUND') return { error: 'INVALID_LAYER' as const };
       const sourceRows = await tx.select().from(sceneObjects)
         .where(and(eq(sceneObjects.sceneId, sceneId), isNull(sceneObjects.deletedAt), inArray(sceneObjects.id, input.objects.map((item) => item.objectId))))
-        .orderBy(asc(sceneObjects.id)).for('update');
+        .orderBy(asc(sceneObjects.id)).for('share');
       if (sourceRows.length !== input.objects.length) return { error: 'NOT_FOUND' as const };
       const sources = new Map(sourceRows.map((object) => [object.id, object]));
       if (input.objects.some((item) => sources.get(item.objectId)?.version !== item.expectedVersion)) return { error: 'CONFLICT' as const };
@@ -199,110 +219,79 @@ export function registerSceneContentRoutes(app: FastifyInstance, io: Server) {
     return reply.code(201).send({ objects: result.objects.map((object) => sceneObjectProjection(object, 'OWNER')) });
   });
   app.patch('/api/scenes/:sceneId/object-lifecycle', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { sceneId } = request.params as { sceneId: string };
-    const { action, objects } = parseBody(sceneObjectLifecycleSchema, request.body);
-    const [scene] = await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
-    if (!scene || scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(scene.campaignId, user.id);
-    if (!role || role === 'PLAYER') return reply.code(403).send({ error: 'FORBIDDEN' });
-
-    const expected = new Map(objects.map(({ objectId, expectedVersion }) => [objectId, expectedVersion]));
-    const result = await db.transaction(async (tx) => {
-      const rows = await tx.select({ object: sceneObjects, layer: sceneLayers }).from(sceneObjects)
-        .innerJoin(sceneLayers, eq(sceneLayers.id, sceneObjects.layerId))
-        .where(and(eq(sceneObjects.sceneId, sceneId), inArray(sceneObjects.id, [...expected.keys()])))
-        .orderBy(asc(sceneObjects.id)).for('update', { of: sceneObjects });
-      if (rows.length !== expected.size) return { error: 'NOT_FOUND' } as const;
-      if (rows.some(({ object }) => object.version !== expected.get(object.id) || Boolean(object.deletedAt) !== (action === 'restore'))) return { error: 'CONFLICT' } as const;
-      if (rows.some(({ layer }) => layer.locked)) return { error: 'LAYER_LOCKED' } as const;
-      if (rows.some(({ object }) => object.locked)) return { error: 'OBJECT_LOCKED' } as const;
-      const updated = await tx.update(sceneObjects).set({
-        deletedAt: action === 'delete' ? new Date() : null,
-        version: sql`${sceneObjects.version} + 1`,
-      }).where(and(eq(sceneObjects.sceneId, sceneId), inArray(sceneObjects.id, [...expected.keys()]))).returning();
-      await tx.insert(auditEvents).values(updated.map((object) => ({
-        campaignId: scene.campaignId, actorId: user.id, action: action === 'delete' ? 'scene.object_deleted' : 'scene.object_restored', targetId: object.id,
-      })));
-      return { updated, layers: new Map(rows.map(({ object, layer }) => [object.id, layer])) } as const;
-    });
-    if ('error' in result) return reply.code(result.error === 'NOT_FOUND' ? 404 : 409).send({ error: result.error });
-    const room = `campaign:${scene.campaignId}`;
-    for (const object of result.updated) {
-      const layer = result.layers.get(object.id)!;
-      const visible = scene.isActive && object.visible && layer.visibleToPlayers && layer.kind !== 'GM';
-      const audience = io.to(visible ? room : `${room}:gm`);
-      if (action === 'delete') audience.emit('scene:object_deleted', { sceneId, objectId: object.id });
-      else audience.emit('scene:object_created', { object: sceneObjectProjection(object, visible ? 'PLAYER' : role) });
-    }
-    return { objects: result.updated.map((object) => sceneObjectProjection(object, role)) };
+    const result = await changeObjectLifecycle(digest(cookie), sceneId, request.body);
+    if ('error' in result) return reply.code(lifecycleStatus[result.error]).send({ error: result.error });
+    void publishObjectLifecycle(io, result.publication).catch(() => request.log.error('Committed object lifecycle change could not be published'));
+    return { objects: result.objects };
   });
   app.patch('/api/objects/:objectId', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
-    const { objectId } = request.params as { objectId: string };
-    const input = parseBody(updateSceneObjectSchema, request.body);
-    const [row] = await db.select({ object: sceneObjects, layer: sceneLayers, scene: scenes }).from(sceneObjects).innerJoin(sceneLayers, eq(sceneObjects.layerId, sceneLayers.id)).innerJoin(scenes, eq(sceneObjects.sceneId, scenes.id)).where(eq(sceneObjects.id, objectId)).limit(1);
-    if (!row || row.object.deletedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(row.scene.campaignId, user.id);
-    if (!role) return reply.code(403).send({ error: 'FORBIDDEN' });
-    const canManage = role === 'OWNER' || role === 'GM';
-    if (!canManage) {
-      const [campaign] = await db.select({ playersCanDraw: campaigns.playersCanDraw }).from(campaigns).where(eq(campaigns.id, row.scene.campaignId)).limit(1);
-      if (role !== 'PLAYER' || !campaign?.playersCanDraw || !row.scene.isActive || row.object.createdBy !== user.id || row.object.kind !== 'FREEHAND' || row.layer.kind !== 'OBJECTS' || !row.layer.visibleToPlayers) return reply.code(403).send({ error: 'FORBIDDEN' });
-    }
-    if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    if (row.layer.locked) return reply.code(409).send({ error: 'LAYER_LOCKED' });
-    const { expectedVersion, ...patch } = input;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+    const tokenHash = digest(cookie);
+    const objectId = parseBody(idSchema, (request.params as { objectId: string }).objectId);
+    const { expectedVersion, ...patch } = parseBody(updateSceneObjectSchema, request.body);
     const requestedFields = Object.keys(request.body as Record<string, unknown>).filter((field) => field !== 'expectedVersion');
-    if (!canManage && requestedFields.some((field) => !['x', 'y', 'width', 'height', 'color', 'strokeWidth', 'points'].includes(field))) return reply.code(403).send({ error: 'FORBIDDEN' });
-    if (row.object.locked && !(patch.locked === false && requestedFields.length === 1 && requestedFields[0] === 'locked')) return reply.code(409).send({ error: 'OBJECT_LOCKED' });
-    let targetLayerKind = row.layer.kind;
-    if (patch.layerId) {
-      const [nextLayer] = await db.select().from(sceneLayers).where(and(eq(sceneLayers.id, patch.layerId), eq(sceneLayers.sceneId, row.scene.id))).limit(1);
-      if (!nextLayer) return reply.code(400).send({ error: 'INVALID_LAYER' });
-      if (nextLayer.locked) return reply.code(409).send({ error: 'LAYER_LOCKED' });
-      targetLayerKind = nextLayer.kind;
+    const result = await db.transaction(async (tx) => {
+      const session = await lockCommandSession(tx, tokenHash);
+      if (!session) return { error: 'UNAUTHENTICATED' } as const;
+      const [location] = await tx.select({ sceneId: sceneObjects.sceneId, layerId: sceneObjects.layerId }).from(sceneObjects)
+        .where(and(eq(sceneObjects.id, objectId), isNull(sceneObjects.deletedAt))).limit(1);
+      if (!location) return { error: 'NOT_FOUND' } as const;
+      const context = await lockObjectScene(tx, location.sceneId, session.userId);
+      if ('error' in context) return context;
+      const { role, scene } = context;
+      const layers = await lockObjectLayers(tx, scene.id, patch.layerId ? [location.layerId, patch.layerId.toLowerCase()] : [location.layerId]);
+      const [object] = await lockSceneObjects(tx, scene.id, [objectId]);
+      if (!object || object.deletedAt) return { error: 'NOT_FOUND' } as const;
+      if (!await commandSessionIsActive(tx, tokenHash)) return { error: 'UNAUTHENTICATED' } as const;
+      const layer = layers.get(object.layerId);
+      if (role === 'PLAYER') {
+        if (!layer || !object.visible || !canReadSceneLayer(role, scene.isActive, false, layer.visibleToPlayers, layer.kind)) return { error: 'FORBIDDEN' } as const;
+        const [campaign] = await tx.select({ playersCanDraw: campaigns.playersCanDraw }).from(campaigns).where(eq(campaigns.id, scene.campaignId)).limit(1);
+        if (!campaign?.playersCanDraw || object.createdBy !== session.userId || object.kind !== 'FREEHAND' || layer.kind !== 'OBJECTS' ||
+            requestedFields.some((field) => !['x', 'y', 'width', 'height', 'color', 'strokeWidth', 'points'].includes(field))) return { error: 'FORBIDDEN' } as const;
+      }
+      if (object.layerId !== location.layerId || object.version !== expectedVersion) return { error: 'CONFLICT' } as const;
+      if (!layer) return { error: 'NOT_FOUND' } as const;
+      if (layer.locked) return { error: 'LAYER_LOCKED' } as const;
+      if (object.locked && !(patch.locked === false && requestedFields.length === 1 && requestedFields[0] === 'locked')) return { error: 'OBJECT_LOCKED' } as const;
+      const target = patch.layerId ? layers.get(patch.layerId.toLowerCase()) : layer;
+      if (!target) return { error: 'INVALID_LAYER' } as const;
+      if (target.locked) return { error: 'LAYER_LOCKED' } as const;
+      if (patch.assetId) {
+        const [asset] = await tx.select({ id: assets.id }).from(assets)
+          .where(and(eq(assets.id, patch.assetId), eq(assets.campaignId, scene.campaignId))).limit(1);
+        if (!asset) return { error: 'INVALID_ASSET' } as const;
+      }
+      const [updated] = await tx.update(sceneObjects).set({ ...patch, ...(target.kind === 'GM' ? { visible: false } : {}), version: expectedVersion + 1 })
+        .where(and(eq(sceneObjects.id, objectId), eq(sceneObjects.version, expectedVersion), isNull(sceneObjects.deletedAt))).returning();
+      if (!updated) throw new Error('Locked scene object changed before edit');
+      await tx.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: session.userId, action: 'scene.object_updated', targetId: objectId });
+      return { updated, object, layer, target, scene, role, userId: session.userId };
+    }, { isolationLevel: 'read committed' });
+    if ('error' in result) {
+      const status = result.error === 'INVALID_LAYER' || result.error === 'INVALID_ASSET' ? 400 : lifecycleStatus[result.error];
+      return reply.code(status).send({ error: result.error });
     }
-    if (targetLayerKind === 'GM') patch.visible = false;
-    if (patch.assetId) {
-      const [asset] = await db.select({ id: assets.id }).from(assets).where(and(eq(assets.id, patch.assetId), eq(assets.campaignId, row.scene.campaignId))).limit(1);
-      if (!asset) return reply.code(400).send({ error: 'INVALID_ASSET' });
-    }
-    const [updated] = await db.update(sceneObjects).set({ ...patch, version: row.object.version + 1 }).where(and(eq(sceneObjects.id, objectId), eq(sceneObjects.version, expectedVersion), isNull(sceneObjects.deletedAt))).returning();
-    if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
-    await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'scene.object_updated', targetId: objectId });
-    const newLayerId = updated.layerId;
-    const [newLayer] = newLayerId === row.layer.id ? [row.layer] : await db.select().from(sceneLayers).where(eq(sceneLayers.id, newLayerId)).limit(1);
-    const room = `campaign:${row.scene.campaignId}`;
-    const wasPublic = row.scene.isActive && row.layer.visibleToPlayers && row.layer.kind !== 'GM' && row.object.visible;
-    const isPublic = row.scene.isActive && newLayer?.visibleToPlayers && newLayer.kind !== 'GM' && updated.visible;
-    if (wasPublic && !isPublic) io.to(room).emit('scene:object_deleted', { sceneId: row.scene.id, objectId });
+    const { updated, object, layer, target, scene, role, userId } = result;
+    const room = `campaign:${scene.campaignId}`;
+    const wasPublic = scene.isActive && layer.visibleToPlayers && layer.kind !== 'GM' && object.visible;
+    const isPublic = scene.isActive && target.visibleToPlayers && target.kind !== 'GM' && updated.visible;
+    if (wasPublic && !isPublic) io.to(room).emit('scene:object_deleted', { sceneId: scene.id, objectId });
     if (isPublic) io.to(room).emit('scene:object_updated', { object: sceneObjectProjection(updated, 'PLAYER') });
     else io.to(`${room}:gm`).emit('scene:object_updated', { object: sceneObjectProjection(updated, 'OWNER') });
-    return { object: sceneObjectProjection(updated, role, user.id) };
+    return { object: sceneObjectProjection(updated, role, userId) };
   });
   app.delete('/api/objects/:objectId', async (request, reply) => {
-    const user = await requireUser(request, reply); if (!user) return;
+    const cookie = request.cookies[cookieName];
+    if (!cookie) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
     const { objectId } = request.params as { objectId: string };
-    const input = parseBody(z.object({ expectedVersion: z.number().int().positive() }), request.body);
-    const [row] = await db.select({ object: sceneObjects, layer: sceneLayers, scene: scenes }).from(sceneObjects).innerJoin(sceneLayers, eq(sceneObjects.layerId, sceneLayers.id)).innerJoin(scenes, eq(sceneObjects.sceneId, scenes.id)).where(eq(sceneObjects.id, objectId)).limit(1);
-    if (!row || row.object.deletedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const role = await roleFor(row.scene.campaignId, user.id);
-    if (!role) return reply.code(403).send({ error: 'FORBIDDEN' });
-    const canManage = role === 'OWNER' || role === 'GM';
-    if (!canManage && (role !== 'PLAYER' || row.object.kind !== 'FREEHAND' || row.object.createdBy !== user.id)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    if (row.scene.archivedAt) return reply.code(404).send({ error: 'NOT_FOUND' });
-    if (row.layer.locked) return reply.code(409).send({ error: 'LAYER_LOCKED' });
-    if (row.object.locked) return reply.code(409).send({ error: 'OBJECT_LOCKED' });
-    const filter = and(eq(sceneObjects.id, objectId), eq(sceneObjects.version, input.expectedVersion), isNull(sceneObjects.deletedAt));
-    const [deleted] = canManage
-      ? await db.update(sceneObjects).set({ deletedAt: new Date(), version: input.expectedVersion + 1 }).where(filter).returning({ id: sceneObjects.id })
-      : await db.delete(sceneObjects).where(filter).returning({ id: sceneObjects.id });
-    if (!deleted) return reply.code(409).send({ error: 'CONFLICT' });
-    const room = `campaign:${row.scene.campaignId}`;
-    if (row.scene.isActive && row.layer.visibleToPlayers && row.layer.kind !== 'GM' && row.object.visible) io.to(room).emit('scene:object_deleted', { sceneId: row.scene.id, objectId });
-    else io.to(`${room}:gm`).emit('scene:object_deleted', { sceneId: row.scene.id, objectId });
-    await db.insert(auditEvents).values({ campaignId: row.scene.campaignId, actorId: user.id, action: 'scene.object_deleted', targetId: objectId });
+    const result = await deleteSceneObject(digest(cookie), objectId, request.body);
+    if ('error' in result) return reply.code(lifecycleStatus[result.error]).send({ error: result.error });
+    void publishObjectLifecycle(io, result.publication).catch(() => request.log.error('Committed object deletion could not be published'));
     return reply.code(204).send();
   });
 }
