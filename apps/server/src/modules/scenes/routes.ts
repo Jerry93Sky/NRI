@@ -9,6 +9,7 @@ import type { Server } from 'socket.io';
 import { parseBody, requireUser, roleFor } from '../../security/access.js';
 import { publicScene } from '../../domain/projections.js';
 import { defaultLayerRows } from '../../domain/defaultLayers.js';
+import { lockCampaign, lockCampaignRoles } from '../../security/commandAccess.js';
 
 export function registerSceneRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns/:campaignId/scenes', async (request, reply) => {
@@ -78,6 +79,9 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     let result: { scene: typeof scene; activated: typeof scene | null };
     try {
       result = await db.transaction(async (tx) => {
+        if (!await lockCampaign(tx, scene.campaignId, 'no key update')) throw new Error('CAMPAIGN_FORBIDDEN');
+        const currentRole = (await lockCampaignRoles(tx, scene.campaignId, [user.id])).get(user.id);
+        if (currentRole !== 'OWNER' && currentRole !== 'GM') throw new Error('CAMPAIGN_FORBIDDEN');
         const [updated] = await tx.update(scenes).set({ archivedAt: new Date(), isActive: false, version: scene.version + 1 }).where(and(eq(scenes.id, sceneId), eq(scenes.version, input.expectedVersion), isNull(scenes.archivedAt))).returning();
         if (!updated) throw new Error('SCENE_CONFLICT');
         let activated: typeof scene | null = null;
@@ -89,6 +93,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
         return { scene: updated, activated };
       });
     } catch (error) {
+      if (error instanceof Error && error.message === 'CAMPAIGN_FORBIDDEN') return reply.code(403).send({ error: 'FORBIDDEN' });
       if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
       throw error;
     }
@@ -101,6 +106,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     const role = await roleFor(input.campaignId, user.id);
     if (!role || !['OWNER', 'GM'].includes(role)) return reply.code(403).send({ error: 'FORBIDDEN' });
     const scene = await db.transaction(async (tx) => {
+      if (!await lockCampaign(tx, input.campaignId, 'no key update')) return null;
       const [last] = await tx.select({ sortOrder: scenes.sortOrder }).from(scenes).where(eq(scenes.campaignId, input.campaignId)).orderBy(desc(scenes.sortOrder)).limit(1);
       const [active] = await tx.select({ id: scenes.id }).from(scenes).where(and(eq(scenes.campaignId, input.campaignId), eq(scenes.isActive, true), isNull(scenes.archivedAt))).limit(1);
       const [created] = await tx.insert(scenes).values({ campaignId: input.campaignId, title: input.title, gridSize: input.gridSize, sortOrder: (last?.sortOrder ?? -1) + 1, isActive: !active, published: !active }).returning();
@@ -108,6 +114,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       if (created) await tx.insert(auditEvents).values({ campaignId: input.campaignId, actorId: user.id, action: 'scene.created', targetId: created.id });
       return created;
     });
+    if (scene === null) return reply.code(403).send({ error: 'FORBIDDEN' });
     if (!scene) throw new Error('Scene creation failed');
     if (scene.isActive) io.to(`campaign:${input.campaignId}`).emit('scene:activated', { campaignId: input.campaignId, sceneId: scene.id });
     return reply.code(201).send({ scene });
@@ -125,6 +132,9 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     let activated: typeof scene;
     try {
       activated = await db.transaction(async (tx) => {
+        if (!await lockCampaign(tx, scene.campaignId, 'no key update')) throw new Error('CAMPAIGN_FORBIDDEN');
+        const currentRole = (await lockCampaignRoles(tx, scene.campaignId, [user.id])).get(user.id);
+        if (currentRole !== 'OWNER' && currentRole !== 'GM') throw new Error('CAMPAIGN_FORBIDDEN');
         await tx.update(scenes).set({ isActive: false, version: sql`${scenes.version} + 1` }).where(and(eq(scenes.campaignId, scene.campaignId), eq(scenes.isActive, true)));
         const [updated] = await tx.update(scenes).set({ isActive: true, published: true, version: scene.version + 1 }).where(and(eq(scenes.id, scene.id), eq(scenes.version, input.expectedVersion), isNull(scenes.archivedAt))).returning();
         if (!updated) throw new Error('SCENE_CONFLICT');
@@ -132,6 +142,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
         return updated;
       });
     } catch (error) {
+      if (error instanceof Error && error.message === 'CAMPAIGN_FORBIDDEN') return reply.code(403).send({ error: 'FORBIDDEN' });
       if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
       throw error;
     }
@@ -162,6 +173,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     if (new Set(input.scenes.map(({ id }) => id)).size !== input.scenes.length) return reply.code(400).send({ error: 'INVALID' });
     try {
       await db.transaction(async (tx) => {
+        if (!await lockCampaign(tx, campaignId, 'no key update')) throw new Error('CAMPAIGN_FORBIDDEN');
         const current = await tx.select().from(scenes).where(and(eq(scenes.campaignId, campaignId), isNull(scenes.archivedAt)));
         if (current.length !== input.scenes.length || input.scenes.some((item) => !current.some((scene) => scene.id === item.id && scene.version === item.expectedVersion))) throw new Error('SCENE_CONFLICT');
         for (const [sortOrder, item] of input.scenes.entries()) {
@@ -171,6 +183,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
         await tx.insert(auditEvents).values({ campaignId, actorId: user.id, action: 'scenes.reordered' });
       });
     } catch (error) {
+      if (error instanceof Error && error.message === 'CAMPAIGN_FORBIDDEN') return reply.code(403).send({ error: 'FORBIDDEN' });
       if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
       throw error;
     }

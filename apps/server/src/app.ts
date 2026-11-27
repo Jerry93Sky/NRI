@@ -56,7 +56,7 @@ export async function createApp() {
     }
     catch { return reply.code(503).send({ status: 'not_ready' }); }
   });
-  const io = registerRealtime(app.server);
+  const io = registerRealtime(app.server, app.log);
   app.get('/api/metrics', async (request, reply) => {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '')) {
       return reply.code(404).send({ error: 'NOT_FOUND' });

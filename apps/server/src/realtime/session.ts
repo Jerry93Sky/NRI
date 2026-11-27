@@ -3,7 +3,7 @@ import { cookieName } from '../config/runtime.js';
 import { activeSession, digest } from '../security/access.js';
 
 const sessionRoom = (tokenHash: string) => `session:${tokenHash}`;
-type SocketSession = { tokenHash: string; expiresAt: number };
+export type SocketSession = { tokenHash: string; expiresAt: number };
 
 export function disconnectSession(io: Server, tokenHash: string) {
   io.in(sessionRoom(tokenHash)).disconnectSockets(true);

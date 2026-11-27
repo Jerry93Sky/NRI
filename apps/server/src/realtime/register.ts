@@ -1,19 +1,20 @@
 import { Server } from 'socket.io';
 import { randomInt } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { canMoveToken, diceSchema, moveTokenSchema, parseDiceExpression } from '@nri/contracts';
+import { diceSchema, parseDiceExpression } from '@nri/contracts';
 import { db } from '../db/index.js';
-import { diceRolls, messages, scenes, tokens } from '../db/schema.js';
+import { diceRolls, messages, scenes } from '../db/schema.js';
 import type { FastifyInstance } from 'fastify';
 import { webOrigins } from '../config/runtime.js';
-import { parseBody, roleFor } from '../security/access.js';
-import { publicToken } from '../domain/projections.js';
-import { authenticateRealtime } from './session.js';
+import { roleFor } from '../security/access.js';
+import { moveToken } from '../modules/tokens/movement.js';
+import { authenticateRealtime, type SocketSession } from './session.js';
+import { publishMovement } from './movementEvents.js';
 import { campaignMemberRoom, leaveCampaign } from './campaignRooms.js';
 import { guardCommands } from './commandGuard.js';
 
-export function registerRealtime(server: FastifyInstance['server']) {
+export function registerRealtime(server: FastifyInstance['server'], logger: FastifyInstance['log']) {
   const io = new Server(server, { serveClient: false, maxHttpBufferSize: 64 * 1024, cors: { origin: webOrigins, credentials: true }, allowRequest: (request, callback) => { const origin = request.headers.origin; callback(null, !origin || webOrigins.includes(origin)); } });
   authenticateRealtime(io);
   io.on('connection', (socket) => {
@@ -68,26 +69,13 @@ export function registerRealtime(server: FastifyInstance['server']) {
     });
     socket.on('token:move', async (raw: unknown, callback?: (result: unknown) => void) => {
       try {
-        const input = parseBody(moveTokenSchema, raw);
-        const [token] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(eq(tokens.id, input.tokenId)).limit(1);
-        if (!token || token.token.deletedAt) return callback?.({ error: 'NOT_FOUND' });
-        const room = `campaign:${token.scene.campaignId}`;
-        if (!socket.rooms.has(room)) return callback?.({ error: 'FORBIDDEN' });
-        const role = await roleFor(token.scene.campaignId, user.id);
-        if (!role || token.scene.archivedAt || (!['OWNER', 'GM'].includes(role) && !token.scene.isActive)) return callback?.({ error: 'FORBIDDEN' });
-        if (!canMoveToken(role, user.id, token.token.ownerUserId, token.token.hidden) || token.token.locked) return callback?.({ error: 'FORBIDDEN' });
-        const [updated] = await db.update(tokens).set({ x: input.x, y: input.y, version: token.token.version + 1 }).where(and(eq(tokens.id, input.tokenId), eq(tokens.version, input.expectedVersion))).returning();
-        if (!updated) {
-          const [current] = await db.select({ token: tokens, scene: scenes }).from(tokens).innerJoin(scenes, eq(tokens.sceneId, scenes.id)).where(and(eq(tokens.id, input.tokenId), isNull(tokens.deletedAt))).limit(1);
-          const currentRole = current ? await roleFor(current.scene.campaignId, user.id) : null;
-          const stillAllowed = Boolean(current && currentRole && !current.scene.archivedAt && (currentRole === 'OWNER' || currentRole === 'GM' || current.scene.isActive) && !current.token.locked && canMoveToken(currentRole, user.id, current.token.ownerUserId, current.token.hidden));
-          const latest = stillAllowed && current && currentRole ? publicToken(current.token, currentRole === 'OWNER' || currentRole === 'GM', user.id) : undefined;
-          return callback?.({ error: 'CONFLICT', ...(latest ? { token: latest } : {}) });
-        }
-        const projection = publicToken(updated, true); const playerProjection = publicToken(updated);
-        callback?.({ ok: true, token: role === 'OWNER' || role === 'GM' ? projection : playerProjection });
-        ((updated.hidden || !token.scene.isActive) ? io.to(`${room}:gm`) : io.to(room)).emit('token:moved', updated.hidden || !token.scene.isActive ? projection : playerProjection);
-      } catch { callback?.({ error: 'INVALID' }); }
+        const { tokenHash } = socket.data.session as SocketSession;
+        const result = await moveToken(tokenHash, raw, (campaignId) => socket.connected && socket.rooms.has(`campaign:${campaignId}`));
+        if ('error' in result) return callback?.(result);
+
+        callback?.({ ok: true, token: result.projections[0] });
+        void publishMovement(io, result).catch(() => logger.error('Committed token movement could not be published'));
+      } catch { callback?.({ error: 'INTERNAL_ERROR' }); }
     });
     socket.on('chat:send', async (raw: unknown, callback?: (result: unknown) => void) => {
       try {
