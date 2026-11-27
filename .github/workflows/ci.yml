@@ -1,10 +1,16 @@
 name: CI
 on:
   push:
-    branches: [main, codex/v0-1-foundation-vtt]
-  pull_request:
     branches: [main]
+  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
@@ -34,9 +40,19 @@ jobs:
           package-manager-cache: false
       - run: corepack enable && corepack prepare pnpm@12.23.0 --activate
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit
+      - name: Check tracked files for secrets
+        run: node scripts/check-tracked-secrets.mjs
       - run: pnpm build
-      - name: Check operational backup script syntax
-        run: node --check scripts/backup.mjs
+      - name: Validate operational configuration
+        run: |
+          node --check scripts/backup.mjs
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.production.yml config -q
+        env:
+          NRI_DATABASE_PASSWORD: ci-compose-validation-only
+          WEB_ORIGIN: https://nri.example.invalid
+          NRI_TLS_DIR: .
       - run: pnpm typecheck
       - run: pnpm db:migrate
       - run: pnpm test
@@ -86,7 +102,7 @@ jobs:
           SESSION_SECRET: ci-secret-is-not-for-deployment
       - name: Install Playwright Chromium
         run: pnpm --filter @nri/web exec playwright install --with-deps chromium
-      - name: Run two-context browser privacy suite
+      - name: Run browser integration and privacy scenarios
         run: pnpm --filter @nri/web e2e
         env:
           CI: true
