@@ -7,11 +7,11 @@ import { canListScene } from '../../domain/sceneAccess.js';
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
 import { parseBody, requireUser, roleFor } from '../../security/access.js';
-import { publicScene } from '../../domain/projections.js';
 import { defaultLayerRows } from '../../domain/defaultLayers.js';
 import { lockCampaign, lockCampaignRoles } from '../../security/commandAccess.js';
 import { invalidateSceneInitiative } from '../initiative/service.js';
 import { publishInitiative } from '../../realtime/initiativeEvents.js';
+import { publishSceneActivation, publishSceneUpdate } from '../../realtime/sceneEvents.js';
 
 export function registerSceneRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns/:campaignId/scenes', async (request, reply) => {
@@ -41,7 +41,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     const [updated] = await db.update(scenes).set({ ...patch, version: scene.version + 1 }).where(and(eq(scenes.id, sceneId), eq(scenes.version, expectedVersion), isNull(scenes.archivedAt))).returning();
     if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
     await db.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.updated', targetId: sceneId });
-    if (updated.isActive) io.to(`campaign:${scene.campaignId}`).emit('scene:updated', { scene: publicScene(updated) });
+    if (updated.isActive) void publishSceneUpdate(io, scene.campaignId, sceneId, updated.version).catch(() => request.log.error('Scene update could not be published'));
     return { scene: updated };
   });
   app.post('/api/scenes/:sceneId/duplicate', async (request, reply) => {
@@ -100,7 +100,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
       throw error;
     }
-    if (scene.isActive) io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { campaignId: scene.campaignId, sceneId: result.activated?.id ?? null });
+    if (scene.isActive) void publishSceneActivation(io, scene.campaignId).catch(() => request.log.error('Scene activation could not be published'));
     if (result.initiativeVersion !== undefined) void publishInitiative(io, scene.campaignId, result.initiativeVersion).catch(() => request.log.error('Scene initiative could not be published'));
     return { scene: result.scene };
   });
@@ -120,7 +120,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
     });
     if (scene === null) return reply.code(403).send({ error: 'FORBIDDEN' });
     if (!scene) throw new Error('Scene creation failed');
-    if (scene.isActive) io.to(`campaign:${input.campaignId}`).emit('scene:activated', { campaignId: input.campaignId, sceneId: scene.id });
+    if (scene.isActive) void publishSceneActivation(io, input.campaignId).catch(() => request.log.error('Scene activation could not be published'));
     return reply.code(201).send({ scene });
   });
   app.put('/api/scenes/:sceneId/activate', async (request, reply) => {
@@ -151,7 +151,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       if (error instanceof Error && error.message === 'SCENE_CONFLICT') return reply.code(409).send({ error: 'CONFLICT' });
       throw error;
     }
-    io.to(`campaign:${scene.campaignId}`).emit('scene:activated', { campaignId: scene.campaignId, sceneId: result.activated.id });
+    void publishSceneActivation(io, scene.campaignId).catch(() => request.log.error('Scene activation could not be published'));
     if (result.initiativeVersion !== undefined) void publishInitiative(io, scene.campaignId, result.initiativeVersion).catch(() => request.log.error('Scene initiative could not be published'));
     return { scene: result.activated };
   });

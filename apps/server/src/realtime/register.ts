@@ -1,11 +1,8 @@
 import { Server } from 'socket.io';
-import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { db } from '../db/index.js';
-import { scenes } from '../db/schema.js';
 import type { FastifyInstance } from 'fastify';
 import { webOrigins } from '../config/runtime.js';
-import { roleFor } from '../security/access.js';
+import { db } from '../db/index.js';
 import { moveToken } from '../modules/tokens/movement.js';
 import { authenticateRealtime, type SocketSession } from './session.js';
 import { publishMovement } from './movementEvents.js';
@@ -13,6 +10,8 @@ import { campaignMemberRoom, leaveCampaign } from './campaignRooms.js';
 import { guardCommands } from './commandGuard.js';
 import { rollDice, sendChat } from '../modules/chat/commands.js';
 import { publishChat, publishRoll } from './chatDiceEvents.js';
+import { withSceneAudience } from './campaignAudience.js';
+import { lockCampaignActor } from '../security/commandAccess.js';
 
 export function registerRealtime(server: FastifyInstance['server'], logger: FastifyInstance['log']) {
   const io = new Server(server, { serveClient: false, maxHttpBufferSize: 64 * 1024, cors: { origin: webOrigins, credentials: true }, allowRequest: (request, callback) => { const origin = request.headers.origin; callback(null, !origin || webOrigins.includes(origin)); } });
@@ -28,19 +27,25 @@ export function registerRealtime(server: FastifyInstance['server'], logger: Fast
       const attempt = Symbol();
       joins.set(campaignId, attempt);
       try {
-        const role = await roleFor(campaignId, user.id);
-        if (joins.get(campaignId) !== attempt || !socket.connected) return callback?.({ error: 'JOIN_CANCELLED' });
-        if (!role) {
-          leaveCampaign(socket, campaignId, user.id);
-          return callback?.({ error: 'FORBIDDEN' });
+        const { tokenHash } = socket.data.session as SocketSession;
+        const result = await db.transaction(async (tx) => {
+          const actor = await lockCampaignActor(tx, tokenHash, campaignId);
+          if ('error' in actor || actor.userId !== user.id) return { error: 'FORBIDDEN' } as const;
+          if (joins.get(campaignId) !== attempt || !socket.connected) return { error: 'JOIN_CANCELLED' } as const;
+          const room = `campaign:${campaignId}`;
+          const rooms = [room, campaignMemberRoom(campaignId, user.id)];
+          if (actor.role === 'PLAYER') await socket.leave(`${room}:gm`);
+          else rooms.push(`${room}:gm`);
+          await socket.join(rooms);
+          if (!socket.connected) return { error: 'JOIN_CANCELLED' } as const;
+          return { role: actor.role } as const;
+        });
+        if ('error' in result) {
+          if (result.error === 'FORBIDDEN') leaveCampaign(socket, campaignId, user.id);
+          return callback?.({ error: result.error });
         }
-        const room = `campaign:${campaignId}`;
-        const rooms = [room, campaignMemberRoom(campaignId, user.id)];
-        if (role === 'PLAYER') void socket.leave(`${room}:gm`);
-        else rooms.push(`${room}:gm`);
-        void socket.join(rooms);
-        callback?.({ ok: true, role });
-        socket.to(room).emit('presence:joined', { userId: user.id, displayName: user.displayName });
+        socket.to(`campaign:${campaignId}`).emit('presence:joined', { userId: user.id, displayName: user.displayName });
+        callback?.({ ok: true, role: result.role });
       } catch {
         callback?.({ error: 'INTERNAL_ERROR' });
       } finally {
@@ -55,17 +60,26 @@ export function registerRealtime(server: FastifyInstance['server'], logger: Fast
     });
     socket.on('scene:pointer', async (raw: unknown, callback?: (result: unknown) => void) => {
       try {
-        const input = z.object({ campaignId: z.uuid(), sceneId: z.uuid(), x: z.number().finite().min(0).max(16384), y: z.number().finite().min(0).max(16384) }).parse(raw);
+        const input = z.object({ campaignId: z.uuid().transform((id) => id.toLowerCase()), sceneId: z.uuid().transform((id) => id.toLowerCase()),
+          x: z.number().finite().min(0).max(16384), y: z.number().finite().min(0).max(16384) }).parse(raw);
         if (!socket.rooms.has(`campaign:${input.campaignId}`)) return callback?.({ error: 'FORBIDDEN' });
         const now = Date.now();
         if (now - lastPointerAt < 50) return callback?.({ error: 'RATE_LIMITED' });
+        const accepted = await withSceneAudience(io, input.campaignId, input.sceneId, async (_tx, audience) => {
+          const actor = audience.recipients.find((recipient) => recipient.socket === socket && recipient.userId === user.id);
+          if (!actor || !audience.canSend(actor) || (actor.role === 'PLAYER' && !audience.isActive)) return false;
+          if (input.x > audience.width || input.y > audience.height) return 'INVALID' as const;
+          const payload = { sceneId: input.sceneId, pointerId: socket.id, userId: user.id, displayName: user.displayName, x: input.x, y: input.y };
+          for (const recipient of audience.recipients) {
+            if (!audience.canSend(recipient) || recipient.socket === socket) continue;
+            if (!audience.isActive && recipient.role === 'PLAYER') continue;
+            recipient.socket.emit('scene:pointer', payload);
+          }
+          return true;
+        });
+        if (accepted === 'INVALID') return callback?.({ error: 'INVALID' });
+        if (!accepted) return callback?.({ error: 'FORBIDDEN' });
         lastPointerAt = now;
-        const role = await roleFor(input.campaignId, user.id);
-        const [scene] = await db.select().from(scenes).where(and(eq(scenes.id, input.sceneId), eq(scenes.campaignId, input.campaignId))).limit(1);
-        if (!role || !scene || scene.archivedAt || (role === 'PLAYER' && !scene.isActive)) return callback?.({ error: 'FORBIDDEN' });
-        if (input.x > scene.width || input.y > scene.height) return callback?.({ error: 'INVALID' });
-        const room = scene.isActive ? `campaign:${input.campaignId}` : `campaign:${input.campaignId}:gm`;
-        socket.to(room).emit('scene:pointer', { sceneId: scene.id, pointerId: socket.id, userId: user.id, displayName: user.displayName, x: input.x, y: input.y });
         callback?.({ ok: true });
       } catch { callback?.({ error: 'INVALID' }); }
     });

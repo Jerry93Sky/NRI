@@ -13,7 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Server } from 'socket.io';
 import { parseBody, requireUser, roleFor } from '../../security/access.js';
 import { uploadDirectory } from '../../config/runtime.js';
-import { publicScene } from '../../domain/projections.js';
+import { publishSceneUpdate } from '../../realtime/sceneEvents.js';
 
 export function registerAssetRoutes(app: FastifyInstance, io: Server) {
   app.post('/api/campaigns/:campaignId/assets', async (request, reply) => {
@@ -181,7 +181,7 @@ export function registerAssetRoutes(app: FastifyInstance, io: Server) {
     const [updated] = await db.update(scenes).set({ backgroundAssetId: input.assetId, version: scene.version + 1 }).where(and(eq(scenes.id, sceneId), eq(scenes.version, input.expectedVersion))).returning();
     if (!updated) return reply.code(409).send({ error: 'CONFLICT' });
     await db.insert(auditEvents).values({ campaignId: scene.campaignId, actorId: user.id, action: 'scene.background_changed', targetId: sceneId });
-    if (updated.isActive) io.to(`campaign:${scene.campaignId}`).emit('scene:updated', { scene: publicScene(updated) });
+    if (updated.isActive) void publishSceneUpdate(io, scene.campaignId, sceneId, updated.version).catch(() => request.log.error('Scene update could not be published'));
     return { scene: updated };
   });
   app.get('/api/assets/:assetId', async (request, reply) => {

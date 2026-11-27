@@ -52,11 +52,11 @@ export async function withCampaignAudience<T>(io: Server, campaignId: string,
 }
 
 export async function withSceneAudience<T>(io: Server, campaignId: string, sceneId: string,
-  deliver: (tx: Transaction, scope: CampaignAudience & { isActive: boolean }) => Promise<T>) {
+  deliver: (tx: Transaction, scope: CampaignAudience & { isActive: boolean; width: number; height: number }) => Promise<T>) {
   return withCampaignAudience(io, campaignId, async (tx, scope) => {
-    const [scene] = await tx.select({ isActive: scenes.isActive }).from(scenes)
+    const [scene] = await tx.select({ isActive: scenes.isActive, width: scenes.width, height: scenes.height }).from(scenes)
       .where(and(eq(scenes.id, sceneId), eq(scenes.campaignId, campaignId), isNull(scenes.archivedAt))).for('share').limit(1);
     if (!scene) return;
-    return deliver(tx, { ...scope, isActive: scene.isActive });
+    return deliver(tx, { ...scope, ...scene });
   });
 }
