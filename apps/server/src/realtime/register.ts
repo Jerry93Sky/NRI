@@ -99,7 +99,9 @@ export function registerRealtime(server: FastifyInstance['server'], logger: Fast
         const { tokenHash } = socket.data.session as SocketSession;
         const result = await sendChat(tokenHash, raw, joined);
         if ('error' in result) return callback?.({ error: result.error });
-        await publishChat(io, result.message, user.displayName, socket, callback);
+        if (process.env.NODE_ENV === 'test' && process.env.NRI_ENABLE_TEST_FAULTS === 'true' &&
+          !result.replayed && typeof raw === 'object' && raw !== null && 'testDropAckAfterCommit' in raw && raw.testDropAckAfterCommit === true) return;
+        await publishChat(io, result.message, user.displayName, socket, callback, result.replayed);
       } catch { callback?.({ error: 'INTERNAL_ERROR' }); }
     });
     socket.on('dice:roll', async (raw: unknown, callback?: (result: unknown) => void) => {
@@ -107,7 +109,9 @@ export function registerRealtime(server: FastifyInstance['server'], logger: Fast
         const { tokenHash } = socket.data.session as SocketSession;
         const result = await rollDice(tokenHash, raw, joined);
         if ('error' in result) return callback?.({ error: result.error });
-        await publishRoll(io, result.roll, user.displayName, socket, callback);
+        if (process.env.NODE_ENV === 'test' && process.env.NRI_ENABLE_TEST_FAULTS === 'true' &&
+          !result.replayed && typeof raw === 'object' && raw !== null && 'testDropAckAfterCommit' in raw && raw.testDropAckAfterCommit === true) return;
+        await publishRoll(io, result.roll, user.displayName, socket, callback, result.replayed);
       } catch { callback?.({ error: 'INTERNAL_ERROR' }); }
     });
   });

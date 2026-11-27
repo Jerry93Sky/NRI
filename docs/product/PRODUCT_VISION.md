@@ -4,7 +4,7 @@
 
 The approved product name is **EVERDOOR** with the tagline **Every door, a new adventure**. “NRI Platform” remains the temporary technical project name. The genre-neutral symbol direction is a stylized opening door; final logo artwork remains open. The working base theme is Hearth: a welcoming place before a larger adventure. See [EVERDOOR Brand Vision](../design/EVERDOOR_BRAND_VISION.md) for approved decisions, planned journey, and unresolved design questions.
 
-The planned user journey is Landing → Campaign Doors → Campaign Lobby → Adventure. Campaign doors may represent distinct worlds; campaign layout and lobby details remain undecided. GM workflows prioritize campaign preparation and operation, while Player workflows prioritize immersion and convenient play. These are product direction only: do not treat them as implemented V0.1.1 features.
+The planned user journey is Landing → Campaign Doors → Campaign Lobby → Adventure. Doors use a responsive grid like folders, lead into a pre-session lobby, and represent access granted by server-side permissions. Public discovery and a GM marketplace are later concepts. The approved interaction direction and limits are recorded in [Campaign Doors](../design/CAMPAIGN_DOORS.md). These are product direction only: do not treat them as implemented V0.1.1 features.
 
 ## Purpose
 

@@ -159,7 +159,7 @@ try {
   await join(observer, foreign.id);
   await role(gm, 'GM');
   const own = await connect(owner, cid, 'OWNER');
-  const ack = (socket, event, data) => socket.timeout(timeout).emitWithAck(event, data);
+  const ack = (socket, event, data) => socket.timeout(timeout).emitWithAck(event, event === 'chat:send' ? { ...data, clientMessageId: data.clientMessageId ?? randomUUID() } : event === 'dice:roll' ? { ...data, requestId: data.requestId ?? randomUUID() } : data);
   const send = (socket, body, recipientId, campaignId = cid) => ack(socket, 'chat:send', { campaignId, body, recipientId });
   const roll = (socket, expression, hidden = true, campaignId = cid) => ack(socket, 'dice:roll', { campaignId, expression, hidden });
   if (process.argv.includes('--profile')) {

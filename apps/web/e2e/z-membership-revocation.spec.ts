@@ -41,7 +41,7 @@ function joinCampaign(socket: Socket, campaignId: string) {
 }
 
 function sendChat(socket: Socket, campaignId: string, body: string) {
-  return new Promise<{ ok?: boolean; error?: string }>((resolve) => socket.emit('chat:send', { campaignId, body }, resolve));
+  return new Promise<{ ok?: boolean; error?: string }>((resolve) => socket.emit('chat:send', { campaignId, clientMessageId: crypto.randomUUID(), body }, resolve));
 }
 
 test('membership removal revokes every open Player socket and stops campaign events', async ({ browser, baseURL }) => {

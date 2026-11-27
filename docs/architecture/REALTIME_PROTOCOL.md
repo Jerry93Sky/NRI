@@ -2,9 +2,9 @@
 
 ## Command ACK and transaction semantics
 
-For CMD-ACL REST writers, state and audit commit before the existing publisher is invoked. A failed state/audit transaction produces no success publication. Socket.IO is still best effort: an ACK or packet can be lost after commit, and already queued bytes cannot be recalled. The finite lost-response scope is in the [V0.1.1 closure plan](../releases/V0.1.1_CLOSURE_PLAN.md#конечный-scope-rt-retry). CMD-ACL introduces no global request-ID protocol.
+For CMD-ACL REST writers, state and audit commit before the existing publisher is invoked. A failed state/audit transaction produces no success publication. Socket.IO is still best effort: an ACK or packet can be lost after commit, and already queued bytes cannot be recalled. Chat and dice now have operation-specific request IDs with persisted results; this is not a global command-ID protocol. Remaining lost-response behavior is inventoried in the [retry policy](COMMAND_RETRY_POLICY.md).
 
-Socket.IO is used for multiplayer delivery. The current implementation uses named event payloads and acknowledgement callbacks; it does **not** implement a protocol-version envelope, command IDs, event cursors, replay, or general idempotency. This document describes the wire behavior that exists today.
+Socket.IO is used for multiplayer delivery. The current implementation uses named event payloads and acknowledgement callbacks; it does **not** implement a protocol-version envelope, event cursors, durable replay, or general idempotency. Only chat and dice accept scoped retry IDs, described below.
 
 ## Connection and rooms
 
@@ -18,10 +18,10 @@ The server resolves the opaque HTTP session cookie during the Socket.IO handshak
 | `campaign:leave` | campaign UUID string | no acknowledgement |
 | `scene:pointer` | `{campaignId, sceneId, x, y}` | `{ok}` or `{error}`; current session, campaign, sender/recipient memberships and roles, campaign-room subscription, and scene row are locked in one transaction through enqueue. Coordinates must be within scene bounds, Players may point only at the active scene, drafts reach managers only, and per-socket updates are throttled to 20/sec with a separate 1200/minute command ceiling |
 | `token:move` | `{tokenId, x, y, expectedVersion}` | `{ok: true, token}`, `{error: 'CONFLICT', token}`, or `{error}`. Conflict details require current permission to move. Inaccessible and unknown token IDs receive `FORBIDDEN` without a token |
-| `chat:send` | `{campaignId, body, recipientId?}` | `{ok, message}` or `{error}`; joined sender and recipient are validated transactionally, with private Player sends restricted to Owner/GM |
-| `dice:roll` | `{campaignId, expression, hidden?}` | `{ok, roll}` or `{error}`; server generates dice results and requires current manager access for hidden rolls |
+| `chat:send` | `{campaignId, clientMessageId, body, recipientId?}` | `{ok, message}` or `{error}`; current sender/recipient policy is validated transactionally; matching retry ID returns original row, changed payload conflicts |
+| `dice:roll` | `{campaignId, requestId, expression, hidden?}` | `{ok, roll}` or `{error}`; server generates once per request ID and requires current manager access to recover hidden results |
 
-REST endpoints implement scene activation and editing, token creation/ownership, token properties and resource adjustments, layer and scene-object reads/CRUD, and initiative mutations. Token resource adjustments check campaign membership, active-scene visibility, role/ownership, track visibility for players, bounds, and optimistic version. Layer/object writes check campaign membership, active/archive state, same-scene layer references, asset campaign scope, and optimistic versions. Their successful changes publish privacy-filtered events after persistence. There is no general command deduplication key; clients should not retry non-idempotent commands blindly.
+REST endpoints implement scene activation and editing, token creation/ownership, token properties and resource adjustments, layer and scene-object reads/CRUD, and initiative mutations. Token resource adjustments check campaign membership, active-scene visibility, role/ownership, track visibility for players, bounds, and optimistic version. Layer/object writes check campaign membership, active/archive state, same-scene layer references, asset campaign scope, and optimistic versions. Their successful changes publish privacy-filtered events after persistence. REST creates/copies/uploads do not yet have retry IDs; clients must not retry those non-idempotent commands blindly. See the [retry policy](COMMAND_RETRY_POLICY.md).
 
 ## Server events and confidentiality
 
@@ -50,7 +50,9 @@ Players receive the active, non-archived scene in REST scene lists and token sna
 
 ### Private channel recovery
 
-Private chat is delivered to matching personal sockets of current members, including another active login with a different campaign open. `GET /api/campaigns/:campaignId/messages` uses current viewer entitlement and returns the latest 100 permitted messages in chronological order. Original participants keep their own threads while members. A hidden roll uses the current manager audience, including the sending ACK. A committed append can return `FORBIDDEN` without a payload if the sending socket loses access before enqueue. Dice has no REST history. Clients do not retry these append-only commands automatically.
+Private chat is delivered to matching personal sockets of current members, including another active login with a different campaign open. `GET /api/campaigns/:campaignId/messages` uses current viewer entitlement and returns the latest 100 permitted messages in chronological order. Original participants keep their own threads while members. A hidden roll uses the current manager audience, including the sending ACK. A committed append can return `FORBIDDEN` without a payload if the sending socket loses access before enqueue. Dice has no REST history.
+
+`chat:send` carries `clientMessageId`; `dice:roll` carries `requestId`. Each ID is scoped to the authenticated user and campaign and is bound to a digest of result-affecting input. Same-ID/same-payload retries return the saved message or roll. Changed payload returns `CONFLICT`. The sender's current session and membership, current private-chat recipient rights, and current hidden-roll role are checked on replay. Replays ACK the original result but do not publish a second game event. IDs live as long as the message/roll row; campaign deletion removes both. The web client retries explicitly with the same in-memory payload after a missing ACK and never retries automatically. Other commands are not covered; see the [operation matrix](COMMAND_RETRY_POLICY.md).
 
 Initiative packets identify the campaign. The browser uses both projection events as invalidations appropriate to its current role, accepts only its current REST request and scope, and never restores state from a replayed packet. A later revision suppresses an older pending publication. A linked token hide or reveal invalidates the same tracker revision. Hidden turns have a null `currentEntryId` for Players.
 

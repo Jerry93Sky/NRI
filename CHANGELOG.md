@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — V0.1.1 RT-RETRY (in progress)
+
+- Add scoped, digest-bound retry IDs to public/private chat and dice; replay returns the original row/result after current authorization and does not republish an event.
+- Add explicit in-memory chat/dice recovery actions and outcome-unknown copy for optimistic resource adjustment; no blind automatic retries.
+- Add migration 0020 and an isolated PostgreSQL Socket.IO fault-injection scenario. Remaining create/copy/upload families are not yet covered; RT-RETRY remains `IN_PROGRESS`.
+- Record approved future Campaign Doors, lobby, access-key metaphor and marketplace direction as `PLANNED`; no V0.1.1 UI or backend implementation.
+- Prepare a finite SEC-OPS + PLAY-GESTURES validation package.
+
 ## Unreleased — V0.1.1 CMD-ACL (automated tests passed)
 
 - Move token, scene, campaign, membership/invitation and asset command authorization and required audit writes into lock-compatible PostgreSQL transactions; retain existing movement and realtime publisher paths.

@@ -21,7 +21,7 @@
 
 ### Landing and Campaign Doors
 
-The landing may use a classic game menu or a themed site. Campaigns are represented as doors to distinct worlds, each with a campaign description. The exact layout, cards, filters, and interactions remain open design questions.
+The landing may use a classic game menu or a themed site. Campaign Doors use a responsive grid of large, individually illustrated doors, presented like folders in Windows rather than a 3D corridor. Show each campaign title and a one- or two-line description beneath its door. Hover may crack the door open and reveal colored light; title hover shows a short story phrase, title click opens full details, and door click transitions into the campaign lobby. A separate crooked, plain door is captioned «Создать новое приключение». See [Campaign Doors](CAMPAIGN_DOORS.md) for the approved direction and open choices.
 
 ### Campaign Lobby
 
@@ -49,5 +49,5 @@ Player and GM discovery, campaign listings, friends, and social interaction are 
 
 ## Delivery boundaries
 
-All concepts in this document are `PLANNED`. The brand decision records direction, not final visual assets or implementation. Existing UI stays as-is in V0.1.1. No subscriptions, theme store, community features, audio engine, or commercial rights decision is introduced here. Revisit the experience through owner-reviewed design artifacts before scheduling implementation.
+All concepts in this document are `PLANNED`. The brand decision records direction, not final visual assets or implementation. Campaign Doors, Door Studio, Campaign Lobby, Adventure Keys, and marketplace are later concepts. Existing UI stays as-is in V0.1.1. No subscriptions, theme store, community features, audio engine, or commercial rights decision is introduced here. Revisit the experience through owner-reviewed design artifacts before scheduling implementation.
 

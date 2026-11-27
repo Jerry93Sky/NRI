@@ -71,13 +71,17 @@ export const tokens = pgTable('tokens', {
 export const messages = pgTable('chat_messages', {
   id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
   senderId: uuid('sender_id').notNull().references(() => users.id), recipientId: uuid('recipient_id').references(() => users.id), body: varchar('body', { length: 2000 }).notNull(),
+  clientMessageId: uuid('client_message_id'), requestDigest: varchar('request_digest', { length: 64 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index('messages_campaign_time_idx').on(t.campaignId, t.createdAt), index('messages_recipient_idx').on(t.recipientId)]);
+}, (t) => [index('messages_campaign_time_idx').on(t.campaignId, t.createdAt), index('messages_recipient_idx').on(t.recipientId),
+  uniqueIndex('messages_retry_scope_idx').on(t.campaignId, t.senderId, t.clientMessageId)]);
 export const diceRolls = pgTable('dice_rolls', {
   id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id), expression: varchar('expression', { length: 16 }).notNull(), result: integer('result').notNull(),
+  requestId: uuid('request_id'), requestDigest: varchar('request_digest', { length: 64 }),
   detail: text('detail').notNull(), hidden: boolean('hidden').notNull().default(false), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index('dice_campaign_time_idx').on(t.campaignId, t.createdAt)]);
+}, (t) => [index('dice_campaign_time_idx').on(t.campaignId, t.createdAt),
+  uniqueIndex('dice_retry_scope_idx').on(t.campaignId, t.userId, t.requestId)]);
 export const initiatives = pgTable('initiative_trackers', {
   id: uuid('id').defaultRandom().primaryKey(), campaignId: uuid('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }).unique(),
   sceneId: uuid('scene_id').references(() => scenes.id, { onDelete: 'set null' }),

@@ -18,6 +18,8 @@
     "test:realtime": "node scripts/secure-realtime.mjs",
     "test:private-channels": "node scripts/private-channels.mjs",
     "test:command-authorization": "node scripts/command-authorization.mjs",
+    "test:retry": "node scripts/retry-recovery.mjs",
+    "test:retry-migration-upgrade": "node scripts/retry-migration-upgrade.mjs",
     "test": "vitest run"
   },
   "dependencies": {

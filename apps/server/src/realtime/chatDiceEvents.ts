@@ -7,7 +7,7 @@ type Roll = Extract<Awaited<ReturnType<typeof rollDice>>, { roll: unknown }>['ro
 
 type Ack = ((result: unknown) => void) | undefined;
 
-export async function publishChat(io: Server, message: Message, displayName: string, sender: Socket, ack: Ack) {
+export async function publishChat(io: Server, message: Message, displayName: string, sender: Socket, ack: Ack, replayed = false) {
   const { campaignId, senderId, recipientId } = message;
   const acknowledged = await withCampaignAudience(io, campaignId, async (_tx, scope) => {
     const event = recipientId ? 'chat:private' : 'chat:message';
@@ -19,14 +19,14 @@ export async function publishChat(io: Server, message: Message, displayName: str
         ack?.({ ok: true, message: payload });
         sent = true;
       }
-      recipient.socket.emit(event, payload);
+      if (!replayed) recipient.socket.emit(event, payload);
     }
     return sent;
   }, recipientId ? [senderId, recipientId] : undefined);
   if (!acknowledged) ack?.({ error: 'FORBIDDEN' });
 }
 
-export async function publishRoll(io: Server, roll: Roll, displayName: string, sender: Socket, ack: Ack) {
+export async function publishRoll(io: Server, roll: Roll, displayName: string, sender: Socket, ack: Ack, replayed = false) {
   const acknowledged = await withCampaignAudience(io, roll.campaignId, async (_tx, scope) => {
     const payload = { ...roll, displayName };
     let sent = false;
@@ -36,7 +36,7 @@ export async function publishRoll(io: Server, roll: Roll, displayName: string, s
         ack?.({ ok: true, roll: payload });
         sent = true;
       }
-      recipient.socket.emit('dice:result', payload);
+      if (!replayed) recipient.socket.emit('dice:result', payload);
     }
     return sent;
   });

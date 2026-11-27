@@ -36,7 +36,8 @@ function join(socket, campaignId) {
   return new Promise((resolve) => socket.emit('campaign:join', campaignId, resolve));
 }
 function ack(socket, event, value) {
-  return new Promise((resolve) => socket.emit(event, value, resolve));
+  const payload = event === 'chat:send' ? { ...value, clientMessageId: value.clientMessageId ?? randomUUID() } : event === 'dice:roll' ? { ...value, requestId: value.requestId ?? randomUUID() } : value;
+  return new Promise((resolve) => socket.emit(event, payload, resolve));
 }
 function expectEvent(socket, event, timeoutMs = 2500) {
   return new Promise((resolve, reject) => {
