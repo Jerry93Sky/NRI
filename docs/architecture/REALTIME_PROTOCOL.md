@@ -4,7 +4,7 @@ Socket.IO is used for multiplayer delivery. The current implementation uses name
 
 ## Connection and rooms
 
-The server resolves the opaque HTTP session cookie during the Socket.IO handshake and rechecks it after registering the session's revocation room. Logout and rotation disconnect sockets attached to that session. Other logins retain their connections. An expiry timer disconnects idle sessions at their stored expiry. `campaign:join` resolves current membership and joins campaign and member rooms plus the GM room for managers. Leave clears those subscriptions. Role changes update joined sockets, removal clears the affected member's subscriptions, and archiving a campaign clears all its subscriptions. Commands have per-event, per-socket rate limits.
+The server resolves the opaque HTTP session cookie during the Socket.IO handshake and rechecks it after registering the session's revocation room. Logout and rotation disconnect sockets attached to that session. Other logins retain their connections. An expiry timer disconnects idle sessions at their stored expiry. `campaign:join` locks the live session, campaign and membership while joining the campaign/member rooms and the manager room when applicable. Leave clears those subscriptions. Role changes update joined sockets, removal clears the affected member's subscriptions, and archiving a campaign clears all its subscriptions. Commands have per-event, per-socket rate limits.
 
 ## Client commands
 
@@ -12,10 +12,10 @@ The server resolves the opaque HTTP session cookie during the Socket.IO handshak
 |---|---|---|
 | `campaign:join` | campaign UUID string | `{ok, role}` or `{error}`; role is resolved on server |
 | `campaign:leave` | campaign UUID string | no acknowledgement |
-| `scene:pointer` | `{campaignId, sceneId, x, y}` | `{ok}` or `{error}`; current membership and joined campaign room are checked, coordinates must be within scene bounds, Players may point only at the active scene, and per-socket updates are rate-limited to 20/sec |
+| `scene:pointer` | `{campaignId, sceneId, x, y}` | `{ok}` or `{error}`; current session, campaign, sender/recipient memberships and roles, campaign-room subscription, and scene row are locked in one transaction through enqueue. Coordinates must be within scene bounds, Players may point only at the active scene, drafts reach managers only, and per-socket updates are throttled to 20/sec with a separate 1200/minute command ceiling |
 | `token:move` | `{tokenId, x, y, expectedVersion}` | `{ok: true, token}`, `{error: 'CONFLICT', token}`, or `{error}`. Conflict details require current permission to move. Inaccessible and unknown token IDs receive `FORBIDDEN` without a token |
-| `chat:send` | `{campaignId, body, recipientId?}` | `{ok, message}` or `{error}`; recipient membership and Player-to-GM private-message policy checked |
-| `dice:roll` | `{campaignId, expression}` | `{ok, roll}` or `{error}`; server parses and generates dice results |
+| `chat:send` | `{campaignId, body, recipientId?}` | `{ok, message}` or `{error}`; joined sender and recipient are validated transactionally, with private Player sends restricted to Owner/GM |
+| `dice:roll` | `{campaignId, expression, hidden?}` | `{ok, roll}` or `{error}`; server generates dice results and requires current manager access for hidden rolls |
 
 REST endpoints implement scene activation and editing, token creation/ownership, token properties and resource adjustments, layer and scene-object reads/CRUD, and initiative mutations. Token resource adjustments check campaign membership, active-scene visibility, role/ownership, track visibility for players, bounds, and optimistic version. Layer/object writes check campaign membership, active/archive state, same-scene layer references, asset campaign scope, and optimistic versions. Their successful changes publish privacy-filtered events after persistence. There is no general command deduplication key; clients should not retry non-idempotent commands blindly.
 
@@ -24,27 +24,39 @@ REST endpoints implement scene activation and editing, token creation/ownership,
 | Event | Audience / purpose |
 |---|---|
 | `presence:joined` | Other campaign-room members |
-| `membership:changed` | Campaign room, role update notification with `campaignId` |
-| `membership:removed` | Affected user's personal room; client clears campaign state |
-| `campaign:archived` | Campaign room, `{campaignId}`; clients close that workspace |
-| `scene:activated` | Campaign room, `{campaignId, sceneId}` with nullable scene ID. Clients reload the role-filtered scene list |
-| `scene:updated` | Campaign room, public projection, active scene settings only |
-| `token:created`, `token:updated`, `token:moved` | Campaign room for visible active-scene tokens; GM room for hidden or inactive-scene tokens |
-| `chat:message` | Campaign room for public messages |
-| `chat:private` | Sender and recipient personal rooms |
-| `dice:result` | Campaign room for public rolls and GM room for hidden rolls |
-| `initiative:updated` | Campaign room, player-safe projection |
-| `initiative:gm_updated` | GM room, full projection |
+| `membership:changed` | Campaign room, `{campaignId, userId}`. The client rejoins to resolve its own current role or reloads the member list |
+| `membership:removed` | Affected user's personal room; `{campaignId, userId}` remains deliverable after deletion. The client re-reads campaign membership and rejoins if a re-invitation already succeeded |
+| `campaign:archived` | Campaign room, `{campaignId}`; the client re-reads its campaign list before closing the workspace |
+| `campaign:drawing_permission` | Current campaign audience, `{id, playersCanDraw}` re-read under a share lock. The client reloads the stored campaign state |
+| `scene:activated` | Current audience, `{campaignId, sceneId}` with the active ID re-read under campaign authorization. Clients ignore the ID and reload the role-filtered scene list |
+| `scene:updated` | Current authorized campaign audience and exact current version of active scene settings only. The client reloads the authorized scene snapshot |
+| `token:created`, `token:updated`, `token:moved` | Current subscribers with an active visible token projection for Players and wider manager scope |
+| `chat:message` | Current authorized campaign subscribers |
+| `chat:private` | Authorized sessions of the sender and recipient |
+| `dice:result` | Current campaign subscribers for public and current managers for hidden |
+| `initiative:updated` | Current campaign subscribers receive the Player projection |
+| `initiative:gm_updated` | Current subscribed managers receive the full projection |
 | `scene:layer_created`, `scene:layer_updated`, `scene:layer_deleted` | Current campaign audience. Players receive current public metadata on an active scene and ID-only deletion of formerly public layers |
 | `scene:layer_hidden` | Eligible Players receive only `{sceneId, layerId}` when the formerly public layer is still inaccessible. Managers can receive the current private layer update |
 | `scene:object_created`, `scene:object_updated`, `scene:object_deleted` | Current campaign audience. Player upserts require a current visible object on a readable layer and active scene. Manager upserts can include private data. Loss of public visibility sends Player removal with IDs only |
-| `scene:pointer` | Transient coordinates and server-derived user identity; active scene pointers go to campaign room, while GM draft pointers go to the GM room only. Clients expire markers after 1.6 seconds; pointers are not persisted |
+| `scene:pointer` | Transient coordinates and server-derived user identity; active scene pointers go to authorized campaign members, while GM draft pointers go to current managers only. Clients expire markers after 1.6 seconds; pointers are not persisted |
 
-Players receive the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive or archived scenes are denied. Hidden token fields, note fields, scene items and initiative use role-specific projections. Owner-note events go to the assigned owner's joined campaign member room while the token is visible in the active scene. The ordinary token projection updates the former owner. Players may adjust visible resource tracks on owned tokens. Player object snapshots omit deleted objects, GM layers, other non-visible layers and invisible objects.
+Players receive the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive or archived scenes are denied. Hidden token fields, note fields, scene items and initiative use role-specific projections. An owner-note event requires an authorized session of the currently assigned owner and the current visible active-scene token revision. The ordinary token projection updates the former owner. Players may adjust visible resource tracks on owned tokens. Player object snapshots omit deleted objects, GM layers, other non-visible layers and invisible objects.
+
+
+### Private channel recovery
+
+Private chat is delivered to matching personal sockets of current members, including another active login with a different campaign open. `GET /api/campaigns/:campaignId/messages` uses current viewer entitlement and returns the latest 100 permitted messages in chronological order. Original participants keep their own threads while members. A hidden roll uses the current manager audience, including the sending ACK. A committed append can return `FORBIDDEN` without a payload if the sending socket loses access before enqueue. Dice has no REST history. Clients do not retry these append-only commands automatically.
+
+Initiative packets identify the campaign. The browser uses both projection events as invalidations appropriate to its current role, accepts only its current REST request and scope, and never restores state from a replayed packet. A later revision suppresses an older pending publication. A linked token hide or reveal invalidates the same tracker revision. Hidden turns have a null `currentEntryId` for Players.
+
+A targeted note packet has `id`, `ownerUserId`, `ownerNote` and `version` and requires current assignment, subscription and the current visible live token on the active scene. The client merges a note only when the current owner and token version match and drops old notes on reassignment. Reconnect hydrates the current projected tokens. Queued packets, previously rendered data and user copies are outside revocation. Delivery has no durable queue, replay cursor, global order or exactly-once contract.
 
 ## Concurrency and recovery limits
 
 Scene-content UI treats positive events as invalidations of the scoped REST snapshot. It discards superseded responses, coalesces refreshes queued together and immediately removes known objects/layers on a removal event. A layer reveal reloads the authorized layer and object snapshots. Older revisions, duplicates and events from another workspace cannot restore records from packet payloads. Snapshot readers lock current session, membership and scene while selecting their projections. The client also drops any object whose layer is absent from the paired layer response.
+
+Scene update and activation events are invalidations: the browser ignores their scene projection/ID and reloads the current role-filtered scene list. Drawing-permission and membership-change notifications likewise cause a current REST read or server rejoin instead of applying the packet's role/flag. A removal notice remains personal after the database membership disappears; if the response is delayed until an invitation is accepted, the current campaign list preserves the workspace and the client rejoins its new membership. Campaign archive uses the same availability check before clearing the scene.
 
 The scene publisher keeps database authorization and entity locks until Socket.IO enqueue, checks local subscription and expiry at each send and then releases the locks. Revocation after enqueue cannot cancel transport already in progress. There is no retained queue or global event order. If a publication cannot obtain a stable affected-layer set in its bounded retry, the next snapshot reconciles the result. [Audit matrix](../security/REALTIME_EVENT_MATRIX.md)
 
