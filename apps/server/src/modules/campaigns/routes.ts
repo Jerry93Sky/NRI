@@ -11,6 +11,7 @@ import type { Server } from 'socket.io';
 import { parseBody, requireUser, roleFor } from '../../security/access.js';
 import { uploadDirectory } from '../../config/runtime.js';
 import { archiveCampaignSockets } from '../../realtime/campaignRooms.js';
+import { publishDrawingPermission } from '../../realtime/campaignEvents.js';
 
 export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns', async (request, reply) => {
@@ -180,7 +181,7 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
       return result;
     });
     if (!updated) return reply.code(404).send({ error: 'NOT_FOUND' });
-    io.to(`campaign:${campaignId}`).emit('campaign:drawing_permission', updated);
+    void publishDrawingPermission(io, campaignId).catch(() => request.log.error('Drawing permission could not be published'));
     return { playersCanDraw: updated.playersCanDraw };
   });
   app.put('/api/campaigns/:campaignId/archive', async (request, reply) => {

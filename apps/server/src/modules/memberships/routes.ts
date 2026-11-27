@@ -73,7 +73,7 @@ export function registerMembershipRoutes(app: FastifyInstance, io: Server) {
     const member = io.in(campaignMemberRoom(campaignId, memberId));
     if (input.role === 'GM') member.socketsJoin(`${room}:gm`);
     else member.socketsLeave(`${room}:gm`);
-    io.in(room).emit('membership:changed', { campaignId, userId: memberId, role: input.role });
+    io.in(room).emit('membership:changed', { campaignId, userId: memberId });
     return { membership: updated };
   });
   app.delete('/api/campaigns/:campaignId/members/:memberId', async (request, reply) => {

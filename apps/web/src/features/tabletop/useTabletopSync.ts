@@ -143,6 +143,7 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
     const canManage = role === 'OWNER' || role === 'GM';
     const report = (error: Error) => { if (current()) setError(error.message); };
     let initiativeRequest = 0;
+    let campaignReconcileRequest = 0;
     const refreshInitiative = () => {
       const revision = ++initiativeRequest;
       void api<InitiativeView>(`/api/campaigns/${campaignId}/initiative`).then((view) => {
@@ -157,7 +158,9 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       setScenes(list);
       const next = (canManage ? list.find((item) => item.id === sceneIdRef.current) : undefined)
         ?? list.find((item) => item.isActive) ?? list[0];
-      if (next) await openScene(next);
+      if (next && sceneIdRef.current === next.id) {
+        updateScene((currentScene) => currentScene && currentScene.version > next.version ? currentScene : next);
+      } else if (next) await openScene(next);
       else clearScene();
     };
 
@@ -166,6 +169,29 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
       void api<Member[]>(`/api/campaigns/${campaignId}/members`).then((list) => { if (current()) setMembers(list); }).catch(report);
       void api<ChatItem[]>(`/api/campaigns/${campaignId}/messages`).then((list) => { if (current()) setMessages((prev) => mergeChat(prev, list)); }).catch(report);
       refreshInitiative();
+    };
+
+    const reconcileCampaignAvailability = async (rejoin = false) => {
+      const request = scopeRef.current;
+      const revision = ++campaignReconcileRequest;
+      try {
+        const campaigns = await api<Campaign[]>('/api/campaigns');
+        if (scopeRef.current !== request || !isCurrentScope() || revision !== campaignReconcileRequest) return;
+        const currentCampaign = campaigns.find((item) => item.campaign.id === campaignId);
+        if (!currentCampaign) { closeCampaign(campaignId); return; }
+        if (currentCampaign.role !== role) { changeRole(currentCampaign.role); return; }
+        if (rejoin && socket.connected) {
+          socket.emit('campaign:join', campaignId, (result: { role?: string; error?: string }) => {
+            if (!current() || revision !== campaignReconcileRequest) return;
+            if (result.error === 'FORBIDDEN') { closeCampaign(campaignId); return; }
+            if (result.role && result.role !== role) { changeRole(result.role); return; }
+            setConnected(true);
+            refreshCampaign();
+          });
+        }
+        setCampaigns((items) => items.map((item) => item.campaign.id === campaignId ? currentCampaign : item));
+        setCampaign((item) => item?.campaign.id === campaignId ? currentCampaign : item);
+      } catch (error) { if (current()) setError((error as Error).message); }
     };
 
     const closeCampaign = (removedId: string) => {
@@ -240,17 +266,11 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
     const onPointer = (pointer: SharedPointer) => {
       if (current() && pointer.sceneId === sceneIdRef.current && pointer.userId !== userId) window.dispatchEvent(new CustomEvent('nri-shared-pointer', { detail: pointer }));
     };
-    const onSceneUpdated = ({ scene: updated }: { scene: Partial<Scene> & { id: string } }) => {
-      if (!current() || updated.campaignId !== campaignId) return;
-      const apply = (item: Scene) => item.id === updated.id && item.version <= (updated.version ?? 0) ? { ...item, ...updated } : item;
-      setScenes((items) => items.map(apply));
-      updateScene((item) => item ? apply(item) : item);
+    const onSceneUpdated = ({ scene: updated }: { scene: Partial<Scene> & { id: string; campaignId?: string } }) => {
+      if (current() && (!updated.campaignId || updated.campaignId === campaignId)) void refreshScenes().catch(report);
     };
-    const onDrawingPermission = ({ id, playersCanDraw }: { id: string; playersCanDraw: boolean }) => {
-      if (!current() || id !== campaignId) return;
-      const apply = (item: Campaign) => item.campaign.id === id ? { ...item, campaign: { ...item.campaign, playersCanDraw } } : item;
-      setCampaign((item) => item ? apply(item) : item);
-      setCampaigns((items) => items.map(apply));
+    const onDrawingPermission = ({ id }: { id: string }) => {
+      if (current() && id === campaignId) void reconcileCampaignAvailability();
     };
     const onSceneActivated = (event: { campaignId?: string }) => {
       if (current() && (!event.campaignId || event.campaignId === campaignId)) {
@@ -258,15 +278,20 @@ export function useTabletopSync({ user, campaign, socket, setCampaign, setCampai
         refreshInitiative();
       }
     };
-    const onMembershipChanged = (event: { campaignId?: string; userId: string; role: string }) => {
+    const onMembershipChanged = (event: { campaignId?: string; userId: string; role?: string }) => {
       if (!current() || (event.campaignId && event.campaignId !== campaignId)) return;
-      if (event.userId === userId) changeRole(event.role);
-      else setMembers((items) => items.map((item) => item.userId === event.userId ? { ...item, role: event.role } : item));
+      if (event.userId === userId) {
+        socket.emit('campaign:join', campaignId, (result: { role?: string; error?: string }) => {
+          if (!current()) return;
+          if (result.error === 'FORBIDDEN') { closeCampaign(campaignId); return; }
+          if (!result.error) void reconcileCampaignAvailability();
+        });
+      } else void api<Member[]>(`/api/campaigns/${campaignId}/members`).then((list) => { if (current()) setMembers(list); }).catch(report);
     };
     const onMembershipRemoved = (event: { userId: string; campaignId: string }) => {
-      if (current() && event.userId === userId) closeCampaign(event.campaignId);
+      if (current() && event.userId === userId && event.campaignId === campaignId) void reconcileCampaignAvailability(true);
     };
-    const onArchived = (event: { campaignId: string }) => { if (current()) closeCampaign(event.campaignId); };
+    const onArchived = (event: { campaignId: string }) => { if (current() && event.campaignId === campaignId) void reconcileCampaignAvailability(); };
     let contentRefresh: ReturnType<typeof setTimeout> | undefined;
     let refreshSceneId: string | undefined;
     const reload = ({ sceneId }: { sceneId: string }) => {
