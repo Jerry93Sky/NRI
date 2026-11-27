@@ -10,10 +10,6 @@ All notable project changes will be recorded here.
 
 ### Foundation stabilization
 
-- Recheck active sessions, membership, role and scope for private chat, hidden dice, initiative and token-note packets. Authorize chat/dice writes and successful acknowledgements, and preserve participant-only history.
-- Scope initiative to the active scene, commit audit and state together, and invalidate old projections on scene/visibility changes. Migration `0019_initiative_scene_scope` preserves legacy entries and stops unscoped trackers.
-- Add 15 PostgreSQL private-channel regressions, Chromium role/snapshot and ownership/replay coverage, focused fanout measurements and the remaining V0.1.1 closure gates.
-
 - Run Playwright on Ubuntu 24.04 after the Ubuntu 26.04 runner failed to fetch Chromium dependencies from the Microsoft APT repository.
 - Route single Socket.IO moves and REST group moves through one PostgreSQL transaction for authorization, version checks, atomic writes and audit records. Reject positional updates to locked tokens, and authorize live movement delivery after commit.
 - Add 23 PostgreSQL movement regression scenarios to CI, including lock-ordered authorization races, private conflict projections and rollback without realtime events.

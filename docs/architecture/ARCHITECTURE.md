@@ -43,15 +43,6 @@ The order is session → campaign → membership → scene → layers by UUID �
 
 The service validates the whole batch before a single set-based write scoped to the scene, object IDs, individual expected versions and deletion state. The audit insert is in the same transaction. The publisher runs after commit. It reauthorizes current recipients and locks the scene, affected layers and surviving objects before queuing packets. Superseded revisions are skipped. Player projections omit creator IDs, and a restore still needs both layer and object visibility before it can reach Players. Reconnect snapshots recover durable state.
 
-
-### Private campaign channels
-
-Chat and dice hold current session, campaign and ordered membership locks through append. At publication, personal or campaign rooms select candidates. The shared audience reader batches session and membership locks. Session expiry and local subscription are checked immediately before enqueue. Chat selects its actual participants. Dice selects current managers for hidden results. Successful ACKs use the same authorization.
-
-Initiative takes a campaign `FOR NO KEY UPDATE` gate for mutations and shares that gate when reading tracker and entries. Scene archival/activation invalidates the prior tracker under the same write gate. Current linked token rows are locked in ID order to apply their current visibility. Token note writers take session, campaign, membership, scene and token locks in that order. Publication verifies the effective owner and token revision on the same gated audience read.
-
-Migration `0019_initiative_scene_scope` fills the scene for an unambiguous legacy tracker on the active scene. Unscoped or inactive legacy scenes get a stopped, empty projection. Legacy entry rows remain until a normal start replaces them.
-
 ## Security and operations
 
 Ordinary object create/copy/edit/move and layer create/edit/delete use transactional authorization in the same order as object lifecycle. The post-commit publisher reuses `withSceneAudience` for batched session, campaign, role and scene locks. Object and layer rules stay in the scene-content publisher. Exact-revision upserts, ID-only removals after a lost public projection, and role-filtered snapshot refresh suffice for the current client. The only publication retry is a second lock attempt if a formerly public object moved outside the discovered set of layers while the publisher acquired its locks.

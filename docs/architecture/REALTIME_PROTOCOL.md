@@ -14,8 +14,8 @@ The server resolves the opaque HTTP session cookie during the Socket.IO handshak
 | `campaign:leave` | campaign UUID string | no acknowledgement |
 | `scene:pointer` | `{campaignId, sceneId, x, y}` | `{ok}` or `{error}`; current membership and joined campaign room are checked, coordinates must be within scene bounds, Players may point only at the active scene, and per-socket updates are rate-limited to 20/sec |
 | `token:move` | `{tokenId, x, y, expectedVersion}` | `{ok: true, token}`, `{error: 'CONFLICT', token}`, or `{error}`. Conflict details require current permission to move. Inaccessible and unknown token IDs receive `FORBIDDEN` without a token |
-| `chat:send` | `{campaignId, body, recipientId?}` | `{ok, message}` or `{error}`; joined sender and recipient are validated transactionally, with private Player sends restricted to Owner/GM |
-| `dice:roll` | `{campaignId, expression, hidden?}` | `{ok, roll}` or `{error}`; server generates dice results and requires current manager access for hidden rolls |
+| `chat:send` | `{campaignId, body, recipientId?}` | `{ok, message}` or `{error}`; recipient membership and Player-to-GM private-message policy checked |
+| `dice:roll` | `{campaignId, expression}` | `{ok, roll}` or `{error}`; server parses and generates dice results |
 
 REST endpoints implement scene activation and editing, token creation/ownership, token properties and resource adjustments, layer and scene-object reads/CRUD, and initiative mutations. Token resource adjustments check campaign membership, active-scene visibility, role/ownership, track visibility for players, bounds, and optimistic version. Layer/object writes check campaign membership, active/archive state, same-scene layer references, asset campaign scope, and optimistic versions. Their successful changes publish privacy-filtered events after persistence. There is no general command deduplication key; clients should not retry non-idempotent commands blindly.
 
@@ -29,27 +29,18 @@ REST endpoints implement scene activation and editing, token creation/ownership,
 | `campaign:archived` | Campaign room, `{campaignId}`; clients close that workspace |
 | `scene:activated` | Campaign room, `{campaignId, sceneId}` with nullable scene ID. Clients reload the role-filtered scene list |
 | `scene:updated` | Campaign room, public projection, active scene settings only |
-| `token:created`, `token:updated`, `token:moved` | Current subscribers with an active visible token projection for Players and wider manager scope |
-| `chat:message` | Current authorized campaign subscribers |
-| `chat:private` | Authorized sessions of the sender and recipient |
-| `dice:result` | Current campaign subscribers for public and current managers for hidden |
-| `initiative:updated` | Current campaign subscribers receive the Player projection |
-| `initiative:gm_updated` | Current subscribed managers receive the full projection |
+| `token:created`, `token:updated`, `token:moved` | Campaign room for visible active-scene tokens; GM room for hidden or inactive-scene tokens |
+| `chat:message` | Campaign room for public messages |
+| `chat:private` | Sender and recipient personal rooms |
+| `dice:result` | Campaign room for public rolls and GM room for hidden rolls |
+| `initiative:updated` | Campaign room, player-safe projection |
+| `initiative:gm_updated` | GM room, full projection |
 | `scene:layer_created`, `scene:layer_updated`, `scene:layer_deleted` | Current campaign audience. Players receive current public metadata on an active scene and ID-only deletion of formerly public layers |
 | `scene:layer_hidden` | Eligible Players receive only `{sceneId, layerId}` when the formerly public layer is still inaccessible. Managers can receive the current private layer update |
 | `scene:object_created`, `scene:object_updated`, `scene:object_deleted` | Current campaign audience. Player upserts require a current visible object on a readable layer and active scene. Manager upserts can include private data. Loss of public visibility sends Player removal with IDs only |
 | `scene:pointer` | Transient coordinates and server-derived user identity; active scene pointers go to campaign room, while GM draft pointers go to the GM room only. Clients expire markers after 1.6 seconds; pointers are not persisted |
 
-Players receive the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive or archived scenes are denied. Hidden token fields, note fields, scene items and initiative use role-specific projections. An owner-note event requires an authorized session of the currently assigned owner and the current visible active-scene token revision. The ordinary token projection updates the former owner. Players may adjust visible resource tracks on owned tokens. Player object snapshots omit deleted objects, GM layers, other non-visible layers and invisible objects.
-
-
-### Private channel recovery
-
-Private chat is delivered to matching personal sockets of current members, including another active login with a different campaign open. `GET /api/campaigns/:campaignId/messages` uses current viewer entitlement and returns the latest 100 permitted messages in chronological order. Original participants keep their own threads while members. A hidden roll uses the current manager audience, including the sending ACK. A committed append can return `FORBIDDEN` without a payload if the sending socket loses access before enqueue. Dice has no REST history. Clients do not retry these append-only commands automatically.
-
-Initiative packets identify the campaign. The browser uses both projection events as invalidations appropriate to its current role, accepts only its current REST request and scope, and never restores state from a replayed packet. A later revision suppresses an older pending publication. A linked token hide or reveal invalidates the same tracker revision. Hidden turns have a null `currentEntryId` for Players.
-
-A targeted note packet has `id`, `ownerUserId`, `ownerNote` and `version` and requires current assignment, subscription and the current visible live token on the active scene. The client merges a note only when the current owner and token version match and drops old notes on reassignment. Reconnect hydrates the current projected tokens. Queued packets, previously rendered data and user copies are outside revocation. Delivery has no durable queue, replay cursor, global order or exactly-once contract.
+Players receive the active, non-archived scene in REST scene lists and token snapshots. Direct token snapshots for inactive or archived scenes are denied. Hidden token fields, note fields, scene items and initiative use role-specific projections. Owner-note events go to the assigned owner's joined campaign member room while the token is visible in the active scene. The ordinary token projection updates the former owner. Players may adjust visible resource tracks on owned tokens. Player object snapshots omit deleted objects, GM layers, other non-visible layers and invisible objects.
 
 ## Concurrency and recovery limits
 
