@@ -6,26 +6,17 @@ import { canMoveToken, diceSchema, moveTokenSchema, parseDiceExpression } from '
 import { db } from '../db/index.js';
 import { diceRolls, messages, scenes, tokens } from '../db/schema.js';
 import type { FastifyInstance } from 'fastify';
-import { cookieName, webOrigins } from '../config/runtime.js';
-import { parseBody, roleFor, userForCookie } from '../security/access.js';
+import { webOrigins } from '../config/runtime.js';
+import { parseBody, roleFor } from '../security/access.js';
 import { publicToken } from '../domain/projections.js';
+import { authenticateRealtime } from './session.js';
 
 export function registerRealtime(server: FastifyInstance['server']) {
   const io = new Server(server, { serveClient: false, maxHttpBufferSize: 64 * 1024, cors: { origin: webOrigins, credentials: true }, allowRequest: (request, callback) => { const origin = request.headers.origin; callback(null, !origin || webOrigins.includes(origin)); } });
-  io.use(async (socket, next) => {
-    try {
-      const rawCookie = socket.handshake.headers.cookie ?? '';
-      const token = rawCookie.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
-      const user = await userForCookie(token ? decodeURIComponent(token) : undefined);
-      if (!user) return next(new Error('UNAUTHENTICATED'));
-      socket.data.user = { id: user.id, displayName: user.displayName };
-      next();
-    } catch { next(new Error('UNAUTHENTICATED')); }
-  });
+  authenticateRealtime(io);
   io.on('connection', (socket) => {
     const user = socket.data.user as { id: string; displayName: string };
     let lastPointerAt = 0;
-    void socket.join(`user:${user.id}`);
     socket.on('campaign:join', async (campaignId: string, callback?: (result: unknown) => void) => {
       if (typeof campaignId !== 'string' || !z.uuid().safeParse(campaignId).success) return callback?.({ error: 'INVALID' });
       const role = await roleFor(campaignId, user.id);
@@ -115,9 +106,6 @@ export function registerRealtime(server: FastifyInstance['server']) {
         callback?.({ ok: true, roll: event });
         io.to(input.hidden ? `campaign:${input.campaignId}:gm` : `campaign:${input.campaignId}`).emit('dice:result', event);
       } catch { callback?.({ error: 'INVALID' }); }
-    });
-    socket.on('disconnect', () => {
-      for (const room of socket.rooms) if (room.startsWith('user:')) void socket.leave(room);
     });
   });
   return io;

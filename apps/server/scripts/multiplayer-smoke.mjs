@@ -17,9 +17,10 @@ async function request(path, { method = 'GET', body, cookie } = {}) {
   return { result, status: response.status, cookie: response.headers.getSetCookie().find((item) => item.startsWith('nri_session='))?.split(';')[0] ?? cookie };
 }
 async function register(label) {
-  const { result, cookie } = await request('/api/auth/register', { method: 'POST', body: { email: `${label}-${randomUUID()}@nri.local`, password, displayName: label } });
+  const email = `${label}-${randomUUID()}@nri.local`;
+  const { result, cookie } = await request('/api/auth/register', { method: 'POST', body: { email, password, displayName: label } });
   assert.ok(cookie, 'registration must issue an HTTP-only session cookie');
-  return { user: result.user, cookie };
+  return { user: result.user, cookie, email };
 }
 function connect(cookie) {
   const socket = io(base, { autoConnect: false, transports: ['websocket'], extraHeaders: { cookie } });
@@ -447,5 +448,26 @@ const noRevokedDice = noEvent(observerClient.socket, 'dice:result', 350);
 assert.equal((await ack(ownerClient.socket, 'dice:roll', { campaignId: campaign.id, expression: '1d20' })).ok, true);
 assert.equal(await noRevokedDice, true, 'removed member no longer receives campaign events');
 
+const secondPlayerLogin = await request('/api/auth/login', { method: 'POST', body: { email: player.email, password } });
+const sameSessionTab = connect(player.cookie);
+const independentSession = connect(secondPlayerLogin.cookie);
+await Promise.all([sameSessionTab.connected, independentSession.connected]);
+await Promise.all([join(sameSessionTab.socket, campaign.id), join(independentSession.socket, campaign.id)]);
+const loggedOutSockets = Promise.all([expectEvent(playerClient.socket, 'disconnect'), expectEvent(sameSessionTab.socket, 'disconnect')]);
+const logout = await request('/api/auth/logout', { method: 'POST', cookie: player.cookie });
+assert.equal(logout.status, 204);
+assert.deepEqual(await loggedOutSockets, ['io server disconnect', 'io server disconnect']);
+const revokedSession = await fetch(`${base}/api/auth/me`, { headers: { cookie: player.cookie } });
+assert.equal(revokedSession.status, 401);
+assert.equal((await join(independentSession.socket, campaign.id)).ok, true, 'an independent login remains authorized');
+
+const rotatedSocket = expectEvent(independentSession.socket, 'disconnect');
+const rotatedLogin = await request('/api/auth/login', { method: 'POST', cookie: secondPlayerLogin.cookie, body: { email: player.email, password } });
+assert.equal(await rotatedSocket, 'io server disconnect');
+assert.notEqual(rotatedLogin.cookie, secondPlayerLogin.cookie);
+const activeSession = connect(rotatedLogin.cookie);
+await activeSession.connected;
+assert.equal((await join(activeSession.socket, campaign.id)).ok, true);
+console.info('PASS: logout and rotation disconnect the relevant active sockets and preserve independent logins.');
 } finally { for (const socket of openedSockets) socket.disconnect(); }
 console.info('PASS: auth sessions, invitations, scoped roles, archive recovery, recoverable token deletion/restore, atomic versioned token group updates, corrupt-image upload rejection, categorized campaign asset multi-upload/search metadata/storage/deletion, campaign asset-folder role/isolation/rename/delete behavior, token image references and visibility ACL, map and library privacy, hidden snapshots, private GM/owner token notes, versioned token properties and visibility, private resource projections and owner adjustments, token ownership, locked-move denial, concurrent move conflicts, active-scene pointer broadcasts and bounds/privacy checks, private messages, public and GM-only dice rolls with Player denial, reconnect recovery, scene draft privacy, settings/version conflicts, layer/object privacy, Player freehand permissions, ownership/privacy, safe deletion/revocation, line/freehand geometry, duplication, reordering, activation, fallback, restore, and socket revocation.');

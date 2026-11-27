@@ -8,11 +8,14 @@ import { cookieName } from '../config/runtime.js';
 
 export const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 
+export async function activeSession(tokenHash: string) {
+  const [session] = await db.select({ user: users, expiresAt: sessions.expiresAt }).from(sessions).innerJoin(users, eq(sessions.userId, users.id))
+    .where(and(eq(sessions.tokenHash, tokenHash), gt(sessions.expiresAt, new Date()))).limit(1);
+  return session ?? null;
+}
+
 export async function userForCookie(cookieValue?: string) {
-  if (!cookieValue) return null;
-  const rows = await db.select({ user: users }).from(sessions).innerJoin(users, eq(sessions.userId, users.id))
-    .where(and(eq(sessions.tokenHash, digest(cookieValue)), gt(sessions.expiresAt, new Date()))).limit(1);
-  return rows[0]?.user ?? null;
+  return cookieValue ? (await activeSession(digest(cookieValue)))?.user ?? null : null;
 }
 export async function requireUser(request: { cookies: Record<string, string | undefined> }, reply: { code: (status: number) => { send: (value: unknown) => unknown } }) {
   const user = await userForCookie(request.cookies[cookieName]);

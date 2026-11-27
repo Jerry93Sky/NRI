@@ -37,7 +37,7 @@ export async function createApp() {
     catch { return reply.code(503).send({ status: 'not_ready' }); }
   });
   const io = registerRealtime(app.server);
-  registerAuthRoutes(app);
+  registerAuthRoutes(app, io);
   registerCampaignRoutes(app, io);
   registerMembershipRoutes(app, io);
   registerChatRoutes(app);
