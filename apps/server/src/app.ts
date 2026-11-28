@@ -4,6 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import { constants } from 'node:fs';
 import { access, mkdir } from 'node:fs/promises';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+import type { Duplex } from 'node:stream';
 import { isProduction, sessionSecret, trustProxy, uploadDirectory, webOrigins } from './config/runtime.js';
 import { pool } from './db/index.js';
 import { registerRealtime } from './realtime/register.js';
@@ -59,6 +60,11 @@ export async function createApp() {
     }
     catch { return reply.code(503).send({ status: 'not_ready' }); }
   });
+  const upgradedConnections = new Set<Duplex>();
+  app.server.on('upgrade', (_request, socket) => {
+    upgradedConnections.add(socket);
+    socket.once('close', () => upgradedConnections.delete(socket));
+  });
   const io = registerRealtime(app.server, app.log);
   const loopDelay = monitorEventLoopDelay({ resolution: 20 });
   loopDelay.enable();
@@ -90,11 +96,17 @@ export async function createApp() {
   const logIdleDatabaseError = (error: Error) => app.log.warn({ category: errorCategory(error) }, 'Idle database connection failed');
   pool.on('error', logIdleDatabaseError);
 
+  let closeUpgrades: NodeJS.Timeout | undefined;
   app.addHook('preClose', async () => {
     shuttingDown = true;
     io.engine.close();
+    // A peer may never acknowledge the WebSocket close frame. Drain ordinary HTTP separately.
+    closeUpgrades = setTimeout(() => {
+      for (const socket of upgradedConnections) socket.destroy();
+    }, 5000).unref();
   });
   app.addHook('onClose', async () => {
+    clearTimeout(closeUpgrades);
     loopDelay.disable();
     try { await pool.end(); }
     finally { pool.off('error', logIdleDatabaseError); }

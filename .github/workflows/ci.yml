@@ -202,6 +202,31 @@ jobs:
           NRI_PROFILE_DB_PASSWORD: isolated-upload-profile-ci
           NRI_PROFILE_SESSION_SECRET: isolated-upload-profile-ci-only
           NRI_PROFILE_BOUNDED: "1"
+      - name: Verify closed HTTPS, database outage and graceful API recovery
+        run: |
+          stage_dir="$(mktemp -d)"
+          export NRI_TLS_DIR="$stage_dir"
+          export NRI_DATABASE_PASSWORD="$(openssl rand -hex 24)"
+          export DATABASE_URL="postgres://nri:${NRI_DATABASE_PASSWORD}@db:5432/nri_alpha"
+          export SESSION_SECRET="$(openssl rand -hex 32)"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 \
+            -addext subjectAltName=IP:127.0.0.1 -keyout "$stage_dir/privkey.pem" -out "$stage_dir/fullchain.pem" 2>/dev/null
+          compose=(docker compose -p nri-acceptance-ci -f docker-compose.production.yml -f deploy/testing/compose.acceptance.yml)
+          trap '"${compose[@]}" down --remove-orphans' EXIT
+          "${compose[@]}" config -q
+          "${compose[@]}" build api proxy
+          "${compose[@]}" --profile maintenance run --rm migrate
+          "${compose[@]}" up -d --wait api proxy
+          export NODE_EXTRA_CA_CERTS="$stage_dir/fullchain.pem"
+          export NRI_OPS_FIXTURE="$stage_dir/fixture.json"
+          pnpm --filter @nri/server exec node scripts/ops-recovery.mjs
+        env:
+          WEB_ORIGIN: https://127.0.0.1:35443
+          NRI_HTTPS_BIND: 127.0.0.1
+          NRI_HTTPS_PORT: 35443
+          NRI_OPS_ORIGIN: https://127.0.0.1:35443
+          NRI_OPS_DB_CONTAINER: nri-acceptance-ci-db-1
+          NRI_OPS_API_CONTAINER: nri-acceptance-ci-api-1
       - name: Start fresh API for browser tests
         run: |
           cd apps/server
@@ -222,10 +247,25 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm --filter @nri/web exec playwright install --with-deps chromium
       - name: Smoke-test the built Pixi renderer
-        run: pnpm --filter @nri/web e2e texture-lifecycle
+        run: |
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-pixi.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$API_PROXY_TARGET/api/ready"; then
+              pnpm --filter @nri/web e2e texture-lifecycle
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-browser-pixi.log
+          exit 1
         env:
           CI: true
-          API_PROXY_TARGET: http://127.0.0.1:3001
+          API_PROXY_TARGET: http://127.0.0.1:3007
+          HOST: 127.0.0.1
+          PORT: 3007
+          WEB_ORIGIN: http://127.0.0.1:4175
           NRI_E2E_PREVIEW: "true"
       - name: Run browser integration and privacy scenarios
         run: pnpm --filter @nri/web e2e --grep-invert 'GM and Player sessions recover persisted campaign state after API restart'

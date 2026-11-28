@@ -43,6 +43,9 @@ test('GM and Player sessions recover persisted campaign state after API restart'
   test.setTimeout(180_000);
   const apiPid = Number(process.env.NRI_BROWSER_API_PID);
   expect(Number.isSafeInteger(apiPid) && apiPid > 1).toBe(true);
+  const diagnostic = (phase: string, data: Record<string, unknown> = {}) => {
+    if (process.env.NRI_RESTART_TRACE === '1') console.info(JSON.stringify({ phase, utc: new Date().toISOString(), workerPid: process.pid, ...data }));
+  };
   const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4175';
   const port = Number(process.env.PORT ?? 3001);
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -90,8 +93,10 @@ test('GM and Player sessions recover persisted campaign state after API restart'
     const initialPlayerTokens = (await requestJson(playerPage, `/api/scenes/${sceneId}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
     expect(initialPlayerTokens).toContainEqual(expect.objectContaining({ id: tokenId, x: 7, y: 11 }));
 
+    diagnostic('terminate-original', { apiPid, port });
     process.kill(apiPid, 'SIGTERM');
     await waitForReady(port, false);
+    diagnostic('original-unready', { apiPid, port });
     await expect(gmPage.locator('.live-status')).toHaveText(/Reconnecting|Offline/, { timeout: 15_000 });
     await expect(playerPage.locator('.live-status')).toHaveText(/Reconnecting|Offline/, { timeout: 15_000 });
 
@@ -110,12 +115,23 @@ test('GM and Player sessions recover persisted campaign state after API restart'
     const capture = (chunk: Buffer) => { startupLog = (startupLog + chunk.toString()).slice(-8_000); };
     restartedApi.stdout?.on('data', capture);
     restartedApi.stderr?.on('data', capture);
+    diagnostic('child-spawned', { childPid: restartedApi.pid, node: process.version, entry: 'dist/index.js', cwd: fileURLToPath(new URL('../../server', import.meta.url)) });
     const startupError = new Promise<never>((_resolve, reject) => {
       restartedApi!.once('error', reject);
-      restartedApi!.once('exit', (code, signal) => reject(new Error(`Restarted API exited (${signal ?? code}):\n${startupLog}`)));
+      restartedApi!.once('exit', (code, signal) => {
+        diagnostic('child-exit', { childPid: restartedApi?.pid, code, signal });
+        reject(new Error(`Restarted API exited (${signal ?? code}):\n${startupLog}`));
+      });
     });
     try { await Promise.race([waitForReady(port, true), startupError]); }
-    catch (error) { throw new Error(`Restarted API failed readiness:\n${startupLog}`, { cause: error }); }
+    catch (error) {
+      if (process.env.NRI_RESTART_TRACE === '1') {
+        const liveness = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2000) }).then((response) => response.status, () => 'unreachable');
+        diagnostic('child-readiness-failed', { childPid: restartedApi.pid, liveness });
+      }
+      throw new Error(`Restarted API failed readiness:\n${startupLog}`, { cause: error });
+    }
+    diagnostic('child-ready', { childPid: restartedApi.pid, startupLog });
     await expect(gmPage.locator('.live-status')).toHaveText('Live', { timeout: 60_000 });
     await expect(playerPage.locator('.live-status')).toHaveText('Live', { timeout: 60_000 });
 

@@ -1,0 +1,4 @@
+# Local verification limits. Combine with docker-compose.production.yml.
+services:
+  api:
+    mem_limit: 768m
