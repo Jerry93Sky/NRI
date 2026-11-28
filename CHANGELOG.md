@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — V0.2 server-authoritative movement
+
+- Add a versioned GM scene setting that enables anchor-path collision checks for single and group moves. Preserve existing movement by default.
+- Apply current door state in the movement transaction, reject blocked groups atomically, and keep obstacle details out of Player denials.
+- Add practice tokens to the local vault, plus collision boundary tests, PostgreSQL race coverage, a two-session Chromium scenario and a reproducible profile. [PR 2 result](docs/releases/V0.2_PR_02_RESULT.md)
+
 ## Unreleased — V0.2 scene geometry
 
 - Add versioned scene obstacles, closed-segment geometry operations, transactional GM authorization and current-audience invalidation. Scene and campaign copies get independent obstacle IDs.

@@ -32,6 +32,7 @@ The [owner review](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md#самостоят�
 - A full session with a GM and two independent players is pending. The [readiness report](docs/releases/V0.1.1_FINAL_READINESS.md) lists the remaining criteria for the target environment.
 - Large scenes remain slow in the software renderer. Hardware runs, long-duration memory checks and detailed profiling remain open.
 - V0.2 PR 1 adds a GM obstacle editor, versioned wall/door/window geometry and a local **Geometry Workshop** demo. [Implementation and verification](docs/releases/V0.2_PR_01_RESULT.md) · [Map & Scene Editor design](docs/design/MAP_SCENE_EDITOR.md)
+- V0.2 PR 2 adds **Restrict movement** per scene. The server checks the full token movement segment and rejects the entire group action if any path is blocked. [Contract, tests and demo](docs/releases/V0.2_PR_02_RESULT.md)
 
 ## Stack
 

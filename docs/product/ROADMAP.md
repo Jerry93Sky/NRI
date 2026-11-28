@@ -8,7 +8,7 @@ The planned product designs cover [Inventory & Equipment](../design/INVENTORY_EQ
 | --- | --- | --- | --- |
 | V0.1 | Foundation and multiplayer VTT | — | [Original scope and validation](V0_1_SCOPE.md) |
 | V0.1.1 | Stabilize playable tabletop | Existing V0.1 branch | Current acceptance report and owner session under existing gates |
-| V0.2 | Tactical Tabletop | V0.1.1 gates | Versioned geometry, movement validation, per-player LOS/fog and visual lighting. [Scope](../releases/V0.2_SCOPE.md) · [PR 1 result](../releases/V0.2_PR_01_RESULT.md) |
+| V0.2 | Tactical Tabletop | V0.1.1 gates | Versioned geometry, movement validation, per-player LOS/fog and visual lighting. [Scope](../releases/V0.2_SCOPE.md) · [PR 1 result](../releases/V0.2_PR_01_RESULT.md) · [PR 2 result](../releases/V0.2_PR_02_RESULT.md) |
 | V0.3 | [Character Studio](../design/CHARACTER_STUDIO.md) and minimal rules contract | V0.2 release, campaign identity and package subset | Two original built-in fixtures with dissimilar sheets and mechanics, stable pins and field-level privacy |
 | V0.4 | Universal Rules Engine | V0.3 format subset and entity snapshots | Broader safe interpreter and dice families, deterministic replay and verified resource limits |
 | V0.4.1 | Ruleset Library | V0.4 and licensing gates | Validated import/export, version registry, permissions and approved migration/restore |

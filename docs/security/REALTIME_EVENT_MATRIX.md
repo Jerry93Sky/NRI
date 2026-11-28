@@ -2,7 +2,9 @@
 
 | Geometry event | Audience and contract |
 | --- | --- |
-| `geometry:changed` | Current OWNER/GM sessions in the campaign room after commit, with the scene checked against archive state. Carries only `campaignId` and `sceneId`. The editor loads its authorized REST snapshot on entry, reconnect or invalidation. Player sessions receive no geometry event. |
+| `geometry:changed` | Current OWNER/GM sessions in the campaign room after a geometry or movement-policy commit, with the scene checked against archive state. Carries only `campaignId` and `sceneId`. The editor loads its authorized REST snapshot on entry, reconnect or invalidation. Player sessions receive no geometry event. |
+
+A denied path returns a `MOVE_BLOCKED` acknowledgment with no obstacle or revision fields. Only a committed move publishes the existing audience-scoped token event. The denial itself reveals that the attempted movement was blocked. [PR 2](../releases/V0.2_PR_02_RESULT.md)
 
 Baseline `7fd3d6bebe44383b55a1e0038a79ef9d94cf0d7c`, CI #192. This inventory covers **24 distinct outbound application event names** across all server emit sites. Acknowledgements, Socket.IO control packets and room joins/leaves are transport or routing operations.
 
