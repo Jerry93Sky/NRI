@@ -6,12 +6,12 @@ NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns
 
 ## Status
 
-**V0.1.1 — IN_PROGRESS.** See the [V0.1.1 report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md) for the stabilization checkpoint. Work continues in [Draft PR #1](https://github.com/Jerry93Sky/NRI/pull/1).
+**V0.1.1 — IN_PROGRESS.** See the [readiness report](docs/releases/V0.1.1_FINAL_READINESS.md) for hardware and operations evidence. The [local HTTPS stand](docs/operations/LOCAL_HTTPS_ACCEPTANCE.md) and [GM and two-player checklist](docs/releases/V0.1.1_MANUAL_ACCEPTANCE.md) support hands-on acceptance. Changes are published in [Draft PR #1](https://github.com/Jerry93Sky/NRI/pull/1).
 
 ## Implemented
 
 - Replaying a token copy can recover an authorized result after source deletion. Receipt cleanup was tested in an isolated database. Image processing is limited to two active jobs. The log canary covers API and isolated PostgreSQL logs. [RT-RETRY](docs/architecture/COMMAND_RETRY_POLICY.md) · [SEC-OPS](docs/security/LOGGING_AND_REDACTION.md) · [Gesture matrix](docs/testing/PLAY_GESTURES_MATRIX.md)
-- [Player Tabletop](docs/design/PLAYER_TABLETOP.md) and [NPC social relations](docs/architecture/SOCIAL_RELATIONS.md) are `PLANNED`. [Commercial strategy](docs/product/COMMERCIAL_STRATEGY_DRAFT.md) is a discussion draft. The next operational package is described in the [PERF-GPU and OPS handoff](docs/operations/PERF_GPU_OPS_HANDOFF.md).
+- [Player Tabletop](docs/design/PLAYER_TABLETOP.md), [Character Studio](docs/design/CHARACTER_STUDIO.md) and [NPC social relations](docs/architecture/SOCIAL_RELATIONS.md) are `PLANNED`. [Commercial strategy](docs/product/COMMERCIAL_STRATEGY_DRAFT.md) is a discussion draft.
 
 - Campaign roles, invitations, active scenes and GM drafts. PostgreSQL and Socket.IO back multiplayer commands.
 - Grid calibration, images, tokens and private notes, layers and objects, grouped actions, drawing, ruler, pointer and selection. Version-aware Undo/Redo covers movement, supported properties and the object lifecycle.

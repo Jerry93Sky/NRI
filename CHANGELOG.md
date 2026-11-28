@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — hardware profiles, closed HTTPS and manual acceptance
+
+- Verify real GPU profiles and browser WebGL context restoration. Keep the canvas reachable with long layer lists and defer token editor fields until the first expansion.
+- Drain unresponsive WebSocket peers within the shutdown window. Exercise HTTPS, database outages, authorization and restart recovery in isolated Compose.
+- Prepare an owner-run local HTTPS stand, Amber seed, verified backup/restore, read-only media inventory and receipt timer templates.
+- Record Character Studio as `PLANNED` and provide a GM and two-player acceptance checklist.
+
 ## Unreleased — RT-RETRY final fixes, SEC-OPS and PLAY-GESTURES
 
 - Recover a committed token copy after source deletion and a scene copy after source archive. Recover a committed campaign copy before opening source files. Verify pruning concurrent with replay.

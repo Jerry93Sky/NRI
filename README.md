@@ -6,12 +6,12 @@ NRI Platform — системно-независимый виртуальный 
 
 ## Статус
 
-**V0.1.1 — IN_PROGRESS.** Текущий этап стабилизации зафиксирован в [отчёте V0.1.1](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md). В [Draft PR #1](https://github.com/Jerry93Sky/NRI/pull/1) продолжается работа над фундаментом.
+**V0.1.1 — IN_PROGRESS.** Результаты аппаратных и эксплуатационных проверок собраны в [отчёте готовности](docs/releases/V0.1.1_FINAL_READINESS.md). Для ручной игры подготовлены [локальный HTTPS-стенд](docs/operations/LOCAL_HTTPS_ACCEPTANCE.md) и [чек-лист ведущего и двух игроков](docs/releases/V0.1.1_MANUAL_ACCEPTANCE.md). Изменения опубликованы в [Draft PR #1](https://github.com/Jerry93Sky/NRI/pull/1).
 
 ## Реализовано
 
 - Повтор возвращает доступную копию токена после удаления источника. Очистка REST записей проверена на изолированной БД. Загрузка изображений ограничена двумя задачами обработки. Canary-тест охватывает логи API и изолированного PostgreSQL. [RT-RETRY](docs/architecture/COMMAND_RETRY_POLICY.md) · [SEC-OPS](docs/security/LOGGING_AND_REDACTION.md) · [Матрица жестов](docs/testing/PLAY_GESTURES_MATRIX.md)
-- Согласованные [Player Tabletop](docs/design/PLAYER_TABLETOP.md) и [социальные отношения NPC](docs/architecture/SOCIAL_RELATIONS.md) описаны как `PLANNED`. [Коммерческая стратегия](docs/product/COMMERCIAL_STRATEGY_DRAFT.md) остаётся черновиком для обсуждения. Следующий эксплуатационный пакет описан в [плане PERF-GPU и OPS](docs/operations/PERF_GPU_OPS_HANDOFF.md).
+- [Player Tabletop](docs/design/PLAYER_TABLETOP.md), [Character Studio](docs/design/CHARACTER_STUDIO.md) и [социальные отношения NPC](docs/architecture/SOCIAL_RELATIONS.md) описаны как `PLANNED`. [Коммерческая стратегия](docs/product/COMMERCIAL_STRATEGY_DRAFT.md) остаётся черновиком для обсуждения.
 
 - Кампании и роли Owner/GM/Player, приглашения, активная сцена и черновики ведущего. Многопользовательские команды работают с PostgreSQL и Socket.IO.
 - Сетка и калибровка, изображения, токены и приватные заметки, слои и объекты, групповые операции, рисование, линейка, указатель и выбор. Undo/Redo использует версии для движения, поддерживаемых свойств и жизненного цикла объектов.
