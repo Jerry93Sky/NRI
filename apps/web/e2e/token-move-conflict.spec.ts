@@ -188,8 +188,10 @@ test('simultaneous GM and owner moves resolve one stale version in two browser s
       const grouped = await currentToken(tokenId);
       expect(grouped.x).toBeCloseTo(unlocked.x + 1, 1);
       const tokenFields = gmPage.locator('.token-property-card').filter({ hasText: 'Shared hero' });
-      await tokenFields.locator('summary').click();
       const tokenName = tokenFields.getByLabel('Name', { exact: true });
+      await expect(tokenName).toHaveCount(0);
+      await tokenFields.locator('summary').click();
+      await expect(tokenName).toBeVisible();
       const note = tokenFields.getByLabel('GM note', { exact: true });
       const chat = gmPage.getByPlaceholder('Write a message…');
       const undoButton = gmPage.locator('.table-actions').getByRole('button', { name: 'Undo', exact: true });
