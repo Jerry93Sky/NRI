@@ -1,5 +1,9 @@
 # Socket.IO server event audit
 
+| Geometry event | Audience and contract |
+| --- | --- |
+| `geometry:changed` | Current OWNER/GM sessions in the campaign room after commit, with the scene checked against archive state. Carries only `campaignId` and `sceneId`. The editor loads its authorized REST snapshot on entry, reconnect or invalidation. Player sessions receive no geometry event. |
+
 Baseline `7fd3d6bebe44383b55a1e0038a79ef9d94cf0d7c`, CI #192. This inventory covers **24 distinct outbound application event names** across all server emit sites. Acknowledgements, Socket.IO control packets and room joins/leaves are transport or routing operations.
 
 `C` is the campaign room, `G` its manager room, `M` its per-member room and `U` a user's personal room. `DB` means recipient sessions, membership and roles are locked and checked in PostgreSQL at publication. `Room` means receipt relies on subscription and eviction, including handshake and expiry handling, without a fresh database check for every event. An actor check alone does not authorize the recipient. “Separate audit” means the audit record has a different commit boundary.

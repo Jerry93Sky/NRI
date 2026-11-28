@@ -31,7 +31,7 @@ The [owner review](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md#самостоят�
 
 - A full session with a GM and two independent players is pending. The [readiness report](docs/releases/V0.1.1_FINAL_READINESS.md) lists the remaining criteria for the target environment.
 - Large scenes remain slow in the software renderer. Hardware runs, long-duration memory checks and detailed profiling remain open.
-- The [V0.2 Tactical Tabletop implementation plan](docs/releases/V0.2_IMPLEMENTATION_PLAN.md) describes work after the current release gates.
+- V0.2 PR 1 adds a GM obstacle editor, versioned wall/door/window geometry and a local **Geometry Workshop** demo. [Implementation and verification](docs/releases/V0.2_PR_01_RESULT.md) · [Map & Scene Editor design](docs/design/MAP_SCENE_EDITOR.md)
 
 ## Stack
 
@@ -67,4 +67,4 @@ The [V0.1 report](docs/releases/V0.1_ACCEPTANCE_REPORT.md) documents the multipl
 - [Threat model](docs/security/THREAT_MODEL.md) · [Commercial strategy](docs/product/COMMERCIAL_STRATEGY.md)
 - [Changelog](CHANGELOG.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-V0.1.1 is the active phase; V0.2 Tactical Tabletop starts after its acceptance. No project-wide source license has been selected; all rights remain with their owners.
+V0.1.1 acceptance and V0.2 Tactical Tabletop development proceed in parallel on the working branch. Existing release criteria apply. All source rights remain with their owners.

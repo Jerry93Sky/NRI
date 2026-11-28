@@ -1,5 +1,7 @@
 # CMD-ACL authorization matrix
 
+V0.2 PR 1 geometry routes require current OWNER/GM access to the campaign and a non-archived scene. The geometry read takes a shared scene lock. Mutations take the scene update lock, check obstacle version and bounds, then commit the obstacle, scene geometry revision, audit and optional operation receipt together. [Geometry endpoint matrix](../releases/V0.2_PR_01_RESULT.md#api-и-доступ)
+
 **Status:** `AUTOMATED_TESTS_PASSED`; the implementation tree at `93f48fa8746bbdb4634b60bd6d3683a607fcf8ca` passed Ubuntu 24.04 CI #196, including Playwright 9/9. A later documentation-only commit records this status. This evidence does not replace V0.1.1 manual acceptance or operational gates.
 **Scope:** 40 registered routes in the token, scene, campaign, membership/invitation, and asset route modules, including dynamic token delete/restore registrations; command authorization, coupled audit writes, and protected resource reads. This matrix does not reopen the completed RT-ACL event-delivery design.
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — V0.2 scene geometry
+
+- Add versioned scene obstacles, closed-segment geometry operations, transactional GM authorization and current-audience invalidation. Scene and campaign copies get independent obstacle IDs.
+- Add the GM's wall, door and window tools and a separate local vault demo. Door state and secrecy are saved independently.
+- Record the Map & Scene Editor design, visual lighting scope and the owner's branch-development exception for V0.2.
+
 ## Unreleased — owner review, campaign preparation and V0.2 plan
 
 - Record the positive solo owner review and the source SHA of its available local stand. Track the evidence required for the GM and two-player session and target operations.

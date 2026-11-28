@@ -66,4 +66,4 @@ The owner-requested [Dark Tavern direction](../design/DARK_TAVERN_DESIGN_VISION.
 | Compatible game mechanics and content rights are easily conflated | Gate import, campaign sharing, public and commercial publication separately by exact edition, component and channel. Preserve provenance through derived packages |
 | V0.2 needs geometry before V0.7 map authoring | V0.2 owns the versioned spatial contract. V0.7 authors and imports assets against it after round-trip and privacy tests |
 
-Start with the next stabilization slice in the acceptance report. When it passes, validate the existing V0.2 geometry and privacy contracts. Prepare the V0.3 format using original fixtures only once the tactical release gates are met.
+The owner authorized V0.2 geometry work alongside the open V0.1.1 checks. The release gates still govern delivery. Follow the [V0.2 implementation plan](../releases/V0.2_IMPLEMENTATION_PLAN.md) for movement, privacy and evidence. Prepare V0.3 using original fixtures after its tactical prerequisites.
