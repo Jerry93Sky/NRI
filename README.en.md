@@ -8,6 +8,8 @@ NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns
 
 **V0.1.1 — IN_PROGRESS.** See the [readiness report](docs/releases/V0.1.1_FINAL_READINESS.md) for hardware and operations evidence. The [local HTTPS stand](docs/operations/LOCAL_HTTPS_ACCEPTANCE.md) and [GM and two-player checklist](docs/releases/V0.1.1_MANUAL_ACCEPTANCE.md) support hands-on acceptance. Changes are published in [Draft PR #1](https://github.com/Jerry93Sky/NRI/pull/1).
 
+The [Russian owner quick start](docs/operations/OWNER_QUICK_START_RU.md) covers solo exploration and the separate acceptance session. [Inventory & Equipment](docs/design/INVENTORY_EQUIPMENT.md), [Trading](docs/design/TRADING.md) and [Loot](docs/design/LOOT.md) are `PLANNED`.
+
 ## Implemented
 
 - Replaying a token copy can recover an authorized result after source deletion. Receipt cleanup was tested in an isolated database. Image processing is limited to two active jobs. The log canary covers API and isolated PostgreSQL logs. [RT-RETRY](docs/architecture/COMMAND_RETRY_POLICY.md) · [SEC-OPS](docs/security/LOGGING_AND_REDACTION.md) · [Gesture matrix](docs/testing/PLAY_GESTURES_MATRIX.md)

@@ -8,6 +8,8 @@ NRI Platform — системно-независимый виртуальный 
 
 **V0.1.1 — IN_PROGRESS.** Результаты аппаратных и эксплуатационных проверок собраны в [отчёте готовности](docs/releases/V0.1.1_FINAL_READINESS.md). Для ручной игры подготовлены [локальный HTTPS-стенд](docs/operations/LOCAL_HTTPS_ACCEPTANCE.md) и [чек-лист ведущего и двух игроков](docs/releases/V0.1.1_MANUAL_ACCEPTANCE.md). Изменения опубликованы в [Draft PR #1](https://github.com/Jerry93Sky/NRI/pull/1).
 
+[Быстрый старт владельца](docs/operations/OWNER_QUICK_START_RU.md) описывает знакомство на одной машине и отдельную игровую приёмку. [Inventory & Equipment](docs/design/INVENTORY_EQUIPMENT.md), [Trading](docs/design/TRADING.md) и [Loot](docs/design/LOOT.md) имеют статус `PLANNED`.
+
 ## Реализовано
 
 - Повтор возвращает доступную копию токена после удаления источника. Очистка REST записей проверена на изолированной БД. Загрузка изображений ограничена двумя задачами обработки. Canary-тест охватывает логи API и изолированного PostgreSQL. [RT-RETRY](docs/architecture/COMMAND_RETRY_POLICY.md) · [SEC-OPS](docs/security/LOGGING_AND_REDACTION.md) · [Матрица жестов](docs/testing/PLAY_GESTURES_MATRIX.md)

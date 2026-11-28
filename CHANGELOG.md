@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — owner quick start and item design
+
+- Document local owner access, safe demo setup and the separate GM and two-player acceptance session.
+- Record planned Inventory & Equipment, Trading and Loot. Keep the existing release sequence and identify Master Studio as the next design topic.
+- Record the initial Russian-speaking market and open legal questions as discussion material.
+
 ## Unreleased — hardware profiles, closed HTTPS and manual acceptance
 
 - Verify real GPU profiles and browser WebGL context restoration. Keep the canvas reachable with long layer lists and defer token editor fields until the first expansion.
