@@ -10,7 +10,7 @@ if (!['127.0.0.1', 'localhost'].includes(url.hostname) || url.pathname !== '/nri
 }
 if (!process.env.UPLOAD_DIR) throw new Error('Set UPLOAD_DIR to the matching isolated media directory.');
 const uploadDir = resolve(process.env.UPLOAD_DIR);
-const fixturePath = resolve('.data/nri-load/fixture.json');
+const fixturePath = resolve(process.env.NRI_LOAD_DIR ?? '.data/nri-load', 'fixture.json');
 const fixtureExists = await stat(fixturePath).then(() => true, (error) => {
   if (error.code !== 'ENOENT') throw error;
   return false;
@@ -80,4 +80,4 @@ try {
   }
 } finally { await connection.end(); }
 await writeFile(fixturePath, JSON.stringify(fixtures), { mode: 0o600, flag: 'wx' });
-console.info('Local fixture credentials saved in ignored .data/nri-load/fixture.json.');
+console.info('Local fixture credentials saved in fixture.json in the selected ignored output directory.');

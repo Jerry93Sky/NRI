@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as pause } from 'node:timers/promises';
 import { chromium } from '@playwright/test';
@@ -11,8 +12,15 @@ const apiUrl = process.env.NRI_LOAD_API ?? 'http://127.0.0.1:3345';
 for (const target of [appUrl, apiUrl]) {
   if (!['127.0.0.1', 'localhost'].includes(new URL(target).hostname)) throw new Error('The load runner accepts loopback URLs only.');
 }
-const fixtures = JSON.parse(await readFile('.data/nri-load/fixture.json', 'utf8'));
-const browser = await chromium.launch();
+const output = resolve(process.env.NRI_LOAD_DIR ?? '.data/nri-load');
+const selected = process.env.NRI_LOAD_PROFILE;
+const fixtures = JSON.parse(await readFile(resolve(output, 'fixture.json'), 'utf8')).filter(({ name }) => !selected || name === selected);
+assert.ok(fixtures.length > 0);
+const hardware = process.env.NRI_LOAD_HARDWARE === '1';
+const viewport = { width: Number(process.env.NRI_LOAD_WIDTH ?? 1366), height: Number(process.env.NRI_LOAD_HEIGHT ?? 768) };
+assert.ok(Number.isInteger(viewport.width) && Number.isInteger(viewport.height) && viewport.width >= 800 && viewport.height >= 600);
+const browser = await chromium.launch(hardware ? { channel: 'chrome', headless: false } : {});
+const report = hardware ? `hardware-${viewport.width}x${viewport.height}${selected ? `-${selected}` : ''}.json` : 'report.json';
 const outcomes = [];
 const samples = 24;
 const stats = (values) => {
@@ -33,7 +41,15 @@ const statementCount = () => {
 };
 
 async function openTable(account) {
-  const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, locale: 'en-US' });
+  const context = await browser.newContext({ viewport, deviceScaleFactor: 1, locale: 'en-US' });
+  await context.addInitScript(() => {
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (...args) {
+      const context = Reflect.apply(getContext, this, args);
+      if (context && (args[0] === 'webgl' || args[0] === 'webgl2')) this.__nriMeasuredContext = context;
+      return context;
+    };
+  });
   await context.addCookies([{ name: 'nri_session', value: account.session, url: appUrl, httpOnly: true }]);
   return context;
 }
@@ -65,18 +81,30 @@ try {
     await cdp.send('Performance.enable');
     const heap = async () => (await cdp.send('Performance.getMetrics')).metrics.find(({ name }) => name === 'JSHeapUsedSize')?.value;
     const tokensPath = (sceneId) => `/api/scenes/${sceneId}/tokens`;
-    const waitSnapshot = (sceneId) => page.waitForResponse((response) => response.ok() && response.url().endsWith(tokensPath(sceneId)));
+    const waitSnapshot = async (sceneId) => {
+      const response = await page.waitForResponse((event) => event.url().endsWith(tokensPath(sceneId)));
+      assert.ok(response.ok(), `Scene token snapshot returned HTTP ${response.status()}`);
+      return response.json();
+    };
     try {
       const before = await metrics();
       const beforeQueries = statementCount();
       await Promise.all(sockets.map((socket) => join(profile, socket)));
-      const initialSnapshot = waitSnapshot(profile.sceneId);
       const openedAt = performance.now();
       await page.goto(appUrl);
-      await page.getByRole('button', { name: new RegExp(profile.title) }).click();
-      const renderedTokens = await (await initialSnapshot).json();
+      const [renderedTokens] = await Promise.all([
+        waitSnapshot(profile.sceneId), page.getByRole('button', { name: new RegExp(profile.title) }).click(),
+      ]);
       assert.equal(renderedTokens.length, profile.tokenCount);
-      await page.locator('.table-canvas canvas').waitFor({ state: 'visible' });
+      const canvas = page.locator('.table-canvas canvas');
+      await canvas.waitFor({ state: 'visible' });
+      const texture = await canvas.evaluate((element) => {
+        const gl = element.__nriMeasuredContext;
+        if (!gl) return null;
+        const debug = gl.getExtension('WEBGL_debug_renderer_info');
+        return { maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE), renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null };
+      });
+      if (hardware) assert.ok(texture?.renderer && !/swiftshader|software|llvmpipe|basic render/i.test(texture.renderer), 'The application canvas did not report a hardware renderer');
       const initialMs = +(performance.now() - openedAt).toFixed(2);
       let version = renderedTokens.find((token) => token.id === profile.tokenId).version;
 
@@ -125,31 +153,23 @@ try {
       const beforeSwitchHeap = await heap();
       for (let i = 0; i < 6; i++) {
         for (const [title, id] of [['Empty scene', profile.otherSceneId], ['Benchmark table', profile.sceneId]]) {
-          const snapshot = waitSnapshot(id);
           const startedAt = performance.now();
-          await page.locator('.scene-tab').filter({ hasText: title }).click();
-          const tokens = await (await snapshot).json();
+          const [tokens] = await Promise.all([waitSnapshot(id), page.locator('.scene-tab').filter({ hasText: title }).click()]);
           assert.equal(tokens.length, id === profile.sceneId ? profile.tokenCount : 0);
           await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
           switchMs.push(performance.now() - startedAt);
         }
       }
-      const texture = await page.evaluate(() => {
-        const gl = document.createElement('canvas').getContext('webgl2');
-        if (!gl) return null;
-        const debug = gl.getExtension('WEBGL_debug_renderer_info');
-        const result = { maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE), renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null };
-        gl.getExtension('WEBGL_lose_context')?.loseContext();
-        return result;
-      });
       const after = await metrics();
       const afterQueries = statementCount();
       const { name, playerCount, tokenCount, objectCount, mapSize } = profile;
       const cpu = afterMotion.cpu.user + afterMotion.cpu.system - before.cpu.user - before.cpu.system;
       const outcome = {
         name, playerCount, tokenCount, objectCount, mapSize, initialMs,
+        browser: browser.version(), viewport, devicePixelRatio: await page.evaluate(() => devicePixelRatio),
         fps: +(frames.length * 1000 / frames.reduce((sum, ms) => sum + ms, 0)).toFixed(2),
-        frameMs: stats(frames), ackMs: stats(ackMs), syncMs: stats(syncMs), switchMs: stats(switchMs),
+        frameMs: stats(frames), framesOver50Ms: frames.filter((ms) => ms > 50).length,
+        ackMs: stats(ackMs), syncMs: stats(syncMs), switchMs: stats(switchMs),
         tokenPayloadBytes: stats(payloadBytes), traffic, texture,
         apiCpuMicroseconds: cpu, measuredMotionMs: +elapsedMs.toFixed(2),
         apiRssBytes: { before: before.residentBytes, after: after.residentBytes },
@@ -158,10 +178,11 @@ try {
         pgStatements: beforeQueries === null || afterQueries === null ? null : afterQueries - beforeQueries,
       };
       outcomes.push(outcome);
-      await page.screenshot({ path: `.data/nri-load/profile-${name}.png` });
+      await writeFile(resolve(output, report), JSON.stringify(outcomes, null, 2) + '\n');
+      await page.screenshot({ path: resolve(output, `profile-${name}-${viewport.width}x${viewport.height}.png`) });
       console.info(JSON.stringify(outcome));
     } catch (error) {
-      await page.screenshot({ path: `.data/nri-load/profile-${profile.name}-failure.png` }).catch(() => {});
+      await page.screenshot({ path: resolve(output, `profile-${profile.name}-${viewport.width}x${viewport.height}-failure.png`) }).catch(() => {});
       throw error;
     } finally {
       await context.close();
@@ -169,4 +190,3 @@ try {
     }
   }
 } finally { await browser.close(); }
-await writeFile('.data/nri-load/report.json', JSON.stringify(outcomes, null, 2) + '\n');

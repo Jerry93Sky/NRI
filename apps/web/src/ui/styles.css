@@ -42,3 +42,9 @@
 }
 
 .campaign-entry{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:stretch}.campaign-card{width:100%}.campaign-copy{align-self:center;white-space:nowrap}
+
+.layer-tools-body {
+  max-height: min(24vh, 16rem);
+  overflow: auto;
+  align-content: start;
+}
