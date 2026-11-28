@@ -97,9 +97,28 @@ jobs:
         env:
           NRI_API_URL: http://127.0.0.1:3000
       - name: Test scene geometry permissions, transactions and lifecycle
-        run: pnpm --filter @nri/server test:geometry
+        run: |
+          PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_geometry_test
+          pnpm db:migrate
+          node apps/server/dist/index.js > /tmp/nri-geometry-server.log 2>&1 &
+          geometry_api=$!
+          trap 'kill "$geometry_api" 2>/dev/null || true; wait "$geometry_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$NRI_API_URL/api/ready"; then
+              pnpm --filter @nri/server test:geometry
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-geometry-server.log
+          exit 1
         env:
-          NRI_API_URL: http://127.0.0.1:3000
+          NRI_API_URL: http://127.0.0.1:3008
+          HOST: 127.0.0.1
+          PORT: 3008
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-geometry-media
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_geometry_test
       - name: Test private channel permissions and delivery
         run: |
           node apps/server/dist/index.js > /tmp/nri-private-server.log 2>&1 &
