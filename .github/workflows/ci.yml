@@ -293,7 +293,7 @@ jobs:
           WEB_ORIGIN: http://127.0.0.1:4175
           NRI_E2E_PREVIEW: "true"
       - name: Run browser integration and privacy scenarios
-        run: pnpm --filter @nri/web e2e --grep-invert 'GM and Player sessions recover persisted campaign state after API restart'
+        run: pnpm --filter @nri/web e2e --grep-invert 'GM and Player sessions recover persisted campaign state after API restart|GM draws and edits geometry on the live canvas'
         env:
           CI: true
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:4175
@@ -303,6 +303,29 @@ jobs:
           PORT: 3001
           WEB_ORIGIN: http://127.0.0.1:4175
           DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+      - name: Verify the GM scene geometry editor in Chromium
+        run: |
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-geometry.log 2>&1 &
+          geometry_api=$!
+          trap 'kill "$geometry_api" 2>/dev/null || true; wait "$geometry_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$API_PROXY_TARGET/api/ready"; then
+              pnpm --filter @nri/web e2e scene-geometry.spec.ts
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-browser-geometry.log
+          exit 1
+        env:
+          CI: true
+          NRI_E2E_PREVIEW: "true"
+          API_PROXY_TARGET: http://127.0.0.1:3009
+          HOST: 127.0.0.1
+          PORT: 3009
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-browser-geometry-media
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_geometry_test
       - name: Verify browser recovery after API restart on a fresh process
         run: |
           (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-restart.log 2>&1 &
