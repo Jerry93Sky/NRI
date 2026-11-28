@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — owner review, campaign preparation and V0.2 plan
+
+- Record the positive solo owner review and the source SHA of its available local stand. Track the evidence required for the GM and two-player session and target operations.
+- Document planned Master Studio and Adventure Builder, including optional preparation, reusable libraries, independent campaign state, world revisions and explicit selection of events for canon.
+- Detail V0.2 verification for shared geometry, visibility and fog, current permissions, retries, reconnect and PixiJS on large maps within the existing release scope.
+
 ## Unreleased — owner quick start and item design
 
 - Document local owner access, safe demo setup and the separate GM and two-player acceptance session.

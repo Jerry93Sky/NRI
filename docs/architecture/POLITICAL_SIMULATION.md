@@ -1,5 +1,7 @@
 # Political Simulation
 
+[Adventure Builder](../design/ADVENTURE_BUILDER.md) keeps political consequences in campaign state by default. [Master Studio](../design/MASTER_STUDIO.md) supplies the planned faction and relationship workspace.
+
 **Status · PLANNED for V0.6.2.** A campaign enables only the fictional institutions it needs. A polity can be abstract. A world may also have no polities at all.
 
 Definitions describe jurisdictions, forms of government, offices, governing bodies, succession and elections, laws, groups, parties, estates, guilds, religious organizations and secret societies. Relationship models may include influence, legitimacy, allegiances, alliances, treaties, claims and conflict state. The rules define authority, valid transitions and consequences, including reforms, revolts, political crises and declarations of in-game war.

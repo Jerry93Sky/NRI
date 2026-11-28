@@ -10,6 +10,8 @@ NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns
 
 The [Russian owner quick start](docs/operations/OWNER_QUICK_START_RU.md) covers solo exploration and the separate acceptance session. [Inventory & Equipment](docs/design/INVENTORY_EQUIPMENT.md), [Trading](docs/design/TRADING.md) and [Loot](docs/design/LOOT.md) are `PLANNED`.
 
+The [owner review](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md#самостоятельный-обзор-владельца--2026-11-28) records positive feedback from solo exploration. [Master Studio](docs/design/MASTER_STUDIO.md) and [Adventure Builder](docs/design/ADVENTURE_BUILDER.md) are `PLANNED`. The GM chooses how much to prepare and uses additional tools when needed.
+
 ## Implemented
 
 - Replaying a token copy can recover an authorized result after source deletion. Receipt cleanup was tested in an isolated database. Image processing is limited to two active jobs. The log canary covers API and isolated PostgreSQL logs. [RT-RETRY](docs/architecture/COMMAND_RETRY_POLICY.md) · [SEC-OPS](docs/security/LOGGING_AND_REDACTION.md) · [Gesture matrix](docs/testing/PLAY_GESTURES_MATRIX.md)
@@ -27,7 +29,7 @@ The [Russian owner quick start](docs/operations/OWNER_QUICK_START_RU.md) covers 
 
 ## V0.1.1 limitations
 
-- A complete human session and owner acceptance are pending. CMD-ACL is checking the remaining transactional commands in the [authorization matrix](docs/security/COMMAND_AUTHORIZATION_MATRIX.md); lost acknowledgement handling remains a separate task.
+- A full session with a GM and two independent players is pending. The [readiness report](docs/releases/V0.1.1_FINAL_READINESS.md) lists the remaining criteria for the target environment.
 - Large scenes remain slow in the software renderer. Hardware runs, long-duration memory checks and detailed profiling remain open.
 - The [V0.2 Tactical Tabletop implementation plan](docs/releases/V0.2_IMPLEMENTATION_PLAN.md) describes work after the current release gates.
 

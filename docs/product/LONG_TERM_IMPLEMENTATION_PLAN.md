@@ -12,7 +12,7 @@ The owner approved the product name EVERDOOR, the tagline “Every door, a new a
 
 Approved directions are recorded in [Campaign Lobby](../design/CAMPAIGN_LOBBY.md), [GM Screen](../design/GM_SCREEN.md), [Player Tabletop](../design/PLAYER_TABLETOP.md) and [Social Relations](../architecture/SOCIAL_RELATIONS.md). Master Studio prepares content used by the lobby and the game. One multitrack audio concept spans both. Audience-scoped chronicle drafts and review, configurable combat automation and the Social Relations architecture are proposals. Release sequencing and licensing decisions remain open. [Commercial hypotheses](COMMERCIAL_STRATEGY_DRAFT.md) are separate from delivery scope.
 
-Approved item flows and open design choices are recorded in [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md), [Trading](../design/TRADING.md) and [Loot](../design/LOOT.md). Master Studio is next for product design. The release gates below still govern technical delivery.
+Approved item flows and open design choices are recorded in [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md), [Trading](../design/TRADING.md) and [Loot](../design/LOOT.md). [Master Studio](../design/MASTER_STUDIO.md) and [Adventure Builder](../design/ADVENTURE_BUILDER.md) record the planned preparation workflow. A GM can start with a single scene, choose optional tools as needed and review automated consequences before applying them. Campaign state is independent by default. Shared-world policy remains a design decision. The release gates below govern technical delivery.
 
 | Current area | Preserve or improve in V0.1.1 | First release that implements the new capability |
 | --- | --- | --- |

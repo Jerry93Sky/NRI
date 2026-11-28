@@ -1,5 +1,7 @@
 # Economic Simulation
 
+[Adventure Builder](../design/ADVENTURE_BUILDER.md) connects merchants to locations and keeps economic updates scoped to each campaign.
+
 **Status · PLANNED for V0.6.3.** The module has a common accounting contract and supports several depths. A world can disable the economy or use named abstract stocks without money.
 
 Campaign-level merchant exchanges are described in the planned [Trading design](../design/TRADING.md). Integration with the economic simulation is a later step. Merchant stock persistence, funds and replenishment still require owner decisions.

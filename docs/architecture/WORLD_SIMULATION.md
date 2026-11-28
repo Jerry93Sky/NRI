@@ -1,5 +1,7 @@
 # World Simulation Engine
 
+[Adventure Builder](../design/ADVENTURE_BUILDER.md) distinguishes reusable world definitions from each campaign's state and records the GM's control over time and delayed consequences.
+
 **Status · PLANNED from V0.6.** The optional World Instance belongs to a campaign. It owns a monotonic world revision, custom calendar, logical game-time coordinate, enabled systems, exact law/evaluator versions, pending consequences and a checkpoint history. Campaign entities link to the world by stable scoped references.
 
 ## World model

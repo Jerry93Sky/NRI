@@ -2,7 +2,7 @@
 
 **Active release: V0.1.1 — IN_PROGRESS.** Continue the existing [stabilization scope](../releases/V0.1.1_SCOPE.md) and its [acceptance gates](../releases/V0.1.1_ACCEPTANCE_REPORT.md). V0.1 is the preceding foundation on the same development line. All later entries are `PLANNED`. Dependencies describe release gates and include no delivery dates. Detailed exit evidence is defined in the [long-term implementation plan](LONG_TERM_IMPLEMENTATION_PLAN.md).
 
-The planned product designs cover [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md), [Trading](../design/TRADING.md) and [Loot](../design/LOOT.md). Master Studio is next for product design. The release table remains the technical delivery sequence.
+The planned product designs cover [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md), [Trading](../design/TRADING.md), [Loot](../design/LOOT.md), [Master Studio](../design/MASTER_STUDIO.md) and [Adventure Builder](../design/ADVENTURE_BUILDER.md). Campaign preparation starts with the tools the GM chooses to use. The release table governs technical delivery.
 
 | Release | Goal | Required predecessors | Exit evidence |
 | --- | --- | --- | --- |
@@ -41,6 +41,7 @@ V0.3 introduces a small built-in package format and the evaluation contract need
 | [Dark Tavern RPG](../design/DARK_TAVERN_DESIGN_VISION.md) | Owner-reviewed visual milestone after V0.1.1, coordinated with V0.2 without changing its tactical gates |
 | [Campaign Lobby](../design/CAMPAIGN_LOBBY.md) | Owner-approved product direction; sequencing and release scope remain to be agreed. Lobby and scene audio share one planned multitrack concept |
 | [GM Screen](../design/GM_SCREEN.md) | Owner-approved requirements recorded as `PLANNED`; module boundaries and sequencing remain design proposals |
+| [Master Studio](../design/MASTER_STUDIO.md) and [Adventure Builder](../design/ADVENTURE_BUILDER.md) | Planned preparation concepts for Campaign Studio and later simulation stages. Minimum authoring flows, wider collaboration and linked campaigns require scope decisions within the established release gates |
 | [Sound & Atmosphere](../architecture/SCENE_AUDIO.md) | Optional Campaign Studio follow-up after scene privacy. Spatial and reactive audio follow geometry and rule/simulation integration |
 | [Adventure Atlas](../architecture/ADVENTURE_ATLAS.md) | Linked maps and discovery after V0.2 and V0.5. Map authoring stays with V0.7, and split-party exploration needs a later location model |
 

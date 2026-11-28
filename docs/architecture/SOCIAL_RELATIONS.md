@@ -1,5 +1,7 @@
 # Social Relations Engine
 
+[Master Studio](../design/MASTER_STUDIO.md) proposes a visual graph of NPCs, families, organizations and factions. Campaign-specific changes and optional links between campaigns are addressed in [Adventure Builder](../design/ADVENTURE_BUILDER.md).
+
 **Status: PLANNED.** Future architecture for the [Player Tabletop](../design/PLAYER_TABLETOP.md) and [GM Screen](../design/GM_SCREEN.md).
 
 ## Owner-approved requirements

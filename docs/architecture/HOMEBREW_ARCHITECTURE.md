@@ -1,5 +1,7 @@
 # Homebrew Studio
 
+[Master Studio](../design/MASTER_STUDIO.md) records compatibility for reusable material. [Adventure Builder](../design/ADVENTURE_BUILDER.md) keeps world definitions system-neutral and lets each campaign choose its rules.
+
 **Status · PLANNED for V0.4.2.** Visual authoring writes draft Ruleset Packages through the same validation and licensing gates as imports. Authors can start empty or pin a licensed base version. The preview interpreter uses the same semantics and budgets as live play.
 
 ## Authoring model

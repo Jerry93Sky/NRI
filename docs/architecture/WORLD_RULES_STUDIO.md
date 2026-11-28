@@ -1,5 +1,7 @@
 # World Rules Studio
 
+[Adventure Builder](../design/ADVENTURE_BUILDER.md) records optional time advancement and GM review. Advanced condition editing belongs to the later World Rules Studio stage.
+
 **Status · PLANNED for V0.6.4.** The first World Core and specialist modules use reviewed reference laws and bounded text configuration. The Studio later turns the same format into editable forms, expression trees, typed event rules and test scenarios.
 
 ## Law and event model

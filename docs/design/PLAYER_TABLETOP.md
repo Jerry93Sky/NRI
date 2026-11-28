@@ -1,5 +1,7 @@
 # Player Tabletop
 
+[Master Studio](MASTER_STUDIO.md) and [Adventure Builder](ADVENTURE_BUILDER.md) prepare the materials behind the session. The player workspace receives content after an authorized reveal.
+
 **Status: PLANNED.** Owner-approved direction for a later release. V0.1.1 keeps its existing tabletop.
 
 [Character Studio](CHARACTER_STUDIO.md) supplies the authoritatively saved character sheet and ability references used by the player workspace.

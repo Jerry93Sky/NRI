@@ -1,5 +1,7 @@
 # GM Screen
 
+[Master Studio](MASTER_STUDIO.md) supplies reusable material for the live session. [Adventure Builder](ADVENTURE_BUILDER.md) permits creating locations or scenes in play and saving them back to the library.
+
 **Status: PLANNED.** The GM Screen is a future configurable digital workspace. No modules or UI are implemented by this document, and V0.1.1 acceptance remains unchanged.
 
 Planned preparation includes the GM item library, Merchant Builder and editable procedural loot. In play, the GM roleplays merchants and decides when to reveal item properties and available loot. [Inventory & Equipment](INVENTORY_EQUIPMENT.md) · [Trading](TRADING.md) · [Loot](LOOT.md)

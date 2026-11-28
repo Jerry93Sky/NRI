@@ -12,6 +12,8 @@ NRI Platform is a system-neutral platform for creating, automating and running t
 
 ## Product principles
 
+**Reduce the GM's workload.** A GM can start a one-shot with a single scene or build a deep campaign on the same platform. Advanced tools and setup metadata are optional unless the GM's chosen workflow needs them. Automation does routine work and proposes outcomes for the GM to review. The GM makes the final narrative decision. The interface exposes the complexity the task calls for.
+
 1. **Easy first session:** a GM should be able to create a campaign, add a map, place tokens, and invite players without extensive setup.
 2. **System neutral.** A campaign selects its rules. Levels, classes, hit points, initiative and d20 rolls are optional mechanics.
 3. **Modular monolith first:** cohesive modules and stable boundaries, without premature microservices.
@@ -24,7 +26,7 @@ NRI Platform is a system-neutral platform for creating, automating and running t
 
 ## Product directions
 
-[Player Tabletop](../design/PLAYER_TABLETOP.md) captures the planned player workspace. [Character Studio](../design/CHARACTER_STUDIO.md) records the approved character creation, progression and independent campaign instances. [Social Relations](../architecture/SOCIAL_RELATIONS.md) covers GM-controlled group attitude. [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md), [Trading](../design/TRADING.md) and [Loot](../design/LOOT.md) describe the agreed item flows and open design decisions. Master Studio is the next design topic. [Commercial strategy](COMMERCIAL_STRATEGY_DRAFT.md) · [Legal readiness draft](LEGAL_READINESS_DRAFT.md)
+[Player Tabletop](../design/PLAYER_TABLETOP.md) captures the planned player workspace. [Character Studio](../design/CHARACTER_STUDIO.md) records the approved character creation, progression and independent campaign instances. [Social Relations](../architecture/SOCIAL_RELATIONS.md) covers GM-controlled group attitude. [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md), [Trading](../design/TRADING.md) and [Loot](../design/LOOT.md) describe the agreed item flows and open design decisions. [Master Studio](../design/MASTER_STUDIO.md) and [Adventure Builder](../design/ADVENTURE_BUILDER.md) describe preparation, improvisation and independent campaigns based on reusable worlds. [Commercial strategy](COMMERCIAL_STRATEGY_DRAFT.md) · [Legal readiness draft](LEGAL_READINESS_DRAFT.md)
 
 | Capability | Player, GM or creator outcome |
 | --- | --- |
@@ -32,7 +34,7 @@ NRI Platform is a system-neutral platform for creating, automating and running t
 | Character Studio | Create characters, NPCs and creatures from package-defined sheets. Inspect derived values and control access to private fields |
 | Universal Rules Engine, Ruleset Library and Homebrew Studio | Install a permitted version, build or extend a ruleset visually, test it and opt in to campaign upgrades |
 | Combat Automation and Tactical AI | Choose the degree of rules assistance. Let approved NPC profiles propose or execute allowed game actions and return control to the GM |
-| Campaign Studio | Prepare sessions, scenes, encounters and notes, and keep an audience-scoped timeline |
+| Campaign Studio | Reuse libraries and plan sessions at the chosen depth in Master Studio and Adventure Builder. Use prepared or improvised scenes in GM Screen and publish appropriate material to the campaign audience |
 | Living World Engine | Advance a world by chosen game-time steps. Optional NPC, political and economic rules generate reviewable consequences and story hooks |
 | Map Studio | Author reusable maps and geometry independently of a ruleset, with explicit import and export |
 | Community Hub and Marketplace | Discover and share authorized material. Later support creator distribution and commerce with consent, moderation, provenance and entitlements |

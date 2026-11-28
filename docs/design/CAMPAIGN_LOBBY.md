@@ -1,5 +1,7 @@
 # Campaign Lobby
 
+[Master Studio](MASTER_STUDIO.md) supplies prepared materials. [Adventure Builder](ADVENTURE_BUILDER.md) governs campaign setup, the optional player questionnaire and access after archival.
+
 **Status: PLANNED.** This records owner-approved product requirements and proposed architecture separately. It does not authorize implementation or change V0.1.1 acceptance.
 
 ## Owner-approved product requirements

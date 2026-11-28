@@ -1,5 +1,7 @@
 # Narrative and Event Engine
 
+[Adventure Builder](../design/ADVENTURE_BUILDER.md) defines the GM's choice to approve, edit, defer or reject delayed consequences and to select events for world canon.
+
 **Status · PLANNED for V0.6.5.** Consume committed world, encounter and campaign facts. Produce proposed quests, rumors, relationships, crises, threats, opportunities and later consequences through typed rules and templates.
 
 ## Facts, proposals and publication

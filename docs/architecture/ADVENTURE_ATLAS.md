@@ -1,5 +1,7 @@
 # Adventure Atlas
 
+[Adventure Builder](../design/ADVENTURE_BUILDER.md) defines flexible location structure and scene links. [Master Studio](../design/MASTER_STUDIO.md) prepares the reusable maps and scenes.
+
 **Status** `PLANNED` · Architecture concept for linked campaign maps and exploration. It is separate from the owner-approved Campaign Lobby and the proposed GM Screen workspace; this document does not authorize either implementation.
 
 ## Maps, links and travel

@@ -1,5 +1,7 @@
 # Inventory & Equipment
 
+[Master Studio](MASTER_STUDIO.md) использует библиотеку шаблонов, а экземпляры предметов и состояние инвентаря относятся к конкретной кампании в [Adventure Builder](ADVENTURE_BUILDER.md).
+
 **Статус `PLANNED`.**
 
 ## Согласованные требования
