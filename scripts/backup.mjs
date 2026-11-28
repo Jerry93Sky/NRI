@@ -68,7 +68,7 @@ function run(command, args, options = {}) {
     let output = '';
     if (capture) child.stdout.setEncoding('utf8').on('data', (chunk) => { output += chunk; });
     child.once('error', reject);
-    child.once('exit', (code, signal) => code === 0
+    child.once('close', (code, signal) => code === 0
       ? resolveRun(capture ? output : undefined)
       : reject(new Error(`${command} failed (${signal ?? `exit ${code}`}).`)));
   });
@@ -156,7 +156,23 @@ if (mode === 'prune') {
     const dumpArgs = ['--no-password', '--format=custom', '--file', dumpPath, '--host', url.hostname, '--port', String(url.port || 5432), '--username', username, '--dbname', database];
     const pgEnv = { ...process.env, PGPASSWORD: decodeURIComponent(url.password) };
     if (url.searchParams.has('sslmode')) pgEnv.PGSSLMODE = url.searchParams.get('sslmode');
-    try {
+    let restore;
+    const dbContainer = process.env.NRI_BACKUP_DB_CONTAINER;
+    if (dbContainer) {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(dbContainer)) fail('Invalid Compose database container name.');
+      const composeService = (await run('docker', ['inspect', '--format', '{{index .Config.Labels "com.docker.compose.service"}}', dbContainer], { capture: true })).trim();
+      if (composeService !== url.hostname || Number(url.port || 5432) !== 5432) fail('Compose database service does not match DATABASE_URL.');
+      const exec = ['exec', '-i', dbContainer, 'sh', '-ec'];
+      const identity = 'test "$POSTGRES_DB" = "$1"; test "$POSTGRES_USER" = "$2"; export PGPASSWORD="$POSTGRES_PASSWORD"; ';
+      const shell = (script) => [...exec, identity + script, 'nri-backup', database, username];
+      const dbInfo = (await run('docker', shell('exec psql -X -h 127.0.0.1 -U "$2" -d "$1" -v ON_ERROR_STOP=1 -Atc "SELECT json_build_object(\'version\', current_setting(\'server_version\'), \'migrations\', count(*), \'latestMigration\', max(created_at)::text) FROM drizzle.__drizzle_migrations"'), { capture: true })).trim();
+      restore = { ...JSON.parse(dbInfo), archiveFormat: 'postgresql-custom', mediaDirectory: 'uploads', target: 'new database and empty media directory' };
+      const { open } = await import('node:fs/promises');
+      const dumpFile = await open(dumpPath, 'wx');
+      try {
+        await run('docker', shell('exec pg_dump -w -h 127.0.0.1 --format=custom -U "$2" -d "$1"'), { stdio: ['ignore', dumpFile.fd, 'inherit'] });
+      } finally { await dumpFile.close(); }
+    } else try {
       await run('pg_dump', dumpArgs, { env: pgEnv });
     } catch (error) {
       if (error.code !== 'ENOENT' || !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) throw error;
@@ -186,6 +202,7 @@ if (mode === 'prune') {
       database,
       revision,
       uploadsDirectory: relative(root, uploadRoot).split(sep).join('/'),
+      ...(restore ? { restore } : {}),
       files,
     };
     await writeFile(join(staging, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });

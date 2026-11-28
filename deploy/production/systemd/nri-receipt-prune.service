@@ -1,0 +1,14 @@
+[Unit]
+Description=Remove expired EVERDOOR REST receipts
+Requires=docker.service
+After=docker.service
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/nri
+ExecStart=/usr/bin/docker compose --env-file /etc/nri/production.env -p nri-alpha -f docker-compose.production.yml --profile maintenance run --no-deps --rm migrate node scripts/prune-operation-receipts.mjs
+Restart=on-failure
+RestartSec=15min
+TimeoutStartSec=2min

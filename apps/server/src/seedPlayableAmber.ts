@@ -114,8 +114,13 @@ async function main() {
   if (!databaseUrl) throw new Error('DATABASE_URL is required.');
   const parsedUrl = new URL(databaseUrl);
   const databaseName = parsedUrl.pathname.replace(/^\//, '');
-  if (!['127.0.0.1', 'localhost', '::1'].includes(parsedUrl.hostname) || !['nri_dev', 'nri_demo'].includes(databaseName)) {
-    throw new Error('This additive demo seed only runs against loopback PostgreSQL databases named nri_dev or nri_demo.');
+  const localDevelopment = ['127.0.0.1', 'localhost', '::1'].includes(parsedUrl.hostname) && ['nri_dev', 'nri_demo'].includes(databaseName);
+  const origin = URL.parse(process.env.WEB_ORIGIN ?? '');
+  const isolatedAcceptance = process.env.NODE_ENV === 'test' && process.env.NRI_ACCEPTANCE_DEMO === '1'
+    && parsedUrl.hostname === 'db' && databaseName === 'nri_alpha'
+    && origin?.protocol === 'https:' && origin.hostname === '127.0.0.1';
+  if (!localDevelopment && !isolatedAcceptance) {
+    throw new Error('Run the additive demo seed on a local development database or through the isolated HTTPS acceptance script.');
   }
 
   let parentCampaigns = await db.select({ id: campaigns.id, ownerId: campaigns.ownerId }).from(campaigns)
