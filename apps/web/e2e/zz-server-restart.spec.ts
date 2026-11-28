@@ -1,0 +1,154 @@
+import { expect, test, type Page } from '@playwright/test';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+async function requestJson(page: Page, path: string, method = 'GET', body?: unknown) {
+  return page.evaluate(async ({ path, method, body }) => {
+    const response = await fetch(path, {
+      method,
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: response.status, body: response.status === 204 ? null : await response.json() };
+  }, { path, method, body });
+}
+
+async function register(page: Page, name: string, email: string, invite?: string) {
+  const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4175';
+  await page.goto(invite ? `${baseURL}/?invite=${encodeURIComponent(invite)}` : baseURL);
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await page.getByLabel('Display name').fill(name);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill('e2e-test-password-24');
+  await page.getByRole('button', { name: 'Create account', exact: true }).first().click();
+}
+
+async function waitForReady(port: number, ready: boolean, timeoutMs = 45_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/ready`, { signal: AbortSignal.timeout(2_000) });
+      if (response.ok === ready) return;
+    } catch {
+      if (!ready) return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`API readiness did not become ${ready ? 'ready' : 'unavailable'} within ${timeoutMs}ms`);
+}
+
+test('GM and Player sessions recover persisted campaign state after API restart', async ({ browser }) => {
+  test.skip(!process.env.NRI_BROWSER_API_PID, 'Requires the isolated CI API process handle');
+  test.setTimeout(180_000);
+  const apiPid = Number(process.env.NRI_BROWSER_API_PID);
+  expect(Number.isSafeInteger(apiPid) && apiPid > 1).toBe(true);
+  const diagnostic = (phase: string, data: Record<string, unknown> = {}) => {
+    if (process.env.NRI_RESTART_TRACE === '1') console.info(JSON.stringify({ phase, utc: new Date().toISOString(), workerPid: process.pid, ...data }));
+  };
+  const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4175';
+  const port = Number(process.env.PORT ?? 3001);
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const gmContext = await browser.newContext({ locale: 'en-US' });
+  const playerContext = await browser.newContext({ locale: 'en-US' });
+  const gmPage = await gmContext.newPage();
+  const playerPage = await playerContext.newPage();
+  let restartedApi: ChildProcess | undefined;
+  try {
+    await register(gmPage, 'Restart Guide', `restart-gm-${suffix}@example.test`);
+    await expect(gmPage.getByRole('heading', { name: 'Your campaigns' })).toBeVisible();
+    const campaignResponse = await requestJson(gmPage, '/api/campaigns', 'POST', { title: `Restart recovery ${suffix}`, description: '' });
+    expect(campaignResponse.status).toBe(201);
+    const campaignId = (campaignResponse.body as { campaign: { id: string } }).campaign.id;
+    const sceneResponse = await requestJson(gmPage, '/api/scenes', 'POST', { campaignId, title: 'Persistent scene' });
+    expect(sceneResponse.status).toBe(201);
+    const sceneId = (sceneResponse.body as { scene: { id: string } }).scene.id;
+    const tokenRequest = { headers: { 'idempotency-key': crypto.randomUUID() }, data: { sceneId, name: 'Persistent token', x: 7, y: 11, color: '#c8794a' } };
+    const tokenResponse = await gmPage.request.post(`${baseURL}/api/tokens`, tokenRequest);
+    expect(tokenResponse.status()).toBe(201);
+    const tokenId = (await tokenResponse.json()).token.id;
+    const sourceResponse = await gmPage.request.post(`${baseURL}/api/tokens`, { data: { sceneId, name: 'Temporary copy source', x: 1, y: 1 } });
+    expect(sourceResponse.status()).toBe(201);
+    const { token: sourceToken } = await sourceResponse.json();
+    const copyPath = `${baseURL}/api/tokens/${sourceToken.id}/duplicate`;
+    const copyRequest = { headers: { 'idempotency-key': crypto.randomUUID() },
+      data: { sceneId, expectedVersion: sourceToken.version, x: 5, y: 6 } };
+    const copy = await gmPage.request.post(copyPath, copyRequest);
+    expect(copy.status()).toBe(201);
+    const { token: copiedToken } = await copy.json();
+    expect((await gmPage.request.delete(`${baseURL}/api/tokens/${sourceToken.id}`, {
+      data: { expectedVersion: sourceToken.version },
+    })).status()).toBe(204);
+    const inviteResponse = await requestJson(gmPage, '/api/invitations', 'POST', { campaignId });
+    expect(inviteResponse.status).toBe(201);
+    const invite = (inviteResponse.body as { invitation: string }).invitation;
+
+    await gmPage.reload();
+    await gmPage.getByRole('button', { name: new RegExp(`Restart recovery ${suffix}`) }).click();
+    await expect(gmPage.getByRole('heading', { name: `Restart recovery ${suffix}` })).toBeVisible();
+    await register(playerPage, 'Restart Player', `restart-player-${suffix}@example.test`, invite);
+    await expect(playerPage.getByRole('heading', { name: `Restart recovery ${suffix}` })).toBeVisible();
+    await expect(gmPage.locator('.live-status')).toHaveText('Live');
+    await expect(playerPage.locator('.live-status')).toHaveText('Live');
+    const initialPlayerTokens = (await requestJson(playerPage, `/api/scenes/${sceneId}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
+    expect(initialPlayerTokens).toContainEqual(expect.objectContaining({ id: tokenId, x: 7, y: 11 }));
+
+    diagnostic('terminate-original', { apiPid, port });
+    process.kill(apiPid, 'SIGTERM');
+    await waitForReady(port, false);
+    diagnostic('original-unready', { apiPid, port });
+    await expect(gmPage.locator('.live-status')).toHaveText(/Reconnecting|Offline/, { timeout: 15_000 });
+    await expect(playerPage.locator('.live-status')).toHaveText(/Reconnecting|Offline/, { timeout: 15_000 });
+
+    restartedApi = spawn(process.execPath, ['dist/index.js'], {
+      cwd: fileURLToPath(new URL('../../server', import.meta.url)),
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        HOST: '127.0.0.1',
+        PORT: String(port),
+        WEB_ORIGIN: baseURL,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let startupLog = '';
+    const capture = (chunk: Buffer) => { startupLog = (startupLog + chunk.toString()).slice(-8_000); };
+    restartedApi.stdout?.on('data', capture);
+    restartedApi.stderr?.on('data', capture);
+    diagnostic('child-spawned', { childPid: restartedApi.pid, node: process.version, entry: 'dist/index.js', cwd: fileURLToPath(new URL('../../server', import.meta.url)) });
+    const startupError = new Promise<never>((_resolve, reject) => {
+      restartedApi!.once('error', reject);
+      restartedApi!.once('exit', (code, signal) => {
+        diagnostic('child-exit', { childPid: restartedApi?.pid, code, signal });
+        reject(new Error(`Restarted API exited (${signal ?? code}):\n${startupLog}`));
+      });
+    });
+    try { await Promise.race([waitForReady(port, true), startupError]); }
+    catch (error) {
+      if (process.env.NRI_RESTART_TRACE === '1') {
+        const liveness = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2000) }).then((response) => response.status, () => 'unreachable');
+        diagnostic('child-readiness-failed', { childPid: restartedApi.pid, liveness });
+      }
+      throw new Error(`Restarted API failed readiness:\n${startupLog}`, { cause: error });
+    }
+    diagnostic('child-ready', { childPid: restartedApi.pid, startupLog });
+    await expect(gmPage.locator('.live-status')).toHaveText('Live', { timeout: 60_000 });
+    await expect(playerPage.locator('.live-status')).toHaveText('Live', { timeout: 60_000 });
+
+    expect((await requestJson(gmPage, '/api/auth/me')).status).toBe(200);
+    expect((await requestJson(playerPage, '/api/auth/me')).status).toBe(200);
+    const replay = await gmPage.request.post(`${baseURL}/api/tokens`, tokenRequest);
+    expect(replay.status()).toBe(200);
+    expect((await replay.json()).token.id).toBe(tokenId);
+    const recoveredCopy = await gmPage.request.post(copyPath, copyRequest);
+    expect(recoveredCopy.status()).toBe(200);
+    expect((await recoveredCopy.json()).token.id).toBe(copiedToken.id);
+    const gmTokens = (await requestJson(gmPage, `/api/scenes/${sceneId}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
+    const playerTokens = (await requestJson(playerPage, `/api/scenes/${sceneId}/tokens`)).body as Array<{ id: string; x: number; y: number }>;
+    expect(gmTokens).toContainEqual(expect.objectContaining({ id: tokenId, x: 7, y: 11 }));
+    expect(playerTokens).toContainEqual(expect.objectContaining({ id: tokenId, x: 7, y: 11 }));
+  } finally {
+    await Promise.all([gmContext.close(), playerContext.close()]);
+    restartedApi?.kill();
+  }
+});

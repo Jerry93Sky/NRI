@@ -1,0 +1,1 @@
+ALTER TABLE "initiative_entries" ADD COLUMN "hidden" boolean DEFAULT false NOT NULL;

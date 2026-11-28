@@ -1,0 +1,71 @@
+# NRI Platform
+
+NRI Platform is a system-neutral virtual tabletop. Game masters manage campaigns, scenes, tokens and player access. The long-term goal is a platform for creating custom rules, automating play and simulating worlds.
+
+**EVERDOOR** is the approved product name and **Every door, a new adventure** the tagline; NRI Platform remains the temporary technical project name. The brand direction and user journey are `PLANNED` in the [EVERDOOR brand vision](docs/design/EVERDOOR_BRAND_VISION.md); the current interface is unchanged.
+
+## Status
+
+**V0.1.1 — IN_PROGRESS.** See the [readiness report](docs/releases/V0.1.1_FINAL_READINESS.md) for hardware and operations evidence. The [local HTTPS stand](docs/operations/LOCAL_HTTPS_ACCEPTANCE.md) and [GM and two-player checklist](docs/releases/V0.1.1_MANUAL_ACCEPTANCE.md) support hands-on acceptance. Changes are published in [Draft PR #1](https://github.com/Jerry93Sky/NRI/pull/1).
+
+The [Russian owner quick start](docs/operations/OWNER_QUICK_START_RU.md) covers solo exploration and the separate acceptance session. [Inventory & Equipment](docs/design/INVENTORY_EQUIPMENT.md), [Trading](docs/design/TRADING.md) and [Loot](docs/design/LOOT.md) are `PLANNED`.
+
+The [owner review](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md#самостоятельный-обзор-владельца--2026-11-28) records positive feedback from solo exploration. [Master Studio](docs/design/MASTER_STUDIO.md) and [Adventure Builder](docs/design/ADVENTURE_BUILDER.md) are `PLANNED`. The GM chooses how much to prepare and uses additional tools when needed.
+
+## Implemented
+
+- Replaying a token copy can recover an authorized result after source deletion. Receipt cleanup was tested in an isolated database. Image processing is limited to two active jobs. The log canary covers API and isolated PostgreSQL logs. [RT-RETRY](docs/architecture/COMMAND_RETRY_POLICY.md) · [SEC-OPS](docs/security/LOGGING_AND_REDACTION.md) · [Gesture matrix](docs/testing/PLAY_GESTURES_MATRIX.md)
+- [Player Tabletop](docs/design/PLAYER_TABLETOP.md), [Character Studio](docs/design/CHARACTER_STUDIO.md) and [NPC social relations](docs/architecture/SOCIAL_RELATIONS.md) are `PLANNED`. [Commercial strategy](docs/product/COMMERCIAL_STRATEGY_DRAFT.md) is a discussion draft.
+
+- Campaign roles, invitations, active scenes and GM drafts. PostgreSQL and Socket.IO back multiplayer commands.
+- Grid calibration, images, tokens and private notes, layers and objects, grouped actions, drawing, ruler, pointer and selection. Version-aware Undo/Redo covers movement, supported properties and the object lifecycle.
+- Single movement and group token updates share a PostgreSQL transaction for authorization, version checks and atomic writes. Movement events are published after commit.
+- Scene object deletion and restoration are atomic and check current permissions, layers and versions. Restore preserves object IDs, and delivery checks current recipient access.
+- Object creation, editing and movement between layers, and layer changes use current delivery permissions. The client refreshes its authorized snapshot when content is hidden or removed. [Event inventory](docs/security/REALTIME_EVENT_MATRIX.md)
+- Pointer and active-scene metadata use current audience and version checks. Control notifications reconcile roles, scenes and drawing permission from authorized snapshots. RT-ACL is automatically verified; remaining writer authorization work is listed in the [closure plan](docs/releases/V0.1.1_CLOSURE_PLAN.md#следующий-конечный-пакет-cmd-acl).
+- Public and private chat, public and hidden rolls, initiative, reconnect and API restart recovery. Creating and copying tokens, objects, scenes and campaigns, and uploading files support an explicit retry after an unknown outcome. The server checks current access and keeps result IDs for up to 90 days. RT-RETRY is `AUTOMATED_TESTS_PASSED`. See the [retry policy](docs/architecture/COMMAND_RETRY_POLICY.md) and [acceptance report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md). [Campaign Lobby](docs/design/CAMPAIGN_LOBBY.md) and [GM Screen](docs/design/GM_SCREEN.md) are `PLANNED`.
+- **Amber Crossing: The Lantern Vault** with original assets, campaign copy and the [owner acceptance guide](docs/releases/V0.1.1_MANUAL_ACCEPTANCE.md).
+- Isolated verification of the [HTTPS alpha stack](docs/operations/PRODUCTION_DEPLOYMENT.md), [SHA-256 backup/restore and retention](docs/operations/BACKUP_RESTORE.md), and [load profiles A/B/C](docs/performance/LOAD_TEST_REPORT.md).
+
+## V0.1.1 limitations
+
+- A full session with a GM and two independent players is pending. The [readiness report](docs/releases/V0.1.1_FINAL_READINESS.md) lists the remaining criteria for the target environment.
+- Large scenes remain slow in the software renderer. Hardware runs, long-duration memory checks and detailed profiling remain open.
+- V0.2 PR 1 adds a GM obstacle editor, versioned wall/door/window geometry and a local **Geometry Workshop** demo. [Implementation and verification](docs/releases/V0.2_PR_01_RESULT.md) · [Map & Scene Editor design](docs/design/MAP_SCENE_EDITOR.md)
+- V0.2 PR 2 adds **Restrict movement** per scene. The server checks the full token movement segment and rejects the entire group action if any path is blocked. [Contract, tests and demo](docs/releases/V0.2_PR_02_RESULT.md)
+
+## Stack
+
+React, TypeScript, Vite, PixiJS, Zustand, i18next; Node.js 24.13, Fastify, Socket.IO, PostgreSQL 16, Drizzle, Zod, pnpm workspaces, Docker Compose, Vitest, and GitHub Actions.
+
+## Run and check
+
+See [local setup](docs/development/LOCAL_SETUP.md). Main commands:
+
+```powershell
+corepack pnpm@12.23.0 install --frozen-lockfile
+docker compose up -d db
+corepack pnpm@12.23.0 db:migrate
+corepack pnpm@12.23.0 dev
+```
+
+In another terminal:
+
+```powershell
+corepack pnpm@12.23.0 build
+corepack pnpm@12.23.0 typecheck
+corepack pnpm@12.23.0 test
+```
+
+The [V0.1 report](docs/releases/V0.1_ACCEPTANCE_REPORT.md) documents the multiplayer integration test. The [V0.1.1 report](docs/releases/V0.1.1_ACCEPTANCE_REPORT.md#transactional-token-movement--2026-11-27) covers concurrent movement tests. Do not publish `.env`, user data, or uploaded maps.
+
+## Documentation and roadmap
+
+- [Product vision](docs/product/PRODUCT_VISION.md) · [Roadmap](docs/product/ROADMAP.md) · [V0.1 scope](docs/product/V0_1_SCOPE.md)
+- [Long-term plan and release gates](docs/product/LONG_TERM_IMPLEMENTATION_PLAN.md) · [Ruleset licensing strategy](docs/product/RULESET_LICENSING_STRATEGY.md)
+- [Architecture](docs/architecture/ARCHITECTURE.md) · [Data model](docs/architecture/DATA_MODEL.md) · [Realtime protocol](docs/architecture/REALTIME_PROTOCOL.md)
+- [Backup and restore procedure](docs/operations/BACKUP_RESTORE.md)
+- [Threat model](docs/security/THREAT_MODEL.md) · [Commercial strategy](docs/product/COMMERCIAL_STRATEGY.md)
+- [Changelog](CHANGELOG.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
+V0.1.1 acceptance and V0.2 Tactical Tabletop development proceed in parallel on the working branch. Existing release criteria apply. All source rights remain with their owners.

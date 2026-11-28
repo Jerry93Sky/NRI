@@ -2,6 +2,8 @@
 node_modules/
 dist/
 coverage/
+apps/web/test-results/
+apps/server/tmp-regression-media/
 .turbo/
 .vite/
 
@@ -14,6 +16,7 @@ coverage/
 # Local data, uploads, and logs
 .data/
 uploads/
+.backups/
 *.log
 npm-debug.log*
 pnpm-debug.log*

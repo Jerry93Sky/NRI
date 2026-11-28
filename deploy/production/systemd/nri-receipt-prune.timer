@@ -1,0 +1,10 @@
+[Unit]
+Description=Run EVERDOOR REST receipt cleanup daily
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+Unit=nri-receipt-prune.service
+
+[Install]
+WantedBy=timers.target

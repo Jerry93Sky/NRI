@@ -1,0 +1,398 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+      SESSION_SECRET: ci-secret-is-not-for-deployment
+    services:
+      postgres:
+        image: postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_USER: nri
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: nri_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U nri -d nri_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.13.0
+          package-manager-cache: false
+      - run: corepack enable && corepack prepare pnpm@12.23.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit
+      - name: Check tracked files for secrets
+        run: node scripts/check-tracked-secrets.mjs
+      - run: pnpm build
+        env:
+          NODE_ENV: production
+      - name: Validate operational configuration
+        run: |
+          node --check scripts/backup.mjs
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.production.yml config -q
+        env:
+          NRI_DATABASE_PASSWORD: ci-compose-validation-only
+          WEB_ORIGIN: https://nri.example.invalid
+          NRI_TLS_DIR: .
+      - run: pnpm typecheck
+      - run: pnpm db:migrate
+      - run: pnpm test
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
+      - name: Start API for realtime smoke test
+        run: |
+          pnpm --filter @nri/server dev > /tmp/nri-server.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/ready; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/nri-server.log
+          exit 1
+        env:
+          NODE_ENV: test
+          PORT: 3000
+          HOST: 127.0.0.1
+          WEB_ORIGIN: http://127.0.0.1:4175
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
+      - run: pnpm --filter @nri/server smoke
+        env:
+          NRI_API_URL: http://127.0.0.1:3000
+          NODE_ENV: test
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
+      - name: Test token movement transactions and permissions
+        run: pnpm --filter @nri/server test:movement
+        env:
+          NRI_API_URL: http://127.0.0.1:3000
+      - name: Test scene object lifecycle transactions and permissions
+        run: pnpm --filter @nri/server test:object-lifecycle
+        env:
+          NRI_API_URL: http://127.0.0.1:3000
+      - name: Test scoped scene content event delivery
+        run: pnpm --filter @nri/server test:realtime
+        env:
+          NRI_API_URL: http://127.0.0.1:3000
+      - name: Test scene geometry permissions, transactions and lifecycle
+        run: |
+          PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_geometry_test
+          pnpm db:migrate
+          node apps/server/dist/index.js > /tmp/nri-geometry-server.log 2>&1 &
+          geometry_api=$!
+          trap 'kill "$geometry_api" 2>/dev/null || true; wait "$geometry_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$NRI_API_URL/api/ready"; then
+              pnpm --filter @nri/server test:geometry
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-geometry-server.log
+          exit 1
+        env:
+          NRI_API_URL: http://127.0.0.1:3008
+          HOST: 127.0.0.1
+          PORT: 3008
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-geometry-media
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_geometry_test
+      - name: Test movement collision transactions on isolated PostgreSQL
+        run: |
+          PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_collision_test
+          pnpm db:migrate
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-movement-collision.log 2>&1 &
+          collision_api=$!
+          trap 'kill "$collision_api" 2>/dev/null || true; wait "$collision_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$NRI_API_URL/api/ready"; then
+              pnpm --filter @nri/server test:movement-collision
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-movement-collision.log
+          exit 1
+        env:
+          NRI_API_URL: http://127.0.0.1:3010
+          HOST: 127.0.0.1
+          PORT: 3010
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-movement-collision-media
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_collision_test
+      - name: Test private channel permissions and delivery
+        run: |
+          node apps/server/dist/index.js > /tmp/nri-private-server.log 2>&1 &
+          private_api=$!
+          trap 'kill "$private_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$NRI_API_URL/api/ready"; then
+              pnpm --filter @nri/server test:private-channels
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-private-server.log
+          exit 1
+        env:
+          NRI_API_URL: http://127.0.0.1:3003
+          HOST: 127.0.0.1
+          PORT: 3003
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-private-media
+      - name: Test transactional command authorization and media compensation
+        run: |
+          node apps/server/dist/index.js > /tmp/nri-command-acl-server.log 2>&1 &
+          command_api=$!
+          trap 'kill "$command_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$NRI_API_URL/api/ready"; then
+              pnpm --filter @nri/server test:command-authorization
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-command-acl-server.log
+          exit 1
+        env:
+          NODE_ENV: test
+          PORT: 3004
+          HOST: 127.0.0.1
+          WEB_ORIGIN: http://127.0.0.1:4175
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
+          NRI_API_URL: http://127.0.0.1:3004
+          UPLOAD_DIR: /tmp/nri-command-media
+      - name: Test RT-RETRY on an isolated PostgreSQL database
+        run: |
+          export UPLOAD_DIR="$(mktemp -d /tmp/nri-retry-media.XXXXXXXX)"
+          trap 'rm -rf -- "$UPLOAD_DIR"' EXIT
+          PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_retry_test
+          DATABASE_URL=postgres://nri:ci-only-password@127.0.0.1:5432/nri_retry_test pnpm db:migrate
+          node apps/server/dist/index.js > /tmp/nri-retry-server.log 2>&1 &
+          retry_api=$!
+          trap 'kill "$retry_api" 2>/dev/null || true; wait "$retry_api" 2>/dev/null || true; rm -rf -- "$UPLOAD_DIR"' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$NRI_API_URL/api/ready"; then
+              pnpm --filter @nri/server test:retry
+              pnpm --filter @nri/server exec node scripts/rest-retry-recovery.mjs
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-retry-server.log
+          exit 1
+        env:
+          NODE_ENV: test
+          PORT: 3005
+          HOST: 127.0.0.1
+          WEB_ORIGIN: http://127.0.0.1:4175
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_retry_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
+          NRI_API_URL: http://127.0.0.1:3005
+          NRI_ENABLE_TEST_FAULTS: "true"
+      - name: Verify retry and geometry upgrades preserve existing campaign data
+        run: |
+          PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_retry_upgrade_test
+          pnpm --filter @nri/server test:retry-migration-upgrade
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_retry_upgrade_test
+      - name: Check isolated operational logs for synthetic sensitive data
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U nri -d postgres \
+            -c "ALTER SYSTEM SET log_min_messages = 'log'" \
+            -c "ALTER SYSTEM SET log_min_error_statement = 'panic'" \
+            -c "ALTER SYSTEM SET log_error_verbosity = 'terse'" \
+            -c "ALTER SYSTEM SET log_parameter_max_length = 0" \
+            -c "ALTER SYSTEM SET log_parameter_max_length_on_error = 0" \
+            -c 'SELECT pg_reload_conf()'
+          PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_sec_ops_test
+          pnpm db:migrate
+          pnpm --filter @nri/server exec node scripts/logging-canary.mjs
+        env:
+          PGPASSWORD: ci-only-password
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_sec_ops_test
+          NRI_LOG_CANARY_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+      - name: Profile bounded image uploads in isolated Compose
+        run: |
+          docker compose -f deploy/testing/compose.sec-ops.yml config -q
+          docker build --target api -f Dockerfile.production -t "$NRI_PROFILE_API_IMAGE" .
+          trap 'docker compose -f deploy/testing/compose.sec-ops.yml down --remove-orphans' EXIT
+          docker compose -f deploy/testing/compose.sec-ops.yml run --rm api node dist/migrate.js
+          docker compose -f deploy/testing/compose.sec-ops.yml up -d api
+          export NRI_PROFILE_CONTAINER="$(docker compose -f deploy/testing/compose.sec-ops.yml ps -q api)"
+          pnpm --filter @nri/server exec node scripts/sec-ops-upload-profile.mjs
+        env:
+          NRI_PROFILE_API_IMAGE: nri-sec-ops-ci:local
+          NRI_PROFILE_DB_PASSWORD: isolated-upload-profile-ci
+          NRI_PROFILE_SESSION_SECRET: isolated-upload-profile-ci-only
+          NRI_PROFILE_BOUNDED: "1"
+      - name: Verify closed HTTPS, database outage and graceful API recovery
+        run: |
+          stage_dir="$(mktemp -d)"
+          export NRI_TLS_DIR="$stage_dir"
+          export NRI_DATABASE_PASSWORD="$(openssl rand -hex 24)"
+          export DATABASE_URL="postgres://nri:${NRI_DATABASE_PASSWORD}@db:5432/nri_alpha"
+          export SESSION_SECRET="$(openssl rand -hex 32)"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 \
+            -addext subjectAltName=IP:127.0.0.1 -keyout "$stage_dir/privkey.pem" -out "$stage_dir/fullchain.pem" 2>/dev/null
+          compose=(docker compose -p nri-acceptance-ci -f docker-compose.production.yml -f deploy/testing/compose.acceptance.yml)
+          trap '"${compose[@]}" down --remove-orphans' EXIT
+          "${compose[@]}" config -q
+          "${compose[@]}" build api proxy
+          "${compose[@]}" --profile maintenance run --rm migrate
+          "${compose[@]}" up -d --wait api proxy
+          export NODE_EXTRA_CA_CERTS="$stage_dir/fullchain.pem"
+          export NRI_OPS_FIXTURE="$stage_dir/fixture.json"
+          pnpm --filter @nri/server exec node scripts/ops-recovery.mjs
+        env:
+          WEB_ORIGIN: https://127.0.0.1:35443
+          NRI_HTTPS_BIND: 127.0.0.1
+          NRI_HTTPS_PORT: 35443
+          NRI_OPS_ORIGIN: https://127.0.0.1:35443
+          NRI_OPS_DB_CONTAINER: nri-acceptance-ci-db-1
+          NRI_OPS_API_CONTAINER: nri-acceptance-ci-api-1
+      - name: Start fresh API for browser tests
+        run: |
+          cd apps/server
+          node dist/index.js > /tmp/nri-browser-server.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3001/api/ready; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/nri-browser-server.log
+          exit 1
+        env:
+          NODE_ENV: test
+          PORT: 3001
+          HOST: 127.0.0.1
+          WEB_ORIGIN: http://127.0.0.1:4175
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
+      - name: Install Playwright Chromium
+        run: pnpm --filter @nri/web exec playwright install --with-deps chromium
+      - name: Smoke-test the built Pixi renderer
+        run: |
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-pixi.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$API_PROXY_TARGET/api/ready"; then
+              pnpm --filter @nri/web e2e texture-lifecycle
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-browser-pixi.log
+          exit 1
+        env:
+          CI: true
+          API_PROXY_TARGET: http://127.0.0.1:3007
+          HOST: 127.0.0.1
+          PORT: 3007
+          WEB_ORIGIN: http://127.0.0.1:4175
+          NRI_E2E_PREVIEW: "true"
+      - name: Run browser integration and privacy scenarios
+        run: pnpm --filter @nri/web e2e --grep-invert 'GM and Player sessions recover persisted campaign state after API restart|GM draws and edits geometry on the live canvas|GM and Player use server-authoritative collision in Vault of Four Doors'
+        env:
+          CI: true
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:4175
+          API_PROXY_TARGET: http://127.0.0.1:3001
+          NODE_ENV: test
+          HOST: 127.0.0.1
+          PORT: 3001
+          WEB_ORIGIN: http://127.0.0.1:4175
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+      - name: Verify the GM scene geometry editor in Chromium
+        run: |
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-geometry.log 2>&1 &
+          geometry_api=$!
+          trap 'kill "$geometry_api" 2>/dev/null || true; wait "$geometry_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$API_PROXY_TARGET/api/ready"; then
+              pnpm --filter @nri/web e2e scene-geometry.spec.ts
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-browser-geometry.log
+          exit 1
+        env:
+          CI: true
+          NRI_E2E_PREVIEW: "true"
+          API_PROXY_TARGET: http://127.0.0.1:3009
+          HOST: 127.0.0.1
+          PORT: 3009
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-browser-geometry-media
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_geometry_test
+      - name: Verify GM and Player movement collision in Chromium
+        run: |
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-collision.log 2>&1 &
+          collision_api=$!
+          trap 'kill "$collision_api" 2>/dev/null || true; wait "$collision_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$API_PROXY_TARGET/api/ready"; then
+              pnpm --filter @nri/web e2e movement-collision.spec.ts
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-browser-collision.log
+          exit 1
+        env:
+          CI: true
+          NRI_E2E_PREVIEW: "true"
+          API_PROXY_TARGET: http://127.0.0.1:3011
+          HOST: 127.0.0.1
+          PORT: 3011
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-browser-movement-collision-media
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_collision_test
+      - name: Verify browser recovery after API restart on a fresh process
+        run: |
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-restart.log 2>&1 &
+          export NRI_BROWSER_API_PID=$!
+          trap 'kill "$NRI_BROWSER_API_PID" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$API_PROXY_TARGET/api/ready"; then
+              pnpm --filter @nri/web e2e zz-server-restart
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-browser-restart.log
+          exit 1
+        env:
+          CI: true
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:4175
+          API_PROXY_TARGET: http://127.0.0.1:3006
+          NODE_ENV: test
+          HOST: 127.0.0.1
+          PORT: 3006
+          WEB_ORIGIN: http://127.0.0.1:4175
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_test
+          SESSION_SECRET: ci-secret-is-not-for-deployment
