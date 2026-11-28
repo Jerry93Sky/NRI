@@ -24,7 +24,7 @@ NRI Platform is a system-neutral platform for creating, automating and running t
 
 ## Product directions
 
-[Player Tabletop](../design/PLAYER_TABLETOP.md) captures the planned player workspace, privacy, combat, trade and loot experience. [Social Relations](../architecture/SOCIAL_RELATIONS.md) captures GM-controlled group attitude and proposed rules and world dependencies. [Commercial strategy](COMMERCIAL_STRATEGY_DRAFT.md) is a discussion draft. Character Studio design is deferred.
+[Player Tabletop](../design/PLAYER_TABLETOP.md) captures the planned player workspace. [Character Studio](../design/CHARACTER_STUDIO.md) records the approved character creation, progression and independent campaign instances. [Social Relations](../architecture/SOCIAL_RELATIONS.md) covers GM-controlled group attitude. [Commercial strategy](COMMERCIAL_STRATEGY_DRAFT.md) remains a discussion draft. Inventory & Equipment, Trading and Loot are the next design topics for owner review.
 
 | Capability | Player, GM or creator outcome |
 | --- | --- |

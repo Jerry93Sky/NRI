@@ -8,4 +8,4 @@
 - A phased commercial launch could precede completion of the Living World Engine.
 - GM time savings are the main value hypothesis. Measure session preparation time, repeat use across multiple groups and willingness to pay before setting scope or prices.
 
-Open decisions include licensing of rules systems and third-party materials, creator terms, geographic and payment requirements, and which capabilities should remain free. Pricing, market size and revenue are unvalidated. Billing, marketplace and subscriptions are outside V0.1.1. Character Studio design discussion is deferred.
+Open decisions include licensing of rules systems and third-party materials, creator terms, geographic and payment requirements, and which capabilities should remain free. Pricing, market size and revenue are unvalidated. Billing, marketplace and subscriptions are outside V0.1.1.

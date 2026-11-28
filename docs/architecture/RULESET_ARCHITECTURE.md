@@ -1,6 +1,6 @@
 # Universal Ruleset Architecture and Registry
 
-**Status · PLANNED.** V0.3 introduces the built-in subset required by Character Studio. V0.4 broadens evaluation. V0.4.1 adds imports, exports and registry workflows.
+**Status · PLANNED.** V0.3 introduces the built-in subset required by [Character Studio](../design/CHARACTER_STUDIO.md). V0.4 broadens evaluation. V0.4.1 adds imports, exports and registry workflows.
 
 ## Package identity and contents
 

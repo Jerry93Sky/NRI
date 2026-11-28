@@ -2,6 +2,8 @@
 
 **Status: PLANNED.** Owner-approved direction for a later release. V0.1.1 keeps its existing tabletop.
 
+[Character Studio](CHARACTER_STUDIO.md) supplies the authoritatively saved character sheet and ability references used by the player workspace.
+
 ## Interface and actions
 
 An RPG-style interface around a central scene supports a hidden or expandable character card, configurable and resizable panels, saved layouts, secondary windows for multiple monitors, immersion mode, and a manually configured quick-action strip. Automatic population as a character advances is outside the first version. Start with simple dice results. Physical dice animation can be considered later.

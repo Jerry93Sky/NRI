@@ -2,6 +2,8 @@
 
 **Status · PLANNED for V0.3.** Characters, NPCs and creatures are entity instances of package-defined templates. The same engine supports an inventory-driven explorer, a simple stat block and a sheet with no class or levels.
 
+[Character Studio](../design/CHARACTER_STUDIO.md) records the owner-approved workflow. A reusable personal character template can create independent campaign instances. The rules package, campaign compatibility and admission approval govern the instance.
+
 ## State and interfaces
 
 | Model | Responsibilities |

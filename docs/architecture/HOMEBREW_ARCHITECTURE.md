@@ -6,6 +6,8 @@
 
 Typed editors cover characteristics, skills, classes and professions, creatures, abilities, items, progression, sheet layout, formulas, conditions, triggers, reactions and combat policy. Sheets reference stable field IDs, with schema-based input components and explicit visibility. An author can add namespaces and definitions, extend declared slots, or replace a typed target when a base package permits it. A restriction from an upstream rights policy applies to derivative publication.
 
+Campaign authors provide sheets and character creation rules through the same versioned definitions consumed by [Character Studio](../design/CHARACTER_STUDIO.md).
+
 The effective ruleset is assembled in this order.
 
 1. Resolve the exact base and its immutable dependency graph.
