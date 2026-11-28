@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory)][ValidateSet('up','down','status','seed','logs','prune','backup','restore')][string]$Action,
+  [Parameter(Mandatory)][ValidateSet('up','down','status','seed','seed-geometry','logs','prune','backup','restore')][string]$Action,
   [Parameter(Mandatory)][string]$EnvFile,
   [ValidatePattern('^nri-acceptance-[a-z0-9-]+$')][string]$Project = 'nri-acceptance-local',
   [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$')][string]$BackupName
@@ -49,6 +49,9 @@ try {
       if ($env:DEMO_PASSWORD.Length -lt 12) { throw 'Set a disposable DEMO_PASSWORD of at least 12 characters in this process.' }
       Invoke-Docker ($prefix + @('run','--rm','-e','DEMO_PASSWORD','api','node','dist/seed.js'))
       Invoke-Docker ($prefix + @('run','--rm','-e','NODE_ENV=test','-e','NRI_ACCEPTANCE_DEMO=1','api','node','dist/seedPlayableAmber.js'))
+    }
+    'seed-geometry' {
+      Invoke-Docker ($prefix + @('run','--rm','-e','NODE_ENV=test','-e','NRI_ACCEPTANCE_DEMO=1','api','node','dist/seedGeometryDemo.js'))
     }
     'logs' { Invoke-Docker ($prefix + @('logs','--tail','100','api','db','proxy')) }
     'prune' { Invoke-Docker ($prefix + @('--profile','maintenance','run','--rm','migrate','node','scripts/prune-operation-receipts.mjs')) }

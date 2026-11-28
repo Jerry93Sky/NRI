@@ -14,6 +14,7 @@ import { registerMembershipRoutes } from './modules/memberships/routes.js';
 import { registerChatRoutes } from './modules/chat/routes.js';
 import { registerInitiativeRoutes } from './modules/initiative/routes.js';
 import { registerSceneRoutes } from './modules/scenes/routes.js';
+import { registerGeometryRoutes } from './modules/geometry/routes.js';
 import { registerSceneContentRoutes } from './modules/scene-content/routes.js';
 import { registerAssetRoutes } from './modules/assets/routes.js';
 import { registerTokenRoutes } from './modules/tokens/routes.js';
@@ -89,6 +90,7 @@ export async function createApp() {
   registerChatRoutes(app);
   registerInitiativeRoutes(app, io);
   registerSceneRoutes(app, io);
+  registerGeometryRoutes(app, io);
   registerSceneContentRoutes(app, io);
   const assetProcessing = registerAssetRoutes(app, io);
   registerTokenRoutes(app, io);

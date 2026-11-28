@@ -1,5 +1,6 @@
 import { boolean, check, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import type { ObstacleFields } from '@nri/contracts/geometry';
 
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(), email: varchar('email', { length: 254 }).notNull().unique(),
@@ -45,6 +46,29 @@ export const scenes = pgTable('scenes', {
   sortOrder: integer('sort_order').notNull().default(0), isActive: boolean('is_active').notNull().default(false), published: boolean('published').notNull().default(false), cameraX: doublePrecision('camera_x').notNull().default(0), cameraY: doublePrecision('camera_y').notNull().default(0), cameraZoom: doublePrecision('camera_zoom').notNull().default(1),
   archivedAt: timestamp('archived_at', { withTimezone: true }), version: integer('version').notNull().default(1),
 }, (t) => [index('scenes_campaign_idx').on(t.campaignId), uniqueIndex('scenes_one_active_per_campaign_idx').on(t.campaignId).where(sql`${t.isActive} = true`)]);
+export const sceneGeometry = pgTable('scene_geometry', {
+  sceneId: uuid('scene_id').primaryKey().references(() => scenes.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull().default(0),
+  tacticalVisibilityEnabled: boolean('tactical_visibility_enabled').notNull().default(false),
+  obstacleMovementEnabled: boolean('obstacle_movement_enabled').notNull().default(false),
+}, (t) => [check('scene_geometry_revision_check', sql`${t.revision} >= 0`)]);
+export const sceneObstacles = pgTable('scene_obstacles', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }),
+  startX: integer('start_x').notNull(), startY: integer('start_y').notNull(),
+  endX: integer('end_x').notNull(), endY: integer('end_y').notNull(),
+  kind: varchar('kind', { length: 16 }).$type<ObstacleFields['kind']>().notNull(),
+  doorState: varchar('door_state', { length: 16 }).$type<NonNullable<ObstacleFields['doorState']>>(),
+  visibility: varchar('visibility', { length: 16 }).$type<ObstacleFields['visibility']>().notNull(),
+  blocksMovement: boolean('blocks_movement').notNull(), blocksVision: boolean('blocks_vision').notNull(),
+  version: integer('version').notNull().default(1),
+}, (t) => [
+  index('scene_obstacles_scene_idx').on(t.sceneId, t.id),
+  check('scene_obstacles_position_check', sql`${t.startX} BETWEEN 0 AND 16384000 AND ${t.startY} BETWEEN 0 AND 16384000 AND ${t.endX} BETWEEN 0 AND 16384000 AND ${t.endY} BETWEEN 0 AND 16384000 AND (${t.startX} <> ${t.endX} OR ${t.startY} <> ${t.endY})`),
+  check('scene_obstacles_kind_check', sql`(${t.kind} = 'DOOR' AND ${t.doorState} IS NOT NULL AND ${t.doorState} IN ('OPEN', 'CLOSED', 'LOCKED')) OR (${t.kind} IN ('WALL', 'WINDOW') AND ${t.doorState} IS NULL)`),
+  check('scene_obstacles_visibility_check', sql`${t.visibility} IN ('STANDARD', 'SECRET')`),
+  check('scene_obstacles_version_check', sql`${t.version} > 0`),
+]);
 export const sceneLayers = pgTable('scene_layers', {
   id: uuid('id').defaultRandom().primaryKey(), sceneId: uuid('scene_id').notNull().references(() => scenes.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 48 }).notNull(), kind: varchar('kind', { length: 16 }).notNull(), sortOrder: integer('sort_order').notNull().default(0),

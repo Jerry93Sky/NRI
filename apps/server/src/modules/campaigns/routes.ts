@@ -14,6 +14,7 @@ import { archiveCampaignSockets } from '../../realtime/campaignRooms.js';
 import { publishDrawingPermission } from '../../realtime/campaignEvents.js';
 import { commandSessionIsActive, lockCampaignActor, lockCommandSession, type Transaction } from '../../security/commandAccess.js';
 import { lockOperationReceipt, operationRequestId, saveOperationReceipt } from '../../security/operationReceipts.js';
+import { copySceneGeometry } from '../geometry/service.js';
 
 async function readCampaignCopy(tx: Transaction, actorId: string, resultId: string) {
   const [existing] = await tx.select().from(campaigns)
@@ -186,6 +187,7 @@ export function registerCampaignRoutes(app: FastifyInstance, io: Server) {
           sceneIds.set(sourceId, scene.id);
         }
 
+        await copySceneGeometry(tx, sceneIds);
         const layerIds = new Map<string, string>();
         for (const sourceLayer of sourceLayerRows) {
           const { id: sourceId, sceneId: sourceSceneId, ...layerValues } = sourceLayer;

@@ -14,6 +14,7 @@ import { invalidateSceneInitiative } from '../initiative/service.js';
 import { publishInitiative } from '../../realtime/initiativeEvents.js';
 import { publishSceneActivation, publishSceneUpdate } from '../../realtime/sceneEvents.js';
 import { lockOperationReceipt, operationRequestId, saveOperationReceipt } from '../../security/operationReceipts.js';
+import { copySceneGeometry, geometryFitsDimensions } from '../geometry/service.js';
 
 export function registerSceneRoutes(app: FastifyInstance, io: Server) {
   app.get('/api/campaigns/:campaignId/scenes', async (request, reply) => {
@@ -47,13 +48,17 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       if ('error' in context) return context;
       if (context.role !== 'OWNER' && context.role !== 'GM') return { error: 'FORBIDDEN' } as const;
       if (context.scene.version !== expectedVersion) return { error: 'CONFLICT' } as const;
+      if ((patch.width !== undefined || patch.height !== undefined) &&
+        !await geometryFitsDimensions(tx, sceneId, patch.width ?? context.scene.width, patch.height ?? context.scene.height)) {
+        return { error: 'GEOMETRY_OUT_OF_BOUNDS' } as const;
+      }
       const [updated] = await tx.update(scenes).set({ ...patch, version: expectedVersion + 1 })
         .where(and(eq(scenes.id, sceneId), eq(scenes.version, expectedVersion), isNull(scenes.archivedAt))).returning();
       if (!updated) return { error: 'CONFLICT' } as const;
       await tx.insert(auditEvents).values({ campaignId: context.scene.campaignId, actorId: context.userId, action: 'scene.updated', targetId: sceneId });
       return { updated, campaignId: context.scene.campaignId } as const;
     });
-    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : result.error === 'NOT_FOUND' ? 404 : result.error === 'CONFLICT' ? 409 : 403).send({ error: result.error });
+    if ('error' in result) return reply.code(result.error === 'UNAUTHENTICATED' ? 401 : result.error === 'NOT_FOUND' ? 404 : result.error === 'CONFLICT' || result.error === 'GEOMETRY_OUT_OF_BOUNDS' ? 409 : 403).send({ error: result.error });
     const { updated } = result;
     if (updated.isActive) void publishSceneUpdate(io, result.campaignId, sceneId, updated.version).catch(() => request.log.error('Scene update could not be published'));
     return { scene: updated };
@@ -80,6 +85,7 @@ export function registerSceneRoutes(app: FastifyInstance, io: Server) {
       const { id: _id, archivedAt: _archivedAt, version: _version, isActive: _isActive, published: _published, sortOrder: _sortOrder, ...copy } = source;
       const [scene] = await tx.insert(scenes).values({ ...copy, title: `${source.title} (copy)`.slice(0, 80), sortOrder: (last?.sortOrder ?? -1) + 1, isActive: false, published: false, archivedAt: null, version: 1 }).returning();
       if (!scene) throw new Error('Scene duplication failed');
+      await copySceneGeometry(tx, new Map([[source.id, scene.id]]));
       const sourceLayers = await tx.select().from(sceneLayers).where(eq(sceneLayers.sceneId, source.id)).orderBy(asc(sceneLayers.id)).for('share');
       const copiedLayers = await tx.insert(sceneLayers).values(sourceLayers.map(({ id: _layerId, sceneId: _sceneId, ...layer }) => ({ ...layer, sceneId: scene.id, version: 1 }))).returning();
       const layerMap = new Map(sourceLayers.map((layer, index) => [layer.id, copiedLayers[index]!.id]));

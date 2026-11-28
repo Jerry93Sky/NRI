@@ -96,6 +96,10 @@ jobs:
         run: pnpm --filter @nri/server test:realtime
         env:
           NRI_API_URL: http://127.0.0.1:3000
+      - name: Test scene geometry permissions, transactions and lifecycle
+        run: pnpm --filter @nri/server test:geometry
+        env:
+          NRI_API_URL: http://127.0.0.1:3000
       - name: Test private channel permissions and delivery
         run: |
           node apps/server/dist/index.js > /tmp/nri-private-server.log 2>&1 &
@@ -167,7 +171,7 @@ jobs:
           SESSION_SECRET: ci-secret-is-not-for-deployment
           NRI_API_URL: http://127.0.0.1:3005
           NRI_ENABLE_TEST_FAULTS: "true"
-      - name: Verify retry migration upgrade preserves existing chat and dice rows
+      - name: Verify retry and geometry upgrades preserve existing campaign data
         run: |
           PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_retry_upgrade_test
           pnpm --filter @nri/server test:retry-migration-upgrade
