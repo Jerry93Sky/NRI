@@ -2,9 +2,13 @@ import { useEffect, useRef } from 'react';
 import { Application, Assets, Container, Graphics, Sprite, Text } from 'pixi.js';
 import type { FederatedPointerEvent, Texture } from 'pixi.js';
 import type { PublicSceneObject, PublicToken } from '@nri/contracts';
+import { isDegenerateSegment, type ScenePoint, type SceneSegment } from '@nri/contracts/geometry';
+import type { GeometryCanvasControls } from '../features/tabletop/useSceneGeometry';
 import { measureSceneDistance, selectTokenIdsInRect, zoomToPointer } from './canvasMath';
+import { drawObstacles, pickObstacle } from './geometryOverlay';
 
 type Props = {
+  geometry: GeometryCanvasControls | null;
   interactionScope: string; connected: boolean;
   tokens: PublicToken[]; objects: PublicSceneObject[]; canManage: boolean; activeLayerId: string; layerSortOrder: Record<string, number>; canEditObject: (object: Props['objects'][number]) => boolean; onEditObject: (id: string, patch: Partial<Pick<PublicSceneObject, 'x' | 'y' | 'width' | 'height' | 'points'>>) => void; gridSize: number; gridColor: string; gridOpacity: number; gridOffsetX: number; gridOffsetY: number; gridEnabled: boolean; snapToGrid: boolean;
   backgroundUrl?: string | undefined; sceneId: string; sceneWidth: number; sceneHeight: number; cameraX: number; cameraY: number; cameraZoom: number; unitsPerCell: number; unitLabel: string;
@@ -34,6 +38,9 @@ export function TableCanvas(props: Props) {
     const objectsDisplay = new Container();
     const pieces = new Container();
     const pointerDisplay = new Container();
+    const obstacleDisplay = new Graphics();
+    const obstacleHandles = new Graphics();
+    const obstaclePreview = new Graphics();
     const tokenTextures = new Map<string, Texture>();
     const tokenNodes = new Map<string, { node: Container; key: string; texture: Texture | undefined }>();
     const pendingTokenTextures = new Set<string>();
@@ -47,7 +54,7 @@ export function TableCanvas(props: Props) {
     let objectTexturesChanged = false;
     let tokenTexturesChanged = false;
     let refresh = () => {};
-    type Gesture = { kind: 'object' | 'token' | 'drawing' | 'selection'; pointer: number; valid: () => boolean; cancel: () => void };
+    type Gesture = { kind: 'object' | 'token' | 'drawing' | 'selection' | 'geometry'; pointer: number; valid: () => boolean; cancel: () => void };
     let gesture: Gesture | undefined;
     const cancelGesture = () => gesture?.cancel();
     const onPointerInterrupted = (event: PointerEvent) => {
@@ -121,7 +128,8 @@ export function TableCanvas(props: Props) {
         unloadingAssetUrls.set(url, unloading);
       }
     };
-    world.addChild(base, mapLayer, grid, rulerDisplay, objectsDisplay, pieces, selectionDisplay, pointerDisplay);
+    world.addChild(base, mapLayer, grid, rulerDisplay, objectsDisplay, pieces, selectionDisplay, pointerDisplay,
+      obstacleDisplay, obstacleHandles, obstaclePreview);
     app.stage.addChild(world);
     app.stage.eventMode = 'static';
 
@@ -138,6 +146,22 @@ export function TableCanvas(props: Props) {
       world.scale.set(scale);
       world.position.set(app.screen.width / 2 - x * scale, app.screen.height / 2 - y * scale);
       if (!Number.isFinite(width + height)) fitScene();
+    };
+    const redrawObstacleHandles = () => {
+      obstacleHandles.clear();
+      const geometry = latest.current.geometry;
+      if (!geometry) return;
+      const selected = geometry.obstacles.find(({ id }) => id === geometry.selectedId);
+      if (!selected) return;
+      const scale = world.scale.x;
+      obstacleHandles.moveTo(selected.start.x, selected.start.y).lineTo(selected.end.x, selected.end.y)
+        .stroke({ color: 0x342a24, width: 6 / scale });
+      obstacleHandles.moveTo(selected.start.x, selected.start.y).lineTo(selected.end.x, selected.end.y)
+        .stroke({ color: 0xf8bf78, width: 2 / scale });
+      for (const endpoint of [selected.start, selected.end]) {
+        obstacleHandles.circle(endpoint.x, endpoint.y, 6 / scale).fill({ color: 0xf8bf78 })
+          .stroke({ color: 0x342a24, width: 2 / scale });
+      }
     };
     const redrawGrid = () => {
       grid.clear();
@@ -197,9 +221,10 @@ export function TableCanvas(props: Props) {
         else continue;
         if (latest.current.canEditObject(item)) {
           const editable = () => latest.current.objects.some((current) => current.id === item.id
-            && current.version === item.version && latest.current.canEditObject(current)) && !latest.current.pointerActive;
+            && current.version === item.version && latest.current.canEditObject(current)) && !latest.current.pointerActive && !latest.current.geometry;
           shape.eventMode = 'static'; shape.cursor = 'grab';
           shape.on('pointerdown', (event) => {
+            if (latest.current.geometry) return;
             if (latest.current.pointerActive) { event.stopPropagation(); return; }
             event.stopPropagation();
             const start = world.toLocal(event.global); const originalX = item.x; const originalY = item.y;
@@ -215,6 +240,7 @@ export function TableCanvas(props: Props) {
           const resizeHandle = new Graphics().rect(-6, -6, 12, 12).fill({ color: 0xf3c78b }).stroke({ color: 0x342a24, width: 1 });
           resizeHandle.position.set(item.width / 2, item.height / 2); resizeHandle.eventMode = 'static'; resizeHandle.cursor = 'nwse-resize';
           resizeHandle.on('pointerdown', (event) => {
+            if (latest.current.geometry) return;
             if (latest.current.pointerActive) { event.stopPropagation(); return; }
             event.stopPropagation();
             const move = (moveEvent: typeof event) => { const point = shape.toLocal(moveEvent.global); resizeHandle.position.set(Math.max(4, point.x), Math.max(4, point.y)); };
@@ -301,6 +327,7 @@ export function TableCanvas(props: Props) {
         if (resourceText) { const resourceLabel = new Text({ text: resourceText, style: { fontFamily: 'Arial', fontSize: Math.max(8, size * 0.16), fill: 0xd8c6a9, align: 'center' } }); resourceLabel.anchor.set(0.5, 0); resourceLabel.y = height * 0.45 + Math.max(10, size * 0.24); node.addChild(resourceLabel); }
         node.eventMode = 'static'; node.cursor = latest.current.canEdit(token) && !token.locked ? 'grab' : 'default';
         node.on('pointerdown', (event) => {
+          if (latest.current.geometry) return;
           const token = latest.current.tokens.find((item) => item.id === tokenId);
           if (!token) return;
           if (latest.current.pointerActive) { event.stopPropagation(); return; }
@@ -313,7 +340,7 @@ export function TableCanvas(props: Props) {
           const groupOrigins = groupNodes.map((child) => child.position.clone());
           const movable = () => (groupNodes.length > 1 ? groupTokens : [token]).every((original) =>
             latest.current.tokens.some((current) => current.id === original.id && current.version === original.version
-              && !current.locked && latest.current.canEdit(current))) && !latest.current.pointerActive;
+              && !current.locked && latest.current.canEdit(current))) && !latest.current.pointerActive && !latest.current.geometry;
           const move = (moveEvent: typeof event) => { const point = world.toLocal(moveEvent.global); const dx = point.x - start.x; const dy = point.y - start.y; node.position.set(origin.x + dx, origin.y + dy); groupNodes.forEach((child, index) => child.position.set(groupOrigins[index]!.x + dx, groupOrigins[index]!.y + dy)); };
           const up = () => {
             const { gridSize: cellSize, snapToGrid: snap } = latest.current;
@@ -385,7 +412,14 @@ export function TableCanvas(props: Props) {
         for (const { node } of tokenNodes.values()) node.destroy({ children: true });
         tokenNodes.clear();
       }
-      if (sceneChanged || props.cameraX !== prior?.cameraX || props.cameraY !== prior?.cameraY || props.cameraZoom !== prior?.cameraZoom) restoreCamera();
+      const cameraChanged = sceneChanged || props.cameraX !== prior?.cameraX || props.cameraY !== prior?.cameraY || props.cameraZoom !== prior?.cameraZoom;
+      if (cameraChanged) restoreCamera();
+      if (sceneChanged || props.geometry?.obstacles !== prior?.geometry?.obstacles) {
+        drawObstacles(obstacleDisplay, props.geometry?.obstacles ?? []);
+      }
+      if (cameraChanged || props.geometry?.selectedId !== prior?.geometry?.selectedId || props.geometry?.obstacles !== prior?.geometry?.obstacles) {
+        redrawObstacleHandles();
+      }
       if (!props.rulerActive) rulerPoints.length = 0;
       if (!props.selectionMode) clearSelectionBox();
 
@@ -413,10 +447,50 @@ export function TableCanvas(props: Props) {
       priorProps = props;
       releaseUnusedAssetTextures();
     };
-    const fit = () => fitScene();
+    const fit = () => { fitScene(); redrawObstacleHandles(); };
+    const geometryPoint = (point: ScenePoint) => {
+      const { gridEnabled, snapToGrid, gridSize, gridOffsetX, gridOffsetY, sceneWidth, sceneHeight } = latest.current;
+      const snap = (value: number, offset: number) => gridEnabled && snapToGrid ? Math.round((value - offset) / gridSize) * gridSize + offset : value;
+      return { x: Math.max(0, Math.min(sceneWidth, snap(point.x, gridOffsetX))), y: Math.max(0, Math.min(sceneHeight, snap(point.y, gridOffsetY))) };
+    };
+    const onGeometryStart = (event: FederatedPointerEvent) => {
+      const { geometry, sceneWidth, sceneHeight } = latest.current;
+      if (!geometry || event.button !== 0) return;
+      const raw = world.toLocal(event.global);
+      const tolerance = 10 / world.scale.x;
+      const selected = geometry.obstacles.find(({ id }) => id === geometry.selectedId);
+      const endpoint = geometry.mode === 'select' && selected
+        ? (['start', 'end'] as const).find((key) => Math.hypot(raw.x - selected[key].x, raw.y - selected[key].y) < tolerance) : undefined;
+      if (geometry.mode === 'select' && !endpoint) {
+        geometry.select(pickObstacle(raw, geometry.obstacles, tolerance)?.id ?? '');
+        return;
+      }
+      if (!geometry.editable || !endpoint && (raw.x < 0 || raw.x > sceneWidth || raw.y < 0 || raw.y > sceneHeight)) return;
+      const initial = geometryPoint(raw);
+      const getSegment = (point: ScenePoint): SceneSegment => selected && endpoint
+        ? { start: selected.start, end: selected.end, [endpoint]: point } : { start: initial, end: point };
+      const valid = () => {
+        const current = latest.current.geometry;
+        return Boolean(current?.editable && current.mode === geometry.mode &&
+          (!endpoint || selected && current.obstacles.some(({ id, version }) => id === selected.id && version === selected.version)));
+      };
+      startGesture(event, 'geometry', valid, (update) => {
+        const { start, end } = getSegment(geometryPoint(world.toLocal(update.global)));
+        obstaclePreview.clear().moveTo(start.x, start.y).lineTo(end.x, end.y).stroke({ color: 0xf8bf78, width: 3 / world.scale.x });
+      }, (update) => {
+        const segment = getSegment(geometryPoint(world.toLocal(update.global)));
+        if (isDegenerateSegment(segment)) return;
+        if (selected && endpoint) {
+          const point = segment[endpoint];
+          if (point.x !== selected[endpoint].x || point.y !== selected[endpoint].y) latest.current.geometry?.move(selected, segment);
+        } else if (geometry.mode !== 'select') {
+          latest.current.geometry?.create(geometry.mode, segment);
+        }
+      }, () => obstaclePreview.clear());
+    };
     const calibrationPoints: Array<{ x: number; y: number }> = [];
     const onCalibrationClick = (event: { global: { x: number; y: number } }) => {
-      if (!latest.current.calibrationActive || latest.current.pointerActive) { calibrationPoints.length = 0; return; }
+      if (!latest.current.calibrationActive || latest.current.pointerActive || latest.current.geometry) { calibrationPoints.length = 0; return; }
       const point = world.toLocal(event.global);
       calibrationPoints.push({ x: point.x, y: point.y });
       if (calibrationPoints.length === 2) {
@@ -425,12 +499,12 @@ export function TableCanvas(props: Props) {
       }
     };
     const onRulerClick = (event: { global: { x: number; y: number } }) => {
-      if (!latest.current.rulerActive || latest.current.calibrationActive || latest.current.pointerActive) return;
+      if (!latest.current.rulerActive || latest.current.calibrationActive || latest.current.pointerActive || latest.current.geometry) return;
       rulerPoints.push(world.toLocal(event.global));
       redrawRuler();
     };
     const onSelectionStart = (event: FederatedPointerEvent) => {
-      if (!latest.current.canManage || !latest.current.selectionMode || latest.current.calibrationActive || latest.current.pointerActive) return;
+      if (!latest.current.canManage || !latest.current.selectionMode || latest.current.calibrationActive || latest.current.pointerActive || latest.current.geometry) return;
       event.stopPropagation();
       const start = world.toLocal(event.global);
       let current = start;
@@ -447,7 +521,7 @@ export function TableCanvas(props: Props) {
       startGesture(event, 'selection', () => latest.current.canManage && latest.current.selectionMode && !latest.current.pointerActive, move, finish, clearSelectionBox);
     };
     const onDrawStart = (event: FederatedPointerEvent) => {
-      if (!latest.current.drawMode || latest.current.calibrationActive || latest.current.pointerActive) return;
+      if (!latest.current.drawMode || latest.current.calibrationActive || latest.current.pointerActive || latest.current.geometry) return;
       event.stopPropagation();
       const points = [world.toLocal(event.global)];
       const preview = new Graphics(); world.addChild(preview);
@@ -460,7 +534,7 @@ export function TableCanvas(props: Props) {
     };
     let lastPointerSent = 0;
     const onPointerMove = (event: PointerEvent) => {
-      if (!latest.current.pointerActive) return;
+      if (!latest.current.pointerActive || latest.current.geometry) return;
       const now = performance.now(); if (now - lastPointerSent < 80) return;
       const bounds = app.canvas.getBoundingClientRect();
       const point = world.toLocal({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
@@ -470,7 +544,7 @@ export function TableCanvas(props: Props) {
     const onDropTokenAsset = (event: Event) => {
       const detail = (event as CustomEvent<{ assetId: string; clientX: number; clientY: number }>).detail;
       const bounds = host.current?.getBoundingClientRect();
-      if (!detail || !bounds || detail.clientX < bounds.left || detail.clientX > bounds.right || detail.clientY < bounds.top || detail.clientY > bounds.bottom) return;
+      if (latest.current.geometry || !detail || !bounds || detail.clientX < bounds.left || detail.clientX > bounds.right || detail.clientY < bounds.top || detail.clientY > bounds.bottom) return;
       const canvasBounds = app.canvas.getBoundingClientRect();
       const point = world.toLocal({ x: detail.clientX - canvasBounds.left, y: detail.clientY - canvasBounds.top });
       if (point.x >= 0 && point.y >= 0 && point.x <= latest.current.sceneWidth && point.y <= latest.current.sceneHeight) latest.current.onDropTokenAsset(detail.assetId, point.x, point.y);
@@ -484,6 +558,7 @@ export function TableCanvas(props: Props) {
       app.stage.on('pointerdown', onRulerClick);
       app.stage.on('pointerdown', onDrawStart);
       app.stage.on('pointerdown', onSelectionStart);
+      app.stage.on('pointerdown', onGeometryStart);
       host.current.appendChild(app.canvas); refresh();
       app.canvas.addEventListener('nri-refresh', refresh);
       app.canvas.addEventListener('pointermove', onPointerMove);
@@ -500,6 +575,7 @@ export function TableCanvas(props: Props) {
         const px = event.clientX - bounds.left; const py = event.clientY - bounds.top;
         const camera = zoomToPointer({ scale: world.scale.x, x: world.x, y: world.y }, { x: px, y: py }, Math.exp(-event.deltaY * 0.001));
         world.scale.set(camera.scale); world.position.set(camera.x, camera.y);
+        redrawObstacleHandles();
       }, { passive: false });
       app.canvas.addEventListener('pointerdown', (event) => {
         if (event.button !== 1 && event.button !== 2) return;
@@ -530,7 +606,7 @@ export function TableCanvas(props: Props) {
   useEffect(() => {
     const canvas = host.current?.querySelector('canvas');
     if (canvas) canvas.dispatchEvent(new Event('nri-refresh'));
-  }, [tokens, props.objects, props.canManage, props.canEditObject, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY, props.rulerActive, props.unitsPerCell, props.unitLabel, props.selectionMode, props.pointerActive, props.connected, props.interactionScope, props.drawMode]);
+  }, [tokens, props.objects, props.canManage, props.canEditObject, props.activeLayerId, props.layerSortOrder, gridSize, gridColor, gridOpacity, gridOffsetX, gridOffsetY, gridEnabled, snapToGrid, backgroundUrl, sceneId, sceneWidth, sceneHeight, cameraX, cameraY, cameraZoom, props.calibrationActive, props.gridPreviewSize, props.gridPreviewOffsetX, props.gridPreviewOffsetY, props.rulerActive, props.unitsPerCell, props.unitLabel, props.selectionMode, props.pointerActive, props.connected, props.interactionScope, props.drawMode, props.geometry?.mode, props.geometry?.obstacles, props.geometry?.selectedId, props.geometry?.editable]);
 
   return <div className={`table-canvas ${props.pointerActive ? 'pointer-active' : ''}`} ref={host}><div className="canvas-controls">{props.canManage && <button aria-label={props.selectionLabel} aria-pressed={props.selectionMode} onClick={() => window.dispatchEvent(new Event('nri-toggle-selection'))}>{props.selectionLabel}</button>}<button aria-label={props.pointerLabel} aria-pressed={props.pointerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-pointer'))}>{props.pointerLabel}</button><button aria-label={props.rulerLabel} aria-pressed={props.rulerActive} onClick={() => window.dispatchEvent(new Event('nri-toggle-ruler'))}>{props.rulerLabel}</button><button aria-label={props.fitLabel} title={props.fitLabel} onClick={() => window.dispatchEvent(new Event('nri-fit-scene'))}>{props.fitLabel}</button></div>{(props.rulerActive || props.selectionMode || props.pointerActive) && <span className="ruler-hint">{props.pointerActive ? props.pointerLabel : props.selectionMode ? props.selectionLabel : props.rulerLabel}</span>}</div>;
 }
