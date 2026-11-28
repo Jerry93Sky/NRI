@@ -4,6 +4,8 @@
 
 [Character Studio](../design/CHARACTER_STUDIO.md) records the owner-approved workflow. A reusable personal character template can create independent campaign instances. The rules package, campaign compatibility and admission approval govern the instance.
 
+Campaign character instances consume the planned inventory and equipment model. Item templates, individual items, equipment slots and shared storage have distinct responsibilities. [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md) · [Loot](../design/LOOT.md)
+
 ## State and interfaces
 
 | Model | Responsibilities |

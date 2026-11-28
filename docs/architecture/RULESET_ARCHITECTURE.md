@@ -18,6 +18,8 @@ Canonicalize the manifest without its own digest using JCS, then hash it with SH
 
 Definitions use package-qualified stable IDs and typed cross-references. A package can describe attributes, derived values, skills, classes, professions, ancestry, backgrounds, advancement, inventory, equipment, spells, abilities, checks, damage, immunities, resistances, conditions, resources, modifiers, actions, reactions, periodic effects, turn policies, creature templates and sheets. It can define new entity types with validated fields and display rules. Each campaign declares the capabilities it uses.
 
+Equipment slots, weight, item use and consumable tracking depend on ruleset capabilities and campaign configuration. [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md)
+
 ## Evaluation contract
 
 `Evaluate(programRef, immutableInput, context) → value | typedFailure, trace`. Context supplies package lock, evaluator version, explicit clock where needed, scoped entity inputs, resource budget and RNG handle for roll programs. Results can include proposed typed effects, which an authorized application service may commit. The interpreter has no network, database, host clock or user-code access.

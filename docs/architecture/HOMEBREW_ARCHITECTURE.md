@@ -8,6 +8,8 @@ Typed editors cover characteristics, skills, classes and professions, creatures,
 
 Campaign authors provide sheets and character creation rules through the same versioned definitions consumed by [Character Studio](../design/CHARACTER_STUDIO.md).
 
+Custom items belong to Homebrew. The planned expanded item editor is a later design step. [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md)
+
 The effective ruleset is assembled in this order.
 
 1. Resolve the exact base and its immutable dependency graph.

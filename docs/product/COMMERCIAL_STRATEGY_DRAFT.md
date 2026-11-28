@@ -2,6 +2,8 @@
 
 **Status: DISCUSSION_DRAFT.** Hypotheses for owner review with independent gaming groups.
 
+The owner selected Russia and Russian-speaking audiences across the CIS as the initial target market, with an international market in the long term. Keep Russian and English localization. Research regional payment providers, currencies, legal requirements and personal data handling before choosing how to launch commercially. Competition, demand and subscription prices remain unvalidated. [Legal readiness draft](LEGAL_READINESS_DRAFT.md)
+
 - Free entry for players and a subscription for GMs could reduce friction for a new group.
 - An optional player subscription could provide extra themes and personalization.
 - A future materials marketplace and paid-session directory could create additional revenue. A platform fee is a hypothesis.

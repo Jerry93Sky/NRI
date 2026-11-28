@@ -14,7 +14,7 @@ Outside combat, movement is free when permission allows. Combat uses the campaig
 
 ## Character, dialogue and notifications
 
-The inventory includes character imagery, equipment slots, carried items and item transfer between players. The ruleset determines slot structure. Other characters' statistics, HP and private resources are private by default. Equipment-driven appearance changes are outside the first version. The player's notebook is private by default, including from the GM. The player can share selected entries.
+The inventory includes character imagery, equipment slots, carried items and recipient-confirmed item transfers. The ruleset determines slot structure. Other characters' statistics, HP and private resources are private by default. Equipment-driven appearance changes are outside the first version. The player's notebook is private by default, including from the GM. The player can share selected entries. [Inventory & Equipment](INVENTORY_EQUIPMENT.md)
 
 The GM plays NPCs in free dialogue. A portrait can appear over the scene, and the GM controls a visible attitude indicator for the group. Prepared response menus and multiple emotional portraits are optional future designs. Important events may show atmospheric notifications, small animations and GM-selected sounds.
 
@@ -22,6 +22,6 @@ The GM plays NPCs in free dialogue. A portrait can appear over the scene, and th
 
 Combat adapts the player's interface. Rules can check distance, obstacles, visibility, resources and ability requirements before the action commits. The GM chooses the degree of automation. Manual, assisted and automatic modes are a proposal for Rules Engine design. Simple attack and spell animations are the intended starting point.
 
-Trade supports buying, selling and exchanging items. Baldur's Gate 3 is a reference for the flow of the interaction. The tabletop design uses original interface elements. The GM plays the trader and sets prices and inventory with the world rules. Loot distribution needs a design decision. GM assignment, free picks and requests with approval are candidate flows.
+Trade supports buying, selling, bartering and bargaining. The GM plays the trader. For loot, the GM reveals available items and players normally pick freely. Money is split automatically. [Trading](TRADING.md) · [Loot](LOOT.md)
 
 The server is authoritative for rules, state, outcomes and permissions. The client renders visuals, effects and audio. Quality presets and the option to turn off decorative effects are open design decisions.

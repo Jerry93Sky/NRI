@@ -12,6 +12,8 @@ The owner approved the product name EVERDOOR, the tagline “Every door, a new a
 
 Approved directions are recorded in [Campaign Lobby](../design/CAMPAIGN_LOBBY.md), [GM Screen](../design/GM_SCREEN.md), [Player Tabletop](../design/PLAYER_TABLETOP.md) and [Social Relations](../architecture/SOCIAL_RELATIONS.md). Master Studio prepares content used by the lobby and the game. One multitrack audio concept spans both. Audience-scoped chronicle drafts and review, configurable combat automation and the Social Relations architecture are proposals. Release sequencing and licensing decisions remain open. [Commercial hypotheses](COMMERCIAL_STRATEGY_DRAFT.md) are separate from delivery scope.
 
+Approved item flows and open design choices are recorded in [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md), [Trading](../design/TRADING.md) and [Loot](../design/LOOT.md). Master Studio is next for product design. The release gates below still govern technical delivery.
+
 | Current area | Preserve or improve in V0.1.1 | First release that implements the new capability |
 | --- | --- | --- |
 | REST and realtime mutations | Share the token-movement service and check current membership, role, scene state and record versions in the write transaction. Verify competing edits, permission changes and reconnect behavior against PostgreSQL. Scope retry handling to known lost-acknowledgement cases | V0.2 adds authoritative geometry. Later transactional workflows own their receipt and retry contracts |

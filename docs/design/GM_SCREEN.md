@@ -2,6 +2,8 @@
 
 **Status: PLANNED.** The GM Screen is a future configurable digital workspace. No modules or UI are implemented by this document, and V0.1.1 acceptance remains unchanged.
 
+Planned preparation includes the GM item library, Merchant Builder and editable procedural loot. In play, the GM roleplays merchants and decides when to reveal item properties and available loot. [Inventory & Equipment](INVENTORY_EQUIPMENT.md) · [Trading](TRADING.md) · [Loot](LOOT.md)
+
 ## Owner-approved requirements
 
 The main area can show a map, illustration, NPC portrait, intro image, or other prepared material. The GM composes the workspace, placing configurable panels at the top, bottom, or sides and tailoring their contents. A quick-action panel is configurable. Tools may be opened in separate windows for multi-monitor use. The workspace is universal: it does not require switching between combat, exploration, or dialogue modes.

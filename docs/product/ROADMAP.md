@@ -2,6 +2,8 @@
 
 **Active release: V0.1.1 — IN_PROGRESS.** Continue the existing [stabilization scope](../releases/V0.1.1_SCOPE.md) and its [acceptance gates](../releases/V0.1.1_ACCEPTANCE_REPORT.md). V0.1 is the preceding foundation on the same development line. All later entries are `PLANNED`. Dependencies describe release gates and include no delivery dates. Detailed exit evidence is defined in the [long-term implementation plan](LONG_TERM_IMPLEMENTATION_PLAN.md).
 
+The planned product designs cover [Inventory & Equipment](../design/INVENTORY_EQUIPMENT.md), [Trading](../design/TRADING.md) and [Loot](../design/LOOT.md). Master Studio is next for product design. The release table remains the technical delivery sequence.
+
 | Release | Goal | Required predecessors | Exit evidence |
 | --- | --- | --- | --- |
 | V0.1 | Foundation and multiplayer VTT | — | [Original scope and validation](V0_1_SCOPE.md) |
