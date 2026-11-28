@@ -17,10 +17,12 @@ const selected = process.env.NRI_LOAD_PROFILE;
 const fixtures = JSON.parse(await readFile(resolve(output, 'fixture.json'), 'utf8')).filter(({ name }) => !selected || name === selected);
 assert.ok(fixtures.length > 0);
 const hardware = process.env.NRI_LOAD_HARDWARE === '1';
+const captureCpu = process.env.NRI_LOAD_CPU_TRACE === '1';
+const requireProduction = process.env.NRI_LOAD_REQUIRE_PRODUCTION === '1';
 const viewport = { width: Number(process.env.NRI_LOAD_WIDTH ?? 1366), height: Number(process.env.NRI_LOAD_HEIGHT ?? 768) };
 assert.ok(Number.isInteger(viewport.width) && Number.isInteger(viewport.height) && viewport.width >= 800 && viewport.height >= 600);
 const browser = await chromium.launch(hardware ? { channel: 'chrome', headless: false } : {});
-const report = hardware ? `hardware-${viewport.width}x${viewport.height}${selected ? `-${selected}` : ''}.json` : 'report.json';
+const report = hardware ? `hardware-${viewport.width}x${viewport.height}${selected ? `-${selected}` : ''}${captureCpu ? '-diagnostic' : ''}.json` : 'report.json';
 const outcomes = [];
 const samples = 24;
 const stats = (values) => {
@@ -43,10 +45,33 @@ const statementCount = () => {
 async function openTable(account) {
   const context = await browser.newContext({ viewport, deviceScaleFactor: 1, locale: 'en-US' });
   await context.addInitScript(() => {
+    globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      supportsFiber: true,
+      inject(renderer) { globalThis.__nriReactBundleType = renderer.bundleType; return 1; },
+      onCommitFiberRoot() {}, onCommitFiberUnmount() {}, onPostCommitFiberRoot() {},
+    };
     const getContext = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function (...args) {
       const context = Reflect.apply(getContext, this, args);
-      if (context && (args[0] === 'webgl' || args[0] === 'webgl2')) this.__nriMeasuredContext = context;
+      if (context && (args[0] === 'webgl' || args[0] === 'webgl2') && !this.__nriMeasuredContext) {
+        this.__nriMeasuredContext = context;
+        const textures = new Set();
+        const counts = { textures, drawCalls: 0 };
+        this.__nriCounts = counts;
+        const create = context.createTexture.bind(context);
+        const remove = context.deleteTexture.bind(context);
+        context.createTexture = () => {
+          const texture = create();
+          if (texture) textures.add(texture);
+          return texture;
+        };
+        context.deleteTexture = (texture) => { textures.delete(texture); remove(texture); };
+        for (const name of ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced']) {
+          if (typeof context[name] !== 'function') continue;
+          const draw = context[name].bind(context);
+          context[name] = (...parameters) => { counts.drawCalls++; return draw(...parameters); };
+        }
+      }
       return context;
     };
   });
@@ -79,7 +104,11 @@ try {
     cdp.on('Network.webSocketFrameSent', ({ response }) => { traffic.wsSentPayloadBytes += Buffer.byteLength(response.payloadData); });
     await cdp.send('Network.enable');
     await cdp.send('Performance.enable');
-    const heap = async () => (await cdp.send('Performance.getMetrics')).metrics.find(({ name }) => name === 'JSHeapUsedSize')?.value;
+    const browserMetrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(({ name, value }) => [name, value]));
+    const glCounts = (canvas) => canvas.evaluate((element) => {
+      const counter = element.__nriCounts;
+      return counter ? { textures: counter.textures.size, drawCalls: counter.drawCalls } : null;
+    });
     const tokensPath = (sceneId) => `/api/scenes/${sceneId}/tokens`;
     const waitSnapshot = async (sceneId) => {
       const response = await page.waitForResponse((event) => event.url().endsWith(tokensPath(sceneId)));
@@ -98,6 +127,8 @@ try {
       assert.equal(renderedTokens.length, profile.tokenCount);
       const canvas = page.locator('.table-canvas canvas');
       await canvas.waitFor({ state: 'visible' });
+      const reactBundleType = await page.evaluate(() => globalThis.__nriReactBundleType ?? null);
+      if (requireProduction) assert.equal(reactBundleType, 0, 'The tabletop was not built with the production React renderer');
       const texture = await canvas.evaluate((element) => {
         const gl = element.__nriMeasuredContext;
         if (!gl) return null;
@@ -111,6 +142,12 @@ try {
       const ackMs = [];
       const syncMs = [];
       const payloadBytes = [];
+      const initialBrowserMetrics = await browserMetrics();
+      const beforeGl = await glCounts(canvas);
+      if (captureCpu) {
+        await cdp.send('Profiler.enable');
+        await cdp.send('Profiler.start');
+      }
       const started = performance.now();
       const frameTimesPromise = page.evaluate(() => new Promise((resolve) => {
         const times = [];
@@ -147,10 +184,15 @@ try {
       }
       const frames = await frameTimesPromise;
       const elapsedMs = performance.now() - started;
+      if (captureCpu) {
+        const { profile: trace } = await cdp.send('Profiler.stop');
+        await writeFile(resolve(output, `cpu-${profile.name}-${viewport.width}x${viewport.height}.json`), JSON.stringify(trace));
+      }
       const afterMotion = await metrics();
+      const afterGl = await glCounts(canvas);
+      const afterMotionBrowser = await browserMetrics();
 
       const switchMs = [];
-      const beforeSwitchHeap = await heap();
       for (let i = 0; i < 6; i++) {
         for (const [title, id] of [['Empty scene', profile.otherSceneId], ['Benchmark table', profile.sceneId]]) {
           const startedAt = performance.now();
@@ -162,18 +204,24 @@ try {
       }
       const after = await metrics();
       const afterQueries = statementCount();
+      const afterSwitches = await browserMetrics();
+      const finalGl = await glCounts(canvas);
       const { name, playerCount, tokenCount, objectCount, mapSize } = profile;
       const cpu = afterMotion.cpu.user + afterMotion.cpu.system - before.cpu.user - before.cpu.system;
       const outcome = {
         name, playerCount, tokenCount, objectCount, mapSize, initialMs,
-        browser: browser.version(), viewport, devicePixelRatio: await page.evaluate(() => devicePixelRatio),
+        browser: browser.version(), viewport, devicePixelRatio: await page.evaluate(() => devicePixelRatio), reactBundleType,
         fps: +(frames.length * 1000 / frames.reduce((sum, ms) => sum + ms, 0)).toFixed(2),
         frameMs: stats(frames), framesOver50Ms: frames.filter((ms) => ms > 50).length,
         ackMs: stats(ackMs), syncMs: stats(syncMs), switchMs: stats(switchMs),
         tokenPayloadBytes: stats(payloadBytes), traffic, texture,
         apiCpuMicroseconds: cpu, measuredMotionMs: +elapsedMs.toFixed(2),
         apiRssBytes: { before: before.residentBytes, after: after.residentBytes },
-        browserHeapBytes: { beforeSwitches: beforeSwitchHeap, afterSwitches: await heap() },
+        browserHeapBytes: { beforeSwitches: afterMotionBrowser.JSHeapUsedSize, afterSwitches: afterSwitches.JSHeapUsedSize },
+        browserWorkMs: Object.fromEntries(['TaskDuration', 'ScriptDuration', 'LayoutDuration', 'RecalcStyleDuration'].map((name) =>
+          [name, +((afterMotionBrowser[name] - initialBrowserMetrics[name]) * 1000).toFixed(2)])),
+        webGlTextures: { beforeMotion: beforeGl?.textures, afterMotion: afterGl?.textures, afterSwitches: finalGl?.textures },
+        coreDrawCallsDuringMotion: beforeGl && afterGl ? afterGl.drawCalls - beforeGl.drawCalls : null,
         httpRequests: after.httpRequests - before.httpRequests, httpFailures: after.httpFailures - before.httpFailures,
         pgStatements: beforeQueries === null || afterQueries === null ? null : afterQueries - beforeQueries,
       };

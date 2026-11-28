@@ -1,6 +1,6 @@
 # PERF-GPU and operations acceptance handoff
 
-**Status: PLANNED.** These are the remaining checks for the target deployment. Pick owners and record environment details before a run. Use disposable campaigns and encrypted, access-limited storage for diagnostics.
+These are the remaining checks for the target deployment. The [local HTTPS stand](LOCAL_HTTPS_ACCEPTANCE.md) and [manual owner checklist](../releases/V0.1.1_MANUAL_ACCEPTANCE.md) are ready for use with disposable campaigns and private storage for diagnostics.
 
 | Check | Procedure and required evidence | Dependency |
 | --- | --- | --- |
@@ -11,7 +11,7 @@
 | Retention and files | Verify logs and backups have an agreed expiry, schedule receipt pruning daily, and check orphan and staging files against the database and a quiesced window | Target host and deployment credentials |
 | QA-OWNER | Two participants complete a real tabletop walkthrough using both GM and Player roles and record any usability and permission failures | Owner plus a player, real sessions and hardware |
 
-On 2026-11-28 the Windows Playwright restart probe stopped the original listener and started a child process. The child printed environment initialization but port 35596 did not become ready within the 45-second budget. Local trace and screenshots were retained. Ubuntu CI #208 passed the same recovery scenario. Compare the Windows child process tree, inherited environment, listener ownership and startup phases in the target run. The cause and target outage results are still open.
+On 2026-11-28 the traced Windows Playwright worker `37264` stopped the original API `35080`. Its child `33560` printed environment initialization but emitted no `modules-loaded`, realtime initialization or listener phase. Liveness was unreachable on port 35612 through the 45-second readiness check. The trace, screenshots, parent/child PIDs and listener snapshots were retained under the ignored `.data/acceptance-20261128` directory. A standalone Node parent then spawned the same entry point, cwd, DB and port. It reached readiness in 1.30 s. Linux Compose recovered both outage types. The Windows worker-specific cause and real client network changes remain open.
 
 ## Daily REST receipt pruning
 
@@ -22,3 +22,5 @@ docker compose -f docker-compose.production.yml --profile maintenance run --rm m
 ```
 
 For a source checkout with the selected database URL, use `pnpm --filter @nri/server db:prune-operation-receipts`. PostgreSQL supplies the expiry clock. The job deletes only expired receipts in bounded batches. Locked rows can be skipped and will be picked up in a later run. Chat, dice and game rows have their own retention. Deploying the timer is part of OPS-DEPLOY.
+
+The Linux [service](../../deploy/production/systemd/nri-receipt-prune.service) and [timer](../../deploy/production/systemd/nri-receipt-prune.timer) are provided as templates. Set the local repository path, private Compose env file, project name and the permitted scheduler account on the approved host. The timer runs daily at 04:30 host time with a persistent catch-up. Its service uses `--no-deps` so a scheduled job does not start the DB during maintenance. A failed run retries after 15 minutes within the configured start limit. Once approved, verify with `systemd-analyze verify`, run the service once manually, inspect its result, then enable the timer and check `systemctl list-timers nri-receipt-prune.timer`. No scheduler was enabled on the local workstation.

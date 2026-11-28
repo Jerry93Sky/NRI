@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 $configFile = (Resolve-Path -LiteralPath $EnvFile).Path
 $repo = Split-Path -Parent $PSScriptRoot
 $previousEnvironment = @{}
-foreach ($name in @('NRI_HTTPS_BIND','UPLOAD_DIR','DATABASE_URL','NRI_BACKUP_DB_CONTAINER')) {
+foreach ($name in @('NRI_HTTPS_BIND','UPLOAD_DIR','DATABASE_URL','NRI_BACKUP_DB_CONTAINER','NODE_EXTRA_CA_CERTS')) {
   $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
 }
 Push-Location -LiteralPath $repo
@@ -41,9 +41,8 @@ try {
     'status' {
       Invoke-Docker ($prefix + @('ps'))
       $ca = Join-Path $config.services.proxy.volumes[0].source 'ca.pem'
-      $curlArgs = @('--fail','--silent','--show-error','--max-time','8')
-      if (Test-Path -LiteralPath $ca) { $curlArgs += @('--cacert',$ca) }
-      curl.exe @curlArgs ($url.GetLeftPart([UriPartial]::Authority) + '/api/ready')
+      if (Test-Path -LiteralPath $ca) { $env:NODE_EXTRA_CA_CERTS = $ca }
+      node -e 'fetch(process.argv[1],{signal:AbortSignal.timeout(8000)}).then(async r=>{if(!r.ok)process.exitCode=1;console.log(await r.text())}).catch(()=>{console.error("HTTPS readiness probe failed");process.exitCode=1})' ($url.GetLeftPart([UriPartial]::Authority) + '/api/ready')
       if ($LASTEXITCODE -ne 0) { throw 'The trusted HTTPS readiness check failed.' }
     }
     'seed' {
@@ -89,7 +88,8 @@ try {
   }
 } finally {
   foreach ($name in $previousEnvironment.Keys) {
-    [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process')
+    if ($null -eq $previousEnvironment[$name]) { Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue }
+    else { [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process') }
   }
   Pop-Location
 }

@@ -44,6 +44,8 @@ jobs:
       - name: Check tracked files for secrets
         run: node scripts/check-tracked-secrets.mjs
       - run: pnpm build
+        env:
+          NODE_ENV: production
       - name: Validate operational configuration
         run: |
           node --check scripts/backup.mjs

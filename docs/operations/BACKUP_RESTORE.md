@@ -1,5 +1,28 @@
 # PostgreSQL and media backup / restore
 
+## Closed HTTPS drill — 2026-11-28
+
+The source was a disposable Compose project with Amber Crossing plus an OPS fixture. Proxy and API were stopped for capture. The restore used a fresh Compose project, database and uploads volume. The manifest included the Git revision, timestamp, PostgreSQL 16.15, 22 migration records, latest migration stamp, required restore layout, file sizes and SHA-256 values. The window including shutdown and independent backup verification was 1.99 s. The restore and fresh stack startup took 23.57 s to readiness on the local machine. The PostgreSQL archive was 71,857 bytes. Total manifest data was 576,829 bytes across the dump and 20 media files.
+
+Source and target matched for 6 campaigns, 10 memberships, 12 scenes, 48 layers, 27 tokens, 19 objects, 4 initiative trackers and 8 entries, 9 chat records, 4 rolls, 16 assets and 8 live receipts. All 20 restored media hashes and the 16 original asset database checksums matched. Four stored thumbnails matched. Twelve Amber thumbnails had no cached file and are generated on demand. Trusted HTTPS/WSS checks confirmed protected reads by GM and Player, same-version snapshots, private chat/scene/token projection, hidden dice replay, active initiative and receipt recovery.
+
+For an unexposed Compose database, the `backup` action in the [local HTTPS runbook](LOCAL_HTTPS_ACCEPTANCE.md) verifies the database service and dumps through its existing client. `restore` refuses a Compose project with prior containers or volumes. Apply the same write quiescence and verify with new media storage on the target host. The measurements describe the isolated fixture.
+
+## Media inventory
+
+Export the asset rows after quiescing writers and take a copy of the configured media volume. Run the read-only inventory against that pair. Keep the metadata and detailed inventory private.
+
+```sql
+SELECT coalesce(json_agg(json_build_object('storageKey', storage_key,
+  'size', size, 'checksum', checksum)), '[]'::json) FROM assets;
+```
+
+```sh
+node scripts/inventory-media.mjs /private/snapshot/uploads /private/snapshot/asset-metadata.json --quiesced
+```
+
+With active writers, omit `--quiesced` and treat output as observations to recheck. Staging files younger than 24 hours are reported separately. Thumbnail headers and expected byte lengths are checked. Missing derived thumbnails can be rebuilt from originals. There is no deletion mode. The restored set contained zero unreferenced originals, zero missing originals and zero staging files. A scratch copy reproduced one missing original, one unreferenced original, one truncated thumbnail and fresh/old staging classifications.
+
 ## Maintenance-window drill — 2026-11-27
 
 The local drill captured and restored the generated **Amber Crossing: The Lantern Vault** fixture in a dedicated Compose instance. The source was `nri_demo` and the target was a new `nri_restore` database. The API was stopped for the entire capture. Seed processes had exited before the dump began. Creation and verification checked a 13-file SHA-256 manifest. The restored campaign title and all 12 asset storage keys matched. Every original asset SHA-256 matched the checksum persisted in PostgreSQL.

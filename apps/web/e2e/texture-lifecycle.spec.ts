@@ -105,6 +105,16 @@ test('scene changes release textures and the visible table survives WebGL contex
     await loadedTexture;
     const canvas = player.locator('.table-canvas canvas');
     await expect(canvas).toBeVisible();
+    if (process.env.NRI_HARDWARE_CONTEXT_CHECK === '1') {
+      const renderer = await canvas.evaluate((element) => {
+        const gl = (element as WebGLCanvas).tabletopGL;
+        const debug = gl?.getExtension('WEBGL_debug_renderer_info');
+        return gl && debug ? String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)) : '';
+      });
+      expect(renderer).not.toMatch(/swiftshader|software|llvmpipe|basic render/i);
+      expect(renderer.length).toBeGreaterThan(0);
+      console.info(`Context-loss renderer: ${renderer}`);
+    }
     const snapshot = async () => Promise.all(['layers', 'objects', 'tokens'].map(async (name) => {
       const response = await player.request.get(new URL(`/api/scenes/${firstScene.id}/${name}`, player.url()).href);
       expect(response.status()).toBe(200);

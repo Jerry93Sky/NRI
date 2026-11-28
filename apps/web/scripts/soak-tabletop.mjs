@@ -19,15 +19,25 @@ const viewport = { width: 1366, height: 768 };
 const pageErrors = [];
 let guidePage;
 
-async function openTable(account) {
+async function openTable(account, fault = false) {
   const context = await browser.newContext({ viewport, deviceScaleFactor: 1, locale: 'en-US' });
   await context.addCookies([{ name: 'nri_session', value: account.session, url: web.href, httpOnly: true }]);
   const page = await context.newPage();
+  let interrupt;
+  if (fault) {
+    await page.routeWebSocket((url) => url.pathname === '/socket.io/', (wire) => {
+      const upstream = wire.connectToServer();
+      interrupt = () => Promise.allSettled([wire.close({ code: 1001 }), upstream.close({ code: 1001 })]);
+    });
+  }
   page.on('pageerror', ({ name }) => pageErrors.push(name));
   await page.goto(web.href);
   await page.getByRole('button', { name: new RegExp(profile.title) }).click();
   await page.locator(canvasSelector).waitFor({ state: 'visible' });
-  return page;
+  return { page, cutConnection: () => {
+    assert.ok(interrupt, 'Expected an active WebSocket in the fault-injected context');
+    return interrupt();
+  } };
 }
 
 async function request(page, path, method = 'GET', data, expected = 200) {
@@ -81,10 +91,13 @@ async function sample(page, cdp, cycle, elapsedMs, mapReads) {
 }
 
 try {
-  const [gm, player] = await Promise.all(profile.accounts.slice(0, 2).map(openTable));
+  const [{ page: gm }, { page: player, cutConnection }] = await Promise.all([
+    openTable(profile.accounts[0]), openTable(profile.accounts[1], true),
+  ]);
   guidePage = gm;
   await gm.bringToFront();
-  const { campaignId, sceneId, tokenId } = profile;
+  const { campaignId, sceneId } = profile;
+  const { token: { id: tokenId } } = await request(gm, '/api/tokens', 'POST', { sceneId, name: 'Soak control token', x: 4, y: 12 }, 201);
   const tokensPath = `/api/scenes/${sceneId}/tokens`;
   const objectsPath = `/api/scenes/${sceneId}/objects`;
   const initiative = `/api/campaigns/${campaignId}/initiative`;
@@ -109,6 +122,7 @@ try {
   let cycle = 0;
   do {
     const cycleStart = performance.now();
+    await gm.bringToFront();
     const canvas = gm.locator(canvasSelector);
     await gm.locator('.scene-tab').filter({ hasText: 'Empty scene' }).click();
     const loaded = gm.waitForResponse((res) => res.ok() && res.url().endsWith(tokensPath));
@@ -179,7 +193,7 @@ try {
     await player.getByText(message, { exact: true }).waitFor();
     await gm.getByRole('button', { name: /d20.*Roll/ }).click();
     const prior = await request(gm, initiative);
-    if (!prior.tracker?.active) await request(gm, `${initiative}/start`, 'POST', { sceneId, entries: [{ tokenId, label: 'Measured token', score: 13 }] });
+    if (!prior.tracker?.active) await request(gm, `${initiative}/start`, 'POST', { sceneId, entries: [{ tokenId, label: 'Soak control token', score: 13 }] });
     const current = await request(gm, initiative);
     assert.equal(current.tracker.active, true);
     await request(gm, `${initiative}/stop`, 'POST', { expectedVersion: current.tracker.version });
@@ -193,7 +207,9 @@ try {
     assert.equal(thumbnail.status(), 200);
     await request(gm, `/api/assets/${asset}`, 'DELETE', undefined, 204);
 
+    await live(player);
     await player.context().setOffline(true);
+    await cutConnection();
     await player.locator('.live-status').filter({ hasText: /Reconnecting|Offline/ }).waitFor();
     await pause(cycle % 2 ? 3000 : 800);
     await player.context().setOffline(false);

@@ -8,6 +8,7 @@ import { io } from 'socket.io-client';
 const origin = new URL(process.env.NRI_OPS_ORIGIN);
 assert.equal(origin.protocol, 'https:');
 assert.equal(origin.hostname, '127.0.0.1');
+assert.notEqual(process.env.NODE_TLS_REJECT_UNAUTHORIZED, '0', 'HTTPS verification must remain enabled');
 const file = process.env.NRI_OPS_FIXTURE;
 assert.ok(file, 'Use a private output file in the ignored acceptance folder');
 const sockets = [];
@@ -181,7 +182,8 @@ async function exercise() {
     assert.deepEqual(blocked.body, { error: 'INTERNAL_ERROR' });
     const read = await request(`/api/scenes/${scene.id}/tokens`, { actor: player, expected: [500, 503] });
     assert.deepEqual(read.body, { error: 'INTERNAL_ERROR' });
-    console.info(`PASS database outage blocks protected writes/reads and makes readiness unavailable in ${downMs} ms`);
+    await assert.rejects(socketFor(player), { message: 'UNAUTHENTICATED' });
+    console.info(`PASS database outage blocks protected writes/reads and reconnect, and makes readiness unavailable in ${downMs} ms`);
   } finally { docker(['start', db]); }
   const databaseRecoveryMs = await readiness(200);
   assert.equal(docker(['inspect', '--format', '{{.State.StartedAt}}', api]), apiStartedAt);
