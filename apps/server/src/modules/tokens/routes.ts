@@ -17,7 +17,7 @@ import { commandSessionIsActive, lockCampaign, lockCampaignActor, lockCampaignRo
 import { updateTokenGroup } from './movement.js';
 import { lockOperationReceipt, operationRequestId, saveOperationReceipt } from '../../security/operationReceipts.js';
 
-const movementErrorStatus = { INVALID: 400, UNAUTHENTICATED: 401, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409 };
+const movementErrorStatus = { INVALID: 400, UNAUTHENTICATED: 401, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409, MOVE_BLOCKED: 409 };
 
 type LockedTokenContext =
   | { error: 'UNAUTHENTICATED' | 'NOT_FOUND' | 'FORBIDDEN' }

@@ -22,7 +22,7 @@ export type ScenePoint = z.infer<typeof pointSchema>;
 export type SceneSegment = { start: ScenePoint; end: ScenePoint };
 export type ObstacleFields = z.infer<z.ZodObject<typeof obstacleFields>>;
 export type SceneObstacle = ObstacleFields & { id: string; campaignId: string; sceneId: string; version: number };
-export type SceneGeometry = { campaignId: string; sceneId: string; revision: number; obstacles: SceneObstacle[] };
+export type SceneGeometry = { campaignId: string; sceneId: string; revision: number; obstacleMovementEnabled: boolean; obstacles: SceneObstacle[] };
 export type GeometryInvalidation = Pick<SceneGeometry, 'campaignId' | 'sceneId'>;
 
 const ticks = ({ x, y }: ScenePoint): ScenePoint => ({ x: Math.round(x * sceneGeometryScale), y: Math.round(y * sceneGeometryScale) });
@@ -37,16 +37,20 @@ function validObstacle(fields: ObstacleFields) {
   return !isDegenerateSegment(fields) && (fields.kind === 'DOOR') === (fields.doorState !== null);
 }
 
-const normalizePoint = (point: ScenePoint) => {
+export const normalizeScenePoint = (point: ScenePoint) => {
   const { x, y } = ticks(point);
   return { x: x / sceneGeometryScale, y: y / sceneGeometryScale };
 };
 const normalizeObstacle = <T extends ObstacleFields>(value: T): T =>
-  ({ ...value, start: normalizePoint(value.start), end: normalizePoint(value.end) });
+  ({ ...value, start: normalizeScenePoint(value.start), end: normalizeScenePoint(value.end) });
 const expectedVersion = z.number().int().positive().max(2147483647);
 export const createObstacleSchema = z.strictObject(obstacleFields).refine(validObstacle).transform(normalizeObstacle);
 export const updateObstacleSchema = z.strictObject({ ...obstacleFields, expectedVersion }).refine(validObstacle).transform(normalizeObstacle);
 export const deleteObstacleSchema = z.strictObject({ expectedVersion });
+export const updateMovementPolicySchema = z.strictObject({
+  enabled: z.boolean(),
+  expectedRevision: z.number().int().min(0).max(2147483647),
+});
 
 export function segmentBounds({ start, end }: SceneSegment) {
   return { minX: Math.min(start.x, end.x), maxX: Math.max(start.x, end.x), minY: Math.min(start.y, end.y), maxY: Math.max(start.y, end.y) };

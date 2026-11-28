@@ -15,6 +15,10 @@ export function GeometryEditor({ editor, onOpen }: { editor: ReturnType<typeof u
           <button key={tool} type="button" className="quiet-button" aria-pressed={mode === tool}
             onClick={() => editor.setMode(tool)}>{t(`geometryTool_${tool}`)}</button>)}
       </div>
+      <div className="geometry-properties">
+        <label><input type="checkbox" checked={editor.movementPolicy ?? false} disabled={!editable}
+          onChange={(event) => editor.setMovementPolicy(event.target.checked)} />{t('geometryMovementPolicy')}</label>
+      </div>
       <span className="geometry-hint">{t(mode === 'select' ? 'geometrySelectHint' : 'geometryDrawHint')}</span>
       {selected && <div className="geometry-properties">
         {selected.kind === 'DOOR' && <label>{t('geometryDoorState')} <select disabled={!editable} value={selected.doorState ?? ''}

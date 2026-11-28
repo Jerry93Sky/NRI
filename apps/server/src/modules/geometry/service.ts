@@ -10,12 +10,30 @@ type Command =
   | { kind: 'update'; id: string; expectedVersion: number; fields: ObstacleFields }
   | { kind: 'delete'; id: string; expectedVersion: number };
 
-function obstacleView(row: typeof sceneObstacles.$inferSelect, campaignId: string): SceneObstacle {
-  const { startX, startY, endX, endY, ...fields } = row;
-  return { ...fields, campaignId,
+function obstacleSegment({ startX, startY, endX, endY }: Pick<typeof sceneObstacles.$inferSelect, 'startX' | 'startY' | 'endX' | 'endY'>) {
+  return {
     start: { x: startX / sceneGeometryScale, y: startY / sceneGeometryScale },
     end: { x: endX / sceneGeometryScale, y: endY / sceneGeometryScale },
   };
+}
+
+function obstacleView({ startX, startY, endX, endY, ...fields }: typeof sceneObstacles.$inferSelect, campaignId: string): SceneObstacle {
+  return { ...fields, campaignId, ...obstacleSegment({ startX, startY, endX, endY }) };
+}
+
+/** Call with the owning scene locked. All geometry writers acquire its update lock. */
+export async function readGeometrySettings(tx: Transaction, sceneId: string) {
+  const [settings] = await tx.select({ revision: sceneGeometry.revision, obstacleMovementEnabled: sceneGeometry.obstacleMovementEnabled })
+    .from(sceneGeometry).where(eq(sceneGeometry.sceneId, sceneId));
+  return settings ?? { revision: 0, obstacleMovementEnabled: false };
+}
+
+export async function readMovementObstacles(tx: Transaction, sceneId: string) {
+  const rows = await tx.select({
+    startX: sceneObstacles.startX, startY: sceneObstacles.startY, endX: sceneObstacles.endX, endY: sceneObstacles.endY,
+    blocksMovement: sceneObstacles.blocksMovement, kind: sceneObstacles.kind, doorState: sceneObstacles.doorState,
+  }).from(sceneObstacles).where(and(eq(sceneObstacles.sceneId, sceneId), eq(sceneObstacles.blocksMovement, true)));
+  return rows.map(({ kind, doorState, blocksMovement, ...coords }) => ({ kind, doorState, blocksMovement, ...obstacleSegment(coords) }));
 }
 
 function obstacleValues({ start, end, ...fields }: ObstacleFields) {
@@ -31,10 +49,37 @@ export async function readSceneGeometry(tokenHash: string, sceneId: string) {
     if ('error' in actor) return actor;
     if (actor.role === 'PLAYER') return { error: 'FORBIDDEN' } as const;
     const campaignId = actor.scene.campaignId;
-    const [geometry] = await tx.select({ revision: sceneGeometry.revision }).from(sceneGeometry).where(eq(sceneGeometry.sceneId, sceneId));
+    const geometry = await readGeometrySettings(tx, sceneId);
     const obstacles = await tx.select().from(sceneObstacles).where(eq(sceneObstacles.sceneId, sceneId)).orderBy(asc(sceneObstacles.id));
-    return { campaignId, sceneId, revision: geometry?.revision ?? 0,
+    return { campaignId, sceneId, ...geometry,
       obstacles: obstacles.map((row) => obstacleView(row, campaignId)) };
+  });
+}
+
+export async function setObstacleMovementPolicy(tokenHash: string, sceneId: string, input: { enabled: boolean; expectedRevision: number }, requestId: string | null) {
+  return db.transaction(async (tx) => {
+    const actor = await lockCampaignSceneActor(tx, tokenHash, sceneId, { sceneStrength: 'update' });
+    if ('error' in actor) return actor;
+    if (actor.role === 'PLAYER') return { error: 'FORBIDDEN' } as const;
+    const campaignId = actor.scene.campaignId;
+    const action = 'geometry.movement_policy';
+    const receipt = requestId ? await lockOperationReceipt(tx,
+      { actorId: actor.userId, campaignId, operationType: action, requestId }, { sceneId, input }) : null;
+    if (receipt?.kind === 'conflict') return { error: 'CONFLICT' } as const;
+    const current = await readGeometrySettings(tx, sceneId);
+    if (receipt?.kind === 'replay') return { campaignId, settings: current, changed: false } as const;
+    if (current.revision !== input.expectedRevision) return { error: 'CONFLICT' } as const;
+    const changed = current.obstacleMovementEnabled !== input.enabled;
+    const settings = changed ? { revision: current.revision + 1, obstacleMovementEnabled: input.enabled } : current;
+    if (changed) {
+      await tx.insert(sceneGeometry).values({ sceneId, ...settings }).onConflictDoUpdate({
+        target: sceneGeometry.sceneId, set: settings,
+      });
+      await tx.insert(auditEvents).values({ campaignId, actorId: actor.userId, action, targetId: sceneId,
+        detail: input.enabled ? 'enabled' : 'disabled' });
+    }
+    if (receipt?.kind === 'new') await saveOperationReceipt(tx, receipt, [sceneId]);
+    return { campaignId, settings, changed } as const;
   });
 }
 

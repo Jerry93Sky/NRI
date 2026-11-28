@@ -84,11 +84,11 @@ export function useSceneGeometry(socket: Socket, scope: string, campaignId: stri
     setError({ scope, code: '' });
     let code = '';
     try {
-      const result = await api<{ obstacle: SceneObstacle } | null>(intent.path, {
+      const result = await api<{ obstacle?: SceneObstacle } | null>(intent.path, {
         method: intent.method, body: intent.body, recoverable: 'scene',
       });
       if (!isCurrent()) return;
-      if (result) select(result.obstacle.id);
+      if (result?.obstacle) select(result.obstacle.id);
       await reload();
     } catch (cause) {
       code = (cause as Error).message;
@@ -111,6 +111,11 @@ export function useSceneGeometry(socket: Socket, scope: string, campaignId: stri
   function remove(obstacle: SceneObstacle) {
     if (editable) void send({ path: `${base}/${obstacle.id}`, method: 'DELETE', body: JSON.stringify({ expectedVersion: obstacle.version }) });
   }
+  function setMovementPolicy(enabled: boolean) {
+    if (!editable || snapshot?.scope !== scope) return;
+    void send({ path: `${base}/movement-policy`, method: 'PATCH',
+      body: JSON.stringify({ enabled, expectedRevision: snapshot.value.revision }) });
+  }
   const canvas: GeometryCanvasControls | null = mode ? { mode, obstacles, selectedId: selected?.id ?? '', editable, select,
     create(kind, segment) {
       if (!editable) return;
@@ -119,7 +124,8 @@ export function useSceneGeometry(socket: Socket, scope: string, campaignId: stri
     },
     move: update,
   } : null;
-  return { mode, setMode: updateMode, canvas, selected, editable, update, remove,
+  return { mode, setMode: updateMode, canvas, selected, editable, update, remove, setMovementPolicy,
+    movementPolicy: snapshot?.scope === scope && connected ? snapshot.value.obstacleMovementEnabled : undefined,
     error: error.scope === scope ? error.code : '', retry: waiting && !waiting.sending ? () => void send(waiting.intent) : null,
     loading: open && connected && snapshot?.scope !== scope && error.scope !== scope,
   };

@@ -154,8 +154,9 @@ export function App() {
     setGeometryMode('select');
   }
   const commandHistory = useCommandHistory([user?.id, campaign?.campaign.id, role, scene?.id].join(':'), (reason) => {
-    setError(t('historyFailed', { reason: reason === 'CONFLICT' ? t('historyConflict') : reason }));
+    setError(t('historyFailed', { reason: reason === 'CONFLICT' ? t('historyConflict') : movementMessage(reason) }));
     if (scene && (reason === 'CONFLICT' || reason === 'NOT_FOUND')) void openScene(scene);
+    if (scene && reason === 'MOVEMENT_OUTCOME_UNKNOWN') void reloadSceneContent(scene.id);
   });
   const canDraw = canManage || (campaign?.campaign.playersCanDraw === true && scene?.isActive === true);
   useEffect(() => { if (!canDraw) setDrawMode(false); }, [canDraw]);
@@ -622,15 +623,36 @@ export function App() {
     } catch (error) { setError((error as Error).message); }
   }
 
+  function movementMessage(reason: string) {
+    if (reason === 'MOVE_BLOCKED') return t('movementBlocked');
+    if (reason === 'MOVEMENT_OUTCOME_UNKNOWN') return t('movementUnknown');
+    if (reason === 'CONFLICT') return t('historyConflict');
+    return reason;
+  }
+
+  function reportMovementError(error: unknown, sceneId: string) {
+    if (!commandHistory.isCurrent()) return;
+    const reason = (error as Error).message;
+    setError(movementMessage(reason));
+    if (reason === 'CONFLICT' || reason === 'MOVEMENT_OUTCOME_UNKNOWN') void reloadSceneContent(sceneId);
+  }
+
   async function applyGroupChanges(selected: PublicToken[], changes: (token: PublicToken) => GroupPatch) {
     if (!scene || selected.length < 2 || selected.length > 50) return;
     const sceneId = scene.id;
     const patches = selected.map((token) => ({ tokenId: token.id, patch: changes(token) }));
+    const moves = patches.some(({ patch }) => patch.x !== undefined || patch.y !== undefined);
+    if (moves) setError('');
     const inverse = selected.map((token, index) => ({ tokenId: token.id, patch: pickChanged(token, patches[index]!.patch) }));
     const apply = (items: typeof patches) => async (versions: Versions) => {
       const result = await api<{ tokens: PublicToken[] }>("/api/scenes/" + sceneId + "/tokens/group", {
         method: 'PATCH',
         body: JSON.stringify({ updates: items.map((item) => ({ ...item, expectedVersion: versions[item.tokenId] })) }),
+      }).catch((error: Error) => {
+        if (moves && (error instanceof TypeError || error.message === 'INVALID_RESPONSE' || error.message === 'INTERNAL_ERROR')) {
+          throw new Error('MOVEMENT_OUTCOME_UNKNOWN');
+        }
+        throw error;
       });
       applyTokenUpdates(result.tokens);
       return versionsOf(result.tokens);
@@ -640,7 +662,10 @@ export function App() {
       const redo = apply(patches);
       const after = await redo(before);
       commandHistory.record({ before, after, undo: apply(inverse), redo });
-    } catch (error) { setError((error as Error).message); }
+    } catch (error) {
+      if (moves) reportMovementError(error, sceneId);
+      else if (commandHistory.isCurrent()) setError((error as Error).message);
+    }
   }
 
   function updateTokenGroup(patch: GroupPatch) {
@@ -811,7 +836,9 @@ export function App() {
   async function moveToken(token: PublicToken, x: number, y: number) {
     const move = (nextX: number, nextY: number) => async (versions: Versions) => {
       if (!socket.connected) throw new Error(t('offline'));
-      const result = await socket.timeout(5000).emitWithAck('token:move', { tokenId: token.id, x: nextX, y: nextY, expectedVersion: versions[token.id] }) as { error?: string; token?: PublicToken };
+      const result = await socket.timeout(5000).emitWithAck('token:move', { tokenId: token.id, x: nextX, y: nextY, expectedVersion: versions[token.id] })
+        .catch(() => { throw new Error('MOVEMENT_OUTCOME_UNKNOWN'); }) as { error?: string; token?: PublicToken };
+      if (result.error === 'INTERNAL_ERROR') throw new Error('MOVEMENT_OUTCOME_UNKNOWN');
       if (result.token) applyTokenUpdates([result.token]);
       if (!result.token || result.error) throw new Error(result.error ?? 'MOVE_FAILED');
       return versionsOf([result.token]);
@@ -819,11 +846,12 @@ export function App() {
     try {
       if (!connected) throw new Error(t('offline'));
       if (x === token.x && y === token.y) return;
+      setError('');
       const before = versionsOf([token]);
       const redo = move(x, y);
       const after = await redo(before);
       commandHistory.record({ before, after, undo: move(token.x, token.y), redo });
-    } catch (error) { setError((error as Error).message); }
+    } catch (error) { reportMovementError(error, token.sceneId); }
   }
 
   function transmitChat(pending: NonNullable<typeof pendingChat>) {

@@ -119,6 +119,29 @@ jobs:
           WEB_ORIGIN: http://127.0.0.1:4175
           UPLOAD_DIR: /tmp/nri-geometry-media
           DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_geometry_test
+      - name: Test movement collision transactions on isolated PostgreSQL
+        run: |
+          PGPASSWORD=ci-only-password createdb -h 127.0.0.1 -U nri nri_collision_test
+          pnpm db:migrate
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-movement-collision.log 2>&1 &
+          collision_api=$!
+          trap 'kill "$collision_api" 2>/dev/null || true; wait "$collision_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$NRI_API_URL/api/ready"; then
+              pnpm --filter @nri/server test:movement-collision
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-movement-collision.log
+          exit 1
+        env:
+          NRI_API_URL: http://127.0.0.1:3010
+          HOST: 127.0.0.1
+          PORT: 3010
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-movement-collision-media
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_collision_test
       - name: Test private channel permissions and delivery
         run: |
           node apps/server/dist/index.js > /tmp/nri-private-server.log 2>&1 &
@@ -293,7 +316,7 @@ jobs:
           WEB_ORIGIN: http://127.0.0.1:4175
           NRI_E2E_PREVIEW: "true"
       - name: Run browser integration and privacy scenarios
-        run: pnpm --filter @nri/web e2e --grep-invert 'GM and Player sessions recover persisted campaign state after API restart|GM draws and edits geometry on the live canvas'
+        run: pnpm --filter @nri/web e2e --grep-invert 'GM and Player sessions recover persisted campaign state after API restart|GM draws and edits geometry on the live canvas|GM and Player use server-authoritative collision in Vault of Four Doors'
         env:
           CI: true
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:4175
@@ -326,6 +349,29 @@ jobs:
           WEB_ORIGIN: http://127.0.0.1:4175
           UPLOAD_DIR: /tmp/nri-browser-geometry-media
           DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_geometry_test
+      - name: Verify GM and Player movement collision in Chromium
+        run: |
+          (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-collision.log 2>&1 &
+          collision_api=$!
+          trap 'kill "$collision_api" 2>/dev/null || true; wait "$collision_api" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent "$API_PROXY_TARGET/api/ready"; then
+              pnpm --filter @nri/web e2e movement-collision.spec.ts
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/nri-browser-collision.log
+          exit 1
+        env:
+          CI: true
+          NRI_E2E_PREVIEW: "true"
+          API_PROXY_TARGET: http://127.0.0.1:3011
+          HOST: 127.0.0.1
+          PORT: 3011
+          WEB_ORIGIN: http://127.0.0.1:4175
+          UPLOAD_DIR: /tmp/nri-browser-movement-collision-media
+          DATABASE_URL: postgres://nri:ci-only-password@127.0.0.1:5432/nri_collision_test
       - name: Verify browser recovery after API restart on a fresh process
         run: |
           (cd apps/server && exec node dist/index.js) > /tmp/nri-browser-restart.log 2>&1 &

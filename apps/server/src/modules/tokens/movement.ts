@@ -5,16 +5,18 @@ import { db } from '../../db/index.js';
 import { auditEvents, scenes, tokens } from '../../db/schema.js';
 import { publicToken } from '../../domain/projections.js';
 import { canReadSceneTokens } from '../../domain/sceneAccess.js';
+import { movementBlockers, movementIsBlocked } from '../../domain/movementCollision.js';
 import { commandSessionIsActive, lockCampaign, lockCampaignRoles, lockCommandSession } from '../../security/commandAccess.js';
+import { readGeometrySettings, readMovementObstacles } from '../geometry/service.js';
 
 type Projection = ReturnType<typeof publicToken>;
 type TokenUpdate = { tokenId: string; expectedVersion: number; patch: z.infer<typeof tokenGroupPatchSchema> };
 
-type Movement =
+type Movement = { expectedGeometryRevision?: number | undefined } & (
   | { kind: 'single'; update: TokenUpdate; joined: (campaignId: string) => boolean }
-  | { kind: 'group'; sceneId: string; updates: TokenUpdate[] };
+  | { kind: 'group'; sceneId: string; updates: TokenUpdate[] });
 
-type Rejection = { error: 'INVALID' | 'UNAUTHENTICATED' | 'NOT_FOUND' | 'FORBIDDEN' | 'CONFLICT'; token?: Projection };
+type Rejection = { error: 'INVALID' | 'UNAUTHENTICATED' | 'NOT_FOUND' | 'FORBIDDEN' | 'CONFLICT' | 'MOVE_BLOCKED'; token?: Projection };
 export type CommittedMovement = {
   kind: Movement['kind'];
   campaignId: string;
@@ -28,8 +30,8 @@ export async function moveToken(tokenHash: string, payload: unknown, joined: (ca
   return executeMovement(tokenHash, () => {
     const input = moveTokenSchema.safeParse(payload);
     if (!input.success) return;
-    const { tokenId, expectedVersion, x, y } = input.data;
-    return { kind: 'single', update: { tokenId: tokenId.toLowerCase(), expectedVersion, patch: { x, y } }, joined };
+    const { tokenId, expectedVersion, x, y, expectedGeometryRevision } = input.data;
+    return { kind: 'single', update: { tokenId: tokenId.toLowerCase(), expectedVersion, patch: { x, y } }, joined, expectedGeometryRevision };
   });
 }
 
@@ -39,7 +41,7 @@ export async function updateTokenGroup(tokenHash: string, sceneId: string, paylo
     if (!idSchema.safeParse(sceneId).success || !input.success) return;
     const updates = input.data.updates.map((item) => ({ ...item, tokenId: item.tokenId.toLowerCase() }));
     if (new Set(updates.map(({ tokenId }) => tokenId)).size !== updates.length) return;
-    return { kind: 'group', sceneId, updates };
+    return { kind: 'group', sceneId, updates, expectedGeometryRevision: input.data.expectedGeometryRevision };
   });
 }
 
@@ -64,12 +66,13 @@ async function executeMovement(tokenHash: string, parse: () => Movement | undefi
 
     const role = (await lockCampaignRoles(tx, campaignId, [session.userId])).get(session.userId);
     if (!role) return { error: inaccessible };
-    const [scene] = await tx.select({ isActive: scenes.isActive, archivedAt: scenes.archivedAt }).from(scenes)
+    const [scene] = await tx.select({ isActive: scenes.isActive, archivedAt: scenes.archivedAt, width: scenes.width,
+      height: scenes.height, gridSize: scenes.gridSize }).from(scenes)
       .where(and(eq(scenes.id, sceneId), eq(scenes.campaignId, campaignId))).for('share').limit(1);
     if (!scene || !canReadSceneTokens(role, scene.isActive, scene.archivedAt !== null)) {
       return { error: inaccessible };
     }
-    if (movement.kind === 'group' && role === 'PLAYER') return { error: 'FORBIDDEN' };
+    if (role === 'PLAYER' && (movement.kind === 'group' || movement.expectedGeometryRevision !== undefined)) return { error: 'FORBIDDEN' };
 
     const updates = movement.kind === 'single' ? [movement.update] : movement.updates;
     const rows = await tx.select().from(tokens)
@@ -93,6 +96,23 @@ async function executeMovement(tokenHash: string, parse: () => Movement | undefi
     if (stale) {
       if (movement.kind === 'single') return { error: 'CONFLICT', token: publicToken(stale.previous, role !== 'PLAYER', session.userId) };
       return { error: 'CONFLICT' };
+    }
+
+    const paths = changes.filter(({ previous, patch }) => (patch.x ?? previous.x) !== previous.x || (patch.y ?? previous.y) !== previous.y);
+    if (paths.length || movement.expectedGeometryRevision !== undefined) {
+      // The shared scene lock pins policy, map dimensions and obstacles until the audited commit.
+      const settings = await readGeometrySettings(tx, sceneId);
+      if (movement.expectedGeometryRevision !== undefined && settings.revision !== movement.expectedGeometryRevision) {
+        return { error: 'CONFLICT' };
+      }
+      if (settings.obstacleMovementEnabled && paths.length) {
+        const blockers = movementBlockers(await readMovementObstacles(tx, sceneId));
+        for (const { previous, patch } of paths) {
+          const start = { x: previous.x * scene.gridSize, y: previous.y * scene.gridSize };
+          const end = { x: (patch.x ?? previous.x) * scene.gridSize, y: (patch.y ?? previous.y) * scene.gridSize };
+          if (movementIsBlocked({ start, end }, scene, blockers)) return { error: 'MOVE_BLOCKED' };
+        }
+      }
     }
 
     const updated = [];

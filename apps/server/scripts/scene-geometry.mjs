@@ -80,7 +80,7 @@ try {
   const playerWire = await connect(player, campaign.id, 'PLAYER');
   let door;
   await scenario('legacy empty snapshot and GM create use stable coordinates; Player receives no geometry invalidation', async () => {
-    assert.deepEqual(await view(), { campaignId: campaign.id, sceneId: scene.id, revision: 0, obstacles: [] });
+    assert.deepEqual(await view(), { campaignId: campaign.id, sceneId: scene.id, revision: 0, obstacleMovementEnabled: false, obstacles: [] });
     const { result, cacheControl } = await request(gm, path, 'POST', secret, 201);
     door = result.obstacle;
     assert.equal(cacheControl, 'no-store');

@@ -18,7 +18,8 @@ export const tokenResourcesSchema = z.tuple([tokenResourceSchema, tokenResourceS
 const tokenPropertyFields = { name: z.string().trim().min(1).max(48), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), imageAssetId: idSchema.nullable(), width: z.number().finite().min(0.25).max(100), height: z.number().finite().min(0.25).max(100), rotation: z.number().finite().min(-360000).max(360000), opacity: z.number().finite().min(0).max(1), borderColor: z.string().regex(/^#[0-9a-fA-F]{6}$/), zIndex: z.number().int().min(-100000).max(100000), hidden: z.boolean(), locked: z.boolean(), showName: z.boolean(), resources: tokenResourcesSchema, gmNote: z.string().max(4000), ownerNote: z.string().max(4000) };
 export const updateTokenSchema = z.object(tokenPropertyFields).partial().extend({ expectedVersion: z.number().int().positive() }).refine(({ expectedVersion: _version, ...patch }) => Object.values(patch).some((value) => value !== undefined));
 export const tokenGroupPatchSchema = z.object({ color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), hidden: z.boolean().optional(), locked: z.boolean().optional(), showName: z.boolean().optional(), opacity: z.number().finite().min(0).max(1).optional(), zIndex: z.number().int().min(-100000).max(100000).optional(), x: z.number().finite().min(-10000).max(10000).optional(), y: z.number().finite().min(-10000).max(10000).optional() }).refine((patch) => Object.values(patch).some((value) => value !== undefined));
-export const updateTokenGroupSchema = z.object({ updates: z.array(z.object({ tokenId: idSchema, expectedVersion: z.number().int().positive(), patch: tokenGroupPatchSchema })).min(2).max(50) }).refine(({ updates }) => new Set(updates.map(({ tokenId }) => tokenId)).size === updates.length);
+const expectedGeometryRevision = z.number().int().min(0).max(2147483647).optional();
+export const updateTokenGroupSchema = z.object({ expectedGeometryRevision, updates: z.array(z.object({ tokenId: idSchema, expectedVersion: z.number().int().positive(), patch: tokenGroupPatchSchema })).min(2).max(50) }).refine(({ updates }) => new Set(updates.map(({ tokenId }) => tokenId)).size === updates.length);
 export const adjustTokenResourceSchema = z.object({ resourceIndex: z.union([z.literal(0), z.literal(1)]), delta: z.union([z.literal(-1), z.literal(1)]), expectedVersion: z.number().int().positive() });
 export const sceneLayerKindSchema = z.enum(['BACKGROUND', 'OBJECTS', 'TOKENS', 'GM', 'CUSTOM']);
 export const createSceneLayerSchema = z.object({ name: z.string().trim().min(1).max(48), kind: z.literal('CUSTOM'), sortOrder: z.number().int().min(-1000).max(1000).default(4), visibleToPlayers: z.boolean().default(true), locked: z.boolean().default(false) });
@@ -36,7 +37,7 @@ export const sceneObjectLifecycleSchema = z.object({
   objects: z.array(z.object({ objectId: idSchema, expectedVersion: z.number().int().positive() })).min(1).max(50)
     .refine((items) => new Set(items.map(({ objectId }) => objectId)).size === items.length),
 });
-export const moveTokenSchema = z.object({ tokenId: idSchema, x: z.number().finite().min(-10000).max(10000), y: z.number().finite().min(-10000).max(10000), expectedVersion: z.number().int().positive() });
+export const moveTokenSchema = z.object({ tokenId: idSchema, x: z.number().finite().min(-10000).max(10000), y: z.number().finite().min(-10000).max(10000), expectedVersion: z.number().int().positive(), expectedGeometryRevision });
 export const diceSchema = z.object({ expression: z.string().regex(/^\s*(\d{1,2})?d(4|6|8|10|12|20|100)([+-]\d{1,4})?\s*$/i).max(16), hidden: z.boolean().default(false) });
 export const inviteSchema = z.object({ campaignId: idSchema, expiresInHours: z.number().int().min(1).max(168).default(72) });
 

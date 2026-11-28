@@ -2,6 +2,9 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
 const geometryEn = {
+  geometryMovementPolicy: 'Restrict movement',
+  movementBlocked: 'Movement is blocked.',
+  movementUnknown: 'Movement was not confirmed. The table is reloading its saved state.',
   geometryEditor: 'Obstacles', geometryTool_select: 'Select obstacle', geometryTool_WALL: 'Draw wall',
   geometryTool_DOOR: 'Draw door', geometryTool_WINDOW: 'Draw window',
   geometrySelectHint: 'Select a segment and drag either endpoint.', geometryDrawHint: 'Drag between two points. Esc cancels.',
@@ -14,6 +17,9 @@ const geometryEn = {
   geometryError_GEOMETRY_OUT_OF_BOUNDS: 'Both endpoints must be inside the scene.',
 };
 const geometryRu = {
+  geometryMovementPolicy: 'Ограничить движение',
+  movementBlocked: 'Перемещение невозможно.',
+  movementUnknown: 'Перемещение не подтверждено. Стол загружает сохранённое состояние.',
   geometryEditor: 'Препятствия', geometryTool_select: 'Выбрать препятствие', geometryTool_WALL: 'Нарисовать стену',
   geometryTool_DOOR: 'Нарисовать дверь', geometryTool_WINDOW: 'Нарисовать окно',
   geometrySelectHint: 'Выберите отрезок и перетащите один из его концов.', geometryDrawHint: 'Проведите отрезок между двумя точками. Esc отменяет жест.',

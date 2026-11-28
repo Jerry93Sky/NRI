@@ -6,9 +6,10 @@ import sharp from 'sharp';
 import { sceneGeometryScale, type ObstacleFields } from '@nri/contracts/geometry';
 import { uploadDirectory } from './config/runtime.js';
 import { db, pool } from './db/index.js';
-import { assets, auditEvents, campaigns, memberships, sceneGeometry, sceneLayers, sceneObstacles, scenes, users } from './db/schema.js';
+import { assets, auditEvents, campaigns, memberships, sceneGeometry, sceneLayers, sceneObstacles, scenes, tokens, users } from './db/schema.js';
 import { amberPlayableMaps } from './demoArt.js';
 import { defaultLayerRows } from './domain/defaultLayers.js';
+import type { Transaction } from './security/commandAccess.js';
 
 const title = 'Geometry Workshop';
 const sceneTitle = 'Vault of Four Doors';
@@ -21,6 +22,23 @@ const segments: Segment[] = [
   [800, 850, 800, 1059], [800, 1059, 800, 1121, 'LOCKED'], [800, 1121, 800, 1360],
   [190, 1210, 190, 1290, 'CLOSED', 'SECRET'],
 ];
+
+async function seedMovementPractice(tx: Transaction, campaignId: string, sceneId: string, ownerId: string) {
+  const action = 'geometry.movement_demo_seeded';
+  const [marker] = await tx.select({ id: auditEvents.id }).from(auditEvents)
+    .where(and(eq(auditEvents.campaignId, campaignId), eq(auditEvents.targetId, sceneId), eq(auditEvents.action, action))).limit(1);
+  if (marker) return false;
+  const [scene] = await tx.select().from(scenes).where(and(eq(scenes.id, sceneId), eq(scenes.campaignId, campaignId))).for('update');
+  if (!scene || scene.archivedAt || scene.width < 816 || scene.height < 432) {
+    throw new Error('The demo scene is unavailable or has been resized. Geometry practice tokens were not added.');
+  }
+  await tx.insert(tokens).values([
+    { sceneId, name: 'Wall Trial', x: 672 / scene.gridSize, y: 336 / scene.gridSize, color: '#e1a95c' },
+    { sceneId, name: 'Door Trial', x: 672 / scene.gridSize, y: 432 / scene.gridSize, color: '#63bfa5' },
+  ]);
+  await tx.insert(auditEvents).values({ campaignId, actorId: ownerId, action, targetId: sceneId });
+  return true;
+}
 
 async function seed() {
   const dbURL = URL.parse(process.env.DATABASE_URL ?? '');
@@ -35,9 +53,12 @@ async function seed() {
   try {
     const created = await db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(18492712)`);
-      const [existing] = await tx.select({ id: auditEvents.id }).from(auditEvents)
+      const [existing] = await tx.select({ campaignId: auditEvents.campaignId, sceneId: auditEvents.targetId }).from(auditEvents)
         .where(and(eq(auditEvents.action, 'geometry.demo_seeded'), eq(auditEvents.actorId, owner.id))).limit(1);
-      if (existing) return false;
+      if (existing?.sceneId) {
+        const added = await seedMovementPractice(tx, existing.campaignId, existing.sceneId, owner.id);
+        return added ? 'Added two movement practice tokens to the existing demo.' : 'Geometry Workshop already exists; seed made no changes.';
+      }
       const [campaign] = await tx.insert(campaigns).values({
         ownerId: owner.id, title, description: 'Practice placing and editing walls and doors on a separate map.',
       }).returning({ id: campaigns.id });
@@ -68,9 +89,10 @@ async function seed() {
         visibility: visibility ?? 'STANDARD', blocksMovement: true, blocksVision: true,
       })));
       await tx.insert(auditEvents).values({ campaignId: campaign.id, actorId: owner.id, action: 'geometry.demo_seeded', targetId: scene.id });
-      return true;
+      await seedMovementPractice(tx, campaign.id, scene.id, owner.id);
+      return `Created ${title} / ${sceneTitle} with two movement practice tokens.`;
     });
-    console.info(created ? `Created ${title} / ${sceneTitle}.` : `${title} already exists; seed made no changes.`);
+    console.info(created);
   } catch (error) {
     if (storedPath) await unlink(storedPath).catch(() => {});
     throw error;
